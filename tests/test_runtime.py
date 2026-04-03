@@ -2,7 +2,7 @@ from cock_code.config import RuntimeConfig
 import asyncio
 
 from cock_code.runtime import build_agent_options, create_runtime_agent
-from cock_code.runtime import enforce_session_retention
+from cock_code.runtime import enforce_session_retention, find_requested_agent_name
 
 
 def test_build_agent_options_uses_explicit_api_fields() -> None:
@@ -158,6 +158,45 @@ def test_create_runtime_agent_replaces_read_and_edit_tools_after_initialize(monk
     assert [tool.name for tool in agent._tool_pool] == ["Read", "Edit", "Bash", "Agent"]
     assert agent._tool_pool[0].__class__.__name__ == "RuntimeReadTool"
     assert agent._tool_pool[1].__class__.__name__ == "RuntimeEditTool"
+
+
+def test_create_runtime_agent_adds_default_task_agent_without_agents(monkeypatch) -> None:
+    class ReadTool:
+        name = "Read"
+
+    class AgentTool:
+        name = "Agent"
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = []
+
+        async def _initialize(self) -> None:
+            self._tool_pool = [ReadTool(), AgentTool()]
+
+    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+
+    agent = create_runtime_agent(RuntimeConfig(api_key="test", base_url="https://nano-gpt.com/api/v1", model="m1"))
+
+    asyncio.run(agent._initialize())
+
+    assert [tool.name for tool in agent._tool_pool] == ["Read", "Agent"]
+
+
+def test_build_agent_options_includes_default_task_agent_context() -> None:
+    options = build_agent_options(RuntimeConfig(api_key="a", base_url="https://example.test", model="m"))
+
+    assert "task" in options.append_system_prompt.lower()
+
+
+def test_find_requested_agent_name_uses_default_task_agent() -> None:
+    result = find_requested_agent_name(
+        RuntimeConfig(api_key="a", base_url="https://example.test", model="m"),
+        "Use an agent to summarize this request.",
+    )
+
+    assert result == "task"
 
 
 def test_enforce_session_retention_deletes_sessions_beyond_limit(monkeypatch) -> None:

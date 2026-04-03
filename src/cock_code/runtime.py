@@ -31,18 +31,30 @@ from cock_code.config import RuntimeConfig
 from cock_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeReadTool, TurnTracker
 
 
+def _effective_agents(config: RuntimeConfig) -> dict[str, Any]:
+    if config.agents:
+        return config.agents
+    return {
+        "task": {
+            "description": "General read-only task agent",
+            "prompt": "You are a careful read-only task agent. Use only safe inspection tools and answer briefly.",
+            "tools": ["Read", "Grep", "Glob"],
+            "max_turns": 3,
+        }
+    }
+
+
 def _resolve_agent_definition(config: RuntimeConfig, input: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
-    if not config.agents:
-        return "", None
+    agents = _effective_agents(config)
 
     requested = str(input.get("name") or input.get("subagent_type") or "")
     if requested:
-        raw = config.agents.get(requested)
+        raw = agents.get(requested)
         return requested, raw if isinstance(raw, dict) else None
 
-    if len(config.agents) == 1:
-        key = next(iter(config.agents))
-        raw = config.agents[key]
+    if len(agents) == 1:
+        key = next(iter(agents))
+        raw = agents[key]
         return key, raw if isinstance(raw, dict) else None
 
     return "", None
@@ -69,11 +81,10 @@ def _build_subagent_config(
 
 
 def _agent_context_prompt(config: RuntimeConfig) -> str:
-    if not config.agents:
-        return ""
+    agents = _effective_agents(config)
 
     lines = ["# Configured Agents", "Use the Agent tool with the agent name when delegation is helpful."]
-    for name, definition in config.agents.items():
+    for name, definition in agents.items():
         if isinstance(definition, dict):
             description = str(definition.get("description") or definition.get("prompt") or "")
         else:
@@ -92,7 +103,7 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
 
     agent_name, definition = _resolve_agent_definition(config, input)
     if definition is None:
-        if config.agents:
+        if _effective_agents(config):
             return ToolResult(tool_use_id="", content=f"Error: unknown agent '{agent_name or 'unspecified'}'", is_error=True)
         return ToolResult(tool_use_id="", content="Error: no agents configured", is_error=True)
 
@@ -110,10 +121,12 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
 
 def find_requested_agent_name(config: RuntimeConfig, prompt: str) -> str | None:
     lower_prompt = prompt.lower()
-    for name in config.agents:
+    for name in _effective_agents(config):
         lower_name = name.lower()
         if f"{lower_name} agent" in lower_prompt or f"use {lower_name}" in lower_prompt:
             return name
+    if "use an agent" in lower_prompt or "use a subagent" in lower_prompt or "use an assistant agent" in lower_prompt:
+        return "task"
     return None
 
 
@@ -197,7 +210,7 @@ def _create_sdk_agent(
 
         setattr(agent, "query", wrapped_query)
 
-    if include_runtime_agent_tool and hasattr(agent, "_initialize"):
+    if include_runtime_agent_tool and _effective_agents(config) and hasattr(agent, "_initialize"):
         original_initialize = agent._initialize
 
         async def wrapped_initialize() -> None:
@@ -219,6 +232,14 @@ def _create_sdk_agent(
             agent._tool_pool = new_pool
 
         setattr(agent, "_initialize", wrapped_initialize)
+    elif hasattr(agent, "_initialize"):
+        original_initialize = agent._initialize
+
+        async def wrapped_initialize_without_agent() -> None:
+            await original_initialize()
+            agent._tool_pool = [tool for tool in getattr(agent, "_tool_pool", []) if getattr(tool, "name", "") != "Agent"]
+
+        setattr(agent, "_initialize", wrapped_initialize_without_agent)
     return agent
 
 
