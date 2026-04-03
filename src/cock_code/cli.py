@@ -84,6 +84,12 @@ async def fork_session(session_id: str, new_id: str | None):
     return await runtime_fork_session(session_id, new_id)
 
 
+async def enforce_session_retention(limit: int = 20):
+    from cock_code.runtime import enforce_session_retention as runtime_enforce_session_retention
+
+    return await runtime_enforce_session_retention(limit)
+
+
 async def rename_session(session_id: str, title: str):
     from cock_code.runtime import rename_session as runtime_rename_session
 
@@ -227,6 +233,9 @@ async def run_ask(prompt: str, config) -> int:
     finally:
         await agent.close()
 
+    if config.persist_session:
+        await enforce_session_retention()
+
     return 0
 
 
@@ -320,6 +329,9 @@ async def run_chat(config) -> int:
         else:
             await agent.close()
 
+    if config.persist_session:
+        await enforce_session_retention()
+
     return 130 if interrupted else 0
 
 
@@ -363,6 +375,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "sessions" and args.sessions_command == "fork":
             console = build_console()
             new_session_id = asyncio.run(fork_session(args.session_id, args.new_id))
+            asyncio.run(enforce_session_retention())
             render_state(console, "Session Forked", {"forked_from": args.session_id, "new_session_id": new_session_id})
             return 0
 

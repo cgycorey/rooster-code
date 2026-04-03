@@ -242,6 +242,17 @@ async def delete_session(session_id: str):
     return await sdk_delete_session(session_id)
 
 
+async def enforce_session_retention(limit: int = 20) -> None:
+    sessions = await sdk_list_sessions()
+    if len(sessions) <= limit:
+        return
+
+    for session in sessions[limit:]:
+        session_id = session.get("id")
+        if isinstance(session_id, str) and session_id:
+            await sdk_delete_session(session_id)
+
+
 async def fork_session(session_id: str, new_id: str | None):
     return await sdk_fork_session(session_id, new_id)
 

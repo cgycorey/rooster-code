@@ -2,6 +2,7 @@ from cock_code.config import RuntimeConfig
 import asyncio
 
 from cock_code.runtime import build_agent_options, create_runtime_agent
+from cock_code.runtime import enforce_session_retention
 
 
 def test_build_agent_options_uses_explicit_api_fields() -> None:
@@ -157,3 +158,21 @@ def test_create_runtime_agent_replaces_read_and_edit_tools_after_initialize(monk
     assert [tool.name for tool in agent._tool_pool] == ["Read", "Edit", "Bash", "Agent"]
     assert agent._tool_pool[0].__class__.__name__ == "RuntimeReadTool"
     assert agent._tool_pool[1].__class__.__name__ == "RuntimeEditTool"
+
+
+def test_enforce_session_retention_deletes_sessions_beyond_limit(monkeypatch) -> None:
+    deleted: list[str] = []
+
+    async def fake_list_sessions() -> list[dict[str, object]]:
+        return [{"id": f"sess-{index}", "updatedAt": f"2026-04-{30-index:02d}T00:00:00"} for index in range(25)]
+
+    async def fake_delete_session(session_id: str) -> bool:
+        deleted.append(session_id)
+        return True
+
+    monkeypatch.setattr("cock_code.runtime.sdk_list_sessions", fake_list_sessions)
+    monkeypatch.setattr("cock_code.runtime.sdk_delete_session", fake_delete_session)
+
+    asyncio.run(enforce_session_retention(limit=20))
+
+    assert deleted == [f"sess-{index}" for index in range(20, 25)]
