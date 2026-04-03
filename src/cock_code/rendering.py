@@ -9,6 +9,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.pretty import Pretty
 from rich.rule import Rule
+from rich.syntax import Syntax
 from rich.table import Table
 
 from cock_code.config import RuntimeConfig
@@ -83,6 +84,38 @@ def render_notice(console: Console, title: str, message: str, style: str = "yell
     console.print(Panel(message, title=title, border_style=style, expand=True))
 
 
+def summarize_thinking(text: str, max_chars: int = 280) -> str:
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars]}..."
+
+
+def extract_thinking(message: object) -> str:
+    if not hasattr(message, "content"):
+        return ""
+    content = getattr(message, "content")
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for item in content:
+        if isinstance(item, Mapping) and item.get("type") == "thinking":
+            parts.append(str(item.get("thinking", "")))
+    return "\n".join(part for part in parts if part)
+
+
+def extract_unified_diff(text: str) -> str:
+    marker = "\n--- "
+    if text.startswith("--- "):
+        return text
+    if marker in text:
+        return text[text.index(marker) + 1 :]
+    return ""
+
+
+def render_diff_panel(console: Console, title: str, diff_text: str) -> None:
+    console.print(Panel(Syntax(diff_text, "diff", word_wrap=True), title=title, border_style="green", expand=True))
+
+
 async def render_event_stream(
     console: Console,
     events: AsyncIterator[SDKMessage],
@@ -90,6 +123,20 @@ async def render_event_stream(
 ) -> None:
     last_assistant_text = ""
     async for event in events:
+        thinking_text = summarize_thinking(extract_thinking(event.message))
+        if thinking_text:
+            render_text_panel(console, "Thinking", thinking_text, "magenta")
+
+        if event.type.value == "tool_result":
+            if event.is_error and event.result_content:
+                render_notice(console, event.tool_name or "Tool Error", event.result_content, "red")
+                continue
+            if event.tool_name == "Edit":
+                diff_text = extract_unified_diff(event.result_content)
+                if diff_text:
+                    render_diff_panel(console, "Edit Diff", diff_text)
+                continue
+
         text = extract_text(event.text)
         label = event.type.value.replace("_", " ").title()
         if omit_duplicate_result and label == "Result" and text and text == last_assistant_text:

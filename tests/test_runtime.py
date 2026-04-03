@@ -170,3 +170,32 @@ def test_create_runtime_agent_replaces_placeholder_agent_tool_after_initialize(m
 
     assert [tool.name for tool in agent._tool_pool] == ["Agent", "Read"]
     assert agent._tool_pool[0].__class__.__name__ == "RuntimeAgentTool"
+
+
+def test_create_runtime_agent_replaces_read_and_edit_tools_after_initialize(monkeypatch) -> None:
+    class ReadTool:
+        name = "Read"
+
+    class EditTool:
+        name = "Edit"
+
+    class OtherTool:
+        name = "Bash"
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = []
+
+        async def _initialize(self) -> None:
+            self._tool_pool = [ReadTool(), EditTool(), OtherTool()]
+
+    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+
+    agent = create_runtime_agent(RuntimeConfig(api_key="test", base_url="https://nano-gpt.com/api/v1", model="m1"))
+
+    asyncio.run(agent._initialize())
+
+    assert [tool.name for tool in agent._tool_pool] == ["Read", "Edit", "Bash", "Agent"]
+    assert agent._tool_pool[0].__class__.__name__ == "RuntimeReadTool"
+    assert agent._tool_pool[1].__class__.__name__ == "RuntimeEditTool"

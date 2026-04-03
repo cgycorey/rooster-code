@@ -1,6 +1,6 @@
 import asyncio
 
-from open_agent_sdk import SDKMessage, SDKMessageType
+from open_agent_sdk import ConversationMessage, MessageRole, SDKMessage, SDKMessageType
 from rich.console import Console
 
 from cock_code.config import RuntimeConfig
@@ -44,6 +44,69 @@ def test_render_event_stream_omits_duplicate_result_text_when_requested() -> Non
     assert "Assistant" in output
     assert "same" in output
     assert "Result" not in output
+
+
+def test_render_event_stream_shows_short_thinking_panel() -> None:
+    console = Console(record=True, width=100)
+
+    async def events():
+        yield SDKMessage(
+            type=SDKMessageType.ASSISTANT,
+            text="answer",
+            message=ConversationMessage(
+                role=MessageRole.ASSISTANT,
+                content=[
+                    {"type": "thinking", "thinking": "thinking line one\nthinking line two\nthinking line three"},
+                    {"type": "text", "text": "answer"},
+                ],
+            ),
+        )
+
+    asyncio.run(render_event_stream(console, events()))
+
+    output = console.export_text()
+
+    assert "Thinking" in output
+    assert "thinking line one" in output
+    assert "answer" in output
+
+
+def test_render_event_stream_shows_edit_diff_panel() -> None:
+    console = Console(record=True, width=100)
+
+    async def events():
+        yield SDKMessage(
+            type=SDKMessageType.TOOL_RESULT,
+            tool_name="Edit",
+            result_content="Successfully edited /tmp/a.py\n--- /tmp/a.py\n+++ /tmp/a.py\n@@ -1 +1 @@\n-old\n+new",
+        )
+
+    asyncio.run(render_event_stream(console, events()))
+
+    output = console.export_text()
+
+    assert "Edit Diff" in output
+    assert "--- /tmp/a.py" in output
+    assert "+new" in output
+
+
+def test_render_event_stream_shows_tool_error_notice() -> None:
+    console = Console(record=True, width=100)
+
+    async def events():
+        yield SDKMessage(
+            type=SDKMessageType.TOOL_RESULT,
+            tool_name="Edit",
+            result_content="Edit blocked: read /tmp/a.py first in this turn, then retry.",
+            is_error=True,
+        )
+
+    asyncio.run(render_event_stream(console, events()))
+
+    output = console.export_text()
+
+    assert "Edit" in output
+    assert "read /tmp/a.py first" in output
 
 
 def test_render_banner_shows_mode_and_runtime_context() -> None:

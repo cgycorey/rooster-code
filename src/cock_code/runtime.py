@@ -31,7 +31,7 @@ from open_agent_sdk.tools import _mailboxes
 
 from cock_code.config import RuntimeConfig
 from cock_code.transport import RawAnthropicHTTPClient
-from cock_code.runtime_tools import RuntimeAgentTool
+from cock_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeReadTool, TurnTracker
 
 
 def _should_use_custom_client(base_url: str | None) -> bool:
@@ -206,6 +206,18 @@ def _create_sdk_agent(
     )
     _attach_custom_client(agent, config)
 
+    tracker = TurnTracker()
+
+    if hasattr(agent, "query"):
+        original_query = agent.query
+
+        async def wrapped_query(prompt: str, overrides: dict[str, Any] | None = None):
+            tracker.reset()
+            async for event in original_query(prompt, overrides):
+                yield event
+
+        setattr(agent, "query", wrapped_query)
+
     if include_runtime_agent_tool and hasattr(agent, "_initialize"):
         original_initialize = agent._initialize
 
@@ -217,6 +229,10 @@ def _create_sdk_agent(
                 if getattr(tool, "name", "") == "Agent" and not replaced:
                     new_pool.append(RuntimeAgentTool(lambda input, context: _run_subagent(config, input, context)))
                     replaced = True
+                elif getattr(tool, "name", "") == "Read":
+                    new_pool.append(RuntimeReadTool(tool, tracker))
+                elif getattr(tool, "name", "") == "Edit":
+                    new_pool.append(RuntimeEditTool(tool, tracker))
                 elif getattr(tool, "name", "") != "Agent":
                     new_pool.append(tool)
             if not replaced:
