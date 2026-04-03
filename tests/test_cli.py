@@ -150,6 +150,31 @@ def test_run_ask_routes_explicit_agent_request(monkeypatch) -> None:
     }
 
 
+def test_run_ask_installs_and_clears_question_handler(monkeypatch) -> None:
+    captured: list[str] = []
+
+    class FakeAgent:
+        async def query(self, prompt: str):
+            if False:
+                yield None
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "render_event_stream", lambda console, events, omit_duplicate_result=False: (_ for _ in ()).throw(StopAsyncIteration()))
+    monkeypatch.setattr(cli, "set_question_handler", lambda handler: captured.append("set" if callable(handler) else "bad"))
+    monkeypatch.setattr(cli, "clear_question_handler", lambda: captured.append("clear"))
+
+    try:
+        cli.asyncio.run(cli.run_ask("hello", RuntimeConfig(model="m1")))
+    except RuntimeError:
+        pass
+
+    assert captured == ["set", "clear"]
+
+
 def test_sessions_help_mentions_mutation_commands() -> None:
     parser = build_parser()
     help_text = parser.format_help()

@@ -137,7 +137,7 @@ async def render_event_stream(
                     render_diff_panel(console, "Edit Diff", diff_text)
                 continue
 
-        text = extract_text(event.text)
+        text = extract_text(event.text).strip()
         label = event.type.value.replace("_", " ").title()
         if omit_duplicate_result and label == "Result" and text and text == last_assistant_text:
             continue

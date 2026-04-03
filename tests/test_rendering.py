@@ -46,6 +46,22 @@ def test_render_event_stream_omits_duplicate_result_text_when_requested() -> Non
     assert "Result" not in output
 
 
+def test_render_event_stream_skips_empty_assistant_panel() -> None:
+    console = Console(record=True, width=100)
+
+    async def events():
+        yield SDKMessage(type=SDKMessageType.ASSISTANT, text="")
+        yield SDKMessage(type=SDKMessageType.RESULT, text="done")
+
+    asyncio.run(render_event_stream(console, events()))
+
+    output = console.export_text()
+
+    assert "No content" not in output
+    assert "Assistant" not in output
+    assert "done" in output
+
+
 def test_render_event_stream_shows_short_thinking_panel() -> None:
     console = Console(record=True, width=100)
 

@@ -25,15 +25,15 @@ from cock_code.rendering import (
 
 
 def set_question_handler(handler):
-    from open_agent_sdk import set_question_handler as sdk_set_question_handler
+    from open_agent_sdk.tools.ask_user import set_question_handler as sdk_set_question_handler
 
     return sdk_set_question_handler(handler)
 
 
 def clear_question_handler():
-    from open_agent_sdk import clear_question_handler as sdk_clear_question_handler
+    from open_agent_sdk.tools.ask_user import set_question_handler as sdk_set_question_handler
 
-    return sdk_clear_question_handler()
+    return sdk_set_question_handler(None)
 
 
 def create_runtime_agent(config):
@@ -213,6 +213,11 @@ def build_parser() -> argparse.ArgumentParser:
 async def run_ask(prompt: str, config) -> int:
     console = build_console()
     render_banner(console, "ask", config)
+
+    async def question_handler(question: str) -> str:
+        return Prompt.ask(question)
+
+    set_question_handler(question_handler)
     requested_agent = find_requested_agent_name(config, prompt)
     if requested_agent:
         try:
@@ -222,6 +227,8 @@ async def run_ask(prompt: str, config) -> int:
         except Exception as exc:
             render_notice(console, "Error", str(exc), "red")
             return 1
+        finally:
+            clear_question_handler()
 
     agent = create_runtime_agent(config)
 
@@ -231,6 +238,7 @@ async def run_ask(prompt: str, config) -> int:
         render_notice(console, "Error", str(exc), "red")
         return 1
     finally:
+        clear_question_handler()
         await agent.close()
 
     if config.persist_session:
