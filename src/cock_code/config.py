@@ -13,6 +13,7 @@ class RuntimeConfig:
     api_key: str | None = None
     base_url: str | None = None
     model: str | None = None
+    api_type: str | None = None
     cwd: str | None = None
     allowed_tools: list[str] | None = None
     disallowed_tools: list[str] | None = None
@@ -64,6 +65,7 @@ def resolve_runtime_env(env: Mapping[str, str]) -> RuntimeConfig:
         api_key=merged_env.get("COCK_CODE_API_KEY"),
         base_url=merged_env.get("COCK_CODE_BASE_URL"),
         model=merged_env.get("COCK_CODE_MODEL"),
+        api_type=merged_env.get("COCK_CODE_API_TYPE"),
     )
 
 
@@ -89,6 +91,7 @@ def config_from_namespace(args: argparse.Namespace, env: Mapping[str, str]) -> R
         api_key=resolved.api_key,
         base_url=resolved.base_url,
         model=args.model or resolved.model,
+        api_type=resolved.api_type,
         cwd=args.cwd,
         allowed_tools=getattr(args, "allowed_tools", None),
         disallowed_tools=getattr(args, "disallowed_tools", None),

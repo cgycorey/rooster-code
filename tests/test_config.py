@@ -9,6 +9,7 @@ def test_cock_code_env_names_are_mapped() -> None:
         "COCK_CODE_API_KEY": "key-123",
         "COCK_CODE_BASE_URL": "https://example.test",
         "COCK_CODE_MODEL": "test-model",
+        "COCK_CODE_API_TYPE": "openai-completions",
     }
 
     resolved = resolve_runtime_env(env)
@@ -16,6 +17,7 @@ def test_cock_code_env_names_are_mapped() -> None:
     assert resolved.api_key == "key-123"
     assert resolved.base_url == "https://example.test"
     assert resolved.model == "test-model"
+    assert resolved.api_type == "openai-completions"
 
 
 def test_config_from_namespace_loads_runtime_files_and_kv_pairs(tmp_path) -> None:
@@ -94,7 +96,7 @@ def test_config_from_namespace_loads_cock_code_values_from_local_dotenv(tmp_path
     from cock_code.config import config_from_namespace
 
     (tmp_path / ".env").write_text(
-        'COCK_CODE_API_KEY="dotenv-key"\nCOCK_CODE_BASE_URL="https://dotenv.test"\nCOCK_CODE_MODEL="glm-5:cloud"\n',
+        'COCK_CODE_API_KEY="dotenv-key"\nCOCK_CODE_BASE_URL="https://dotenv.test"\nCOCK_CODE_MODEL="glm-5:cloud"\nCOCK_CODE_API_TYPE="openai-completions"\n',
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
@@ -131,3 +133,4 @@ def test_config_from_namespace_loads_cock_code_values_from_local_dotenv(tmp_path
     assert config.api_key == "dotenv-key"
     assert config.base_url == "https://dotenv.test"
     assert config.model == "glm-5:cloud"
+    assert config.api_type == "openai-completions"

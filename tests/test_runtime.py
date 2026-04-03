@@ -9,6 +9,7 @@ def test_build_agent_options_uses_explicit_api_fields() -> None:
         api_key="abc",
         base_url="https://example.test",
         model="m1",
+        api_type="openai-completions",
     )
 
     options = build_agent_options(config)
@@ -16,6 +17,7 @@ def test_build_agent_options_uses_explicit_api_fields() -> None:
     assert options.api_key == "abc"
     assert options.base_url == "https://example.test"
     assert options.model == "m1"
+    assert options.api_type == "openai-completions"
 
 
 def test_build_agent_options_carries_runtime_configuration() -> None:
@@ -77,62 +79,18 @@ def test_build_agent_options_carries_runtime_configuration() -> None:
     assert options.extra_args == {"temperature": 0}
 
 
-def test_create_runtime_agent_injects_raw_http_client_for_custom_base_url(monkeypatch) -> None:
-    captured: dict[str, object] = {}
-
+def test_create_runtime_agent_does_not_inject_custom_transport(monkeypatch) -> None:
     class FakeAgent:
         _client = None
 
-    def fake_create_agent(options):
-        captured["options"] = options
-        return FakeAgent()
-
-    class FakeRawClient:
-        def __init__(self, *, api_key: str | None, base_url: str, default_headers: dict[str, str] | None = None):
-            captured["raw_client"] = {
-                "api_key": api_key,
-                "base_url": base_url,
-                "default_headers": default_headers,
-            }
-
-    monkeypatch.setattr("cock_code.runtime.create_agent", fake_create_agent)
-    monkeypatch.setattr("cock_code.runtime.RawAnthropicHTTPClient", FakeRawClient)
+    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
 
     agent = create_runtime_agent(
         RuntimeConfig(
             api_key="test-key",
             base_url="https://nano-gpt.com/api/v1",
             model="test-model",
-            custom_headers={"X-Test": "1"},
-        )
-    )
-
-    assert isinstance(agent, FakeAgent)
-    assert captured["raw_client"] == {
-        "api_key": "test-key",
-        "base_url": "https://nano-gpt.com/api/v1",
-        "default_headers": {"X-Test": "1"},
-    }
-    assert agent._client is not None
-
-
-def test_create_runtime_agent_keeps_sdk_client_for_anthropic_base_url(monkeypatch) -> None:
-    class FakeAgent:
-        _client = None
-
-    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
-
-    class FailIfConstructed:
-        def __init__(self, **kwargs):
-            raise AssertionError("raw client should not be used")
-
-    monkeypatch.setattr("cock_code.runtime.RawAnthropicHTTPClient", FailIfConstructed)
-
-    agent = create_runtime_agent(
-        RuntimeConfig(
-            api_key="test-key",
-            base_url="https://api.anthropic.com",
-            model="test-model",
+            api_type="openai-completions",
         )
     )
 

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 from typing import Any
-from urllib.parse import urlparse
-
 from open_agent_sdk import (
     AgentOptions,
     ToolContext,
@@ -30,26 +28,7 @@ from open_agent_sdk import (
 from open_agent_sdk.tools import _mailboxes
 
 from cock_code.config import RuntimeConfig
-from cock_code.transport import RawAnthropicHTTPClient
 from cock_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeReadTool, TurnTracker
-
-
-def _should_use_custom_client(base_url: str | None) -> bool:
-    hostname = urlparse(base_url).hostname if base_url else None
-    return bool(base_url and hostname and hostname != "api.anthropic.com")
-
-
-def _attach_custom_client(agent: Any, config: RuntimeConfig) -> None:
-    if _should_use_custom_client(config.base_url):
-        setattr(
-            agent,
-            "_client",
-            RawAnthropicHTTPClient(
-                api_key=config.api_key,
-                base_url=config.base_url or "",
-                default_headers=config.custom_headers,
-            ),
-        )
 
 
 def _resolve_agent_definition(config: RuntimeConfig, input: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
@@ -162,6 +141,7 @@ def build_agent_options(
         api_key=config.api_key or "",
         base_url=config.base_url or "",
         model=config.model or "",
+        api_type=config.api_type or "",
         cwd=config.cwd or "",
         system_prompt=system_prompt,
         append_system_prompt=agent_prompt,
@@ -204,7 +184,6 @@ def _create_sdk_agent(
             system_prompt=system_prompt,
         )
     )
-    _attach_custom_client(agent, config)
 
     tracker = TurnTracker()
 
