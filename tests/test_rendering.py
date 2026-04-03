@@ -1,0 +1,228 @@
+import asyncio
+
+from open_agent_sdk import SDKMessage, SDKMessageType
+from rich.console import Console
+
+from cock_code.config import RuntimeConfig
+from cock_code.rendering import (
+    render_banner,
+    render_event_stream,
+    render_session_info,
+    render_session_table,
+    render_state,
+    render_tool_table,
+    render_transcript,
+    summarize_tool_result,
+)
+
+
+def test_render_event_stream_labels_assistant_output() -> None:
+    console = Console(record=True, width=100)
+
+    async def events():
+        yield SDKMessage(type=SDKMessageType.ASSISTANT, text="hello")
+
+    asyncio.run(render_event_stream(console, events()))
+
+    output = console.export_text()
+
+    assert "Assistant" in output
+    assert "hello" in output
+
+
+def test_render_event_stream_omits_duplicate_result_text_when_requested() -> None:
+    console = Console(record=True, width=100)
+
+    async def events():
+        yield SDKMessage(type=SDKMessageType.ASSISTANT, text="same")
+        yield SDKMessage(type=SDKMessageType.RESULT, text="same")
+
+    asyncio.run(render_event_stream(console, events(), omit_duplicate_result=True))
+
+    output = console.export_text()
+
+    assert "Assistant" in output
+    assert "same" in output
+    assert "Result" not in output
+
+
+def test_render_banner_shows_mode_and_runtime_context() -> None:
+    console = Console(record=True, width=100)
+    config = RuntimeConfig(model="claude-sonnet-4-5", cwd="/tmp/project", resume="sess-1")
+
+    render_banner(console, "chat", config)
+
+    output = console.export_text()
+
+    assert "COCK-CODE CHAT" in output
+    assert "claude-sonnet-4-5" in output
+    assert "/tmp/project" in output
+    assert "sess-1" in output
+
+
+def test_summarize_tool_result_truncates_output() -> None:
+    result = summarize_tool_result("x" * 200, max_chars=32)
+
+    assert len(result) <= 35
+    assert result.endswith("...")
+
+
+def test_render_session_table_shows_metadata_columns() -> None:
+    console = Console(record=True, width=100)
+
+    render_session_table(
+        console,
+        [{"id": "sess-1", "title": "Review", "message_count": 3}],
+    )
+
+    output = console.export_text()
+
+    assert "Title" in output
+    assert "Messages" in output
+    assert "Review" in output
+    assert "3" in output
+
+
+def test_render_session_table_handles_empty_state() -> None:
+    console = Console(record=True, width=100)
+
+    render_session_table(console, [])
+
+    output = console.export_text()
+
+    assert "No sessions found" in output
+
+
+def test_render_transcript_formats_roles_and_text() -> None:
+    console = Console(record=True, width=100)
+
+    render_transcript(
+        console,
+        [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+        ],
+    )
+
+    output = console.export_text()
+
+    assert "USER" in output
+    assert "ASSISTANT" in output
+    assert "hi" in output
+    assert "hello" in output
+
+
+def test_render_tool_table_shows_named_tool_rows() -> None:
+    console = Console(record=True, width=100)
+
+    render_tool_table(console, ["Read", "Write"])
+
+    output = console.export_text()
+
+    assert "Tools" in output
+    assert "Tool" in output
+    assert "Read" in output
+    assert "Write" in output
+
+
+def test_render_session_info_formats_friendly_labels() -> None:
+    console = Console(record=True, width=100)
+
+    render_session_info(
+        console,
+        {
+            "id": "sess-123",
+            "updatedAt": "2026-04-03T10:33:54",
+            "messageCount": 3,
+            "cwd": "/tmp/project",
+            "model": "claude-sonnet-4-5",
+        },
+    )
+
+    output = console.export_text()
+
+    assert "Session sess-123" in output
+    assert "Updated" in output
+    assert "Messages" in output
+    assert "CWD" in output
+    assert "Model" in output
+    assert "updatedAt" not in output
+    assert "messageCount" not in output
+
+
+def test_render_state_formats_mapping_as_key_value_table() -> None:
+    console = Console(record=True, width=100)
+
+    render_state(console, "Config", {"model": "claude", "cwd": "/tmp/project"})
+
+    output = console.export_text()
+
+    assert "Config" in output
+    assert "model" in output
+    assert "claude" in output
+    assert "cwd" in output
+    assert "/tmp/project" in output
+
+
+def test_render_state_formats_list_of_mappings_as_table() -> None:
+    console = Console(record=True, width=100)
+
+    render_state(
+        console,
+        "Todos",
+        [
+            {"content": "Ship CLI", "status": "done"},
+            {"content": "Polish TUI", "status": "pending"},
+        ],
+    )
+
+    output = console.export_text()
+
+    assert "Todos" in output
+    assert "content" in output
+    assert "status" in output
+    assert "Ship CLI" in output
+    assert "Polish TUI" in output
+
+
+def test_render_state_formats_empty_list_as_named_empty_state() -> None:
+    console = Console(record=True, width=100)
+
+    render_state(console, "Tasks", [])
+
+    output = console.export_text()
+
+    assert "Tasks" in output
+    assert "No tasks found" in output
+
+
+def test_render_state_formats_empty_mapping_as_named_empty_state() -> None:
+    console = Console(record=True, width=100)
+
+    render_state(console, "Tasks", {})
+
+    output = console.export_text()
+
+    assert "Tasks" in output
+    assert "No tasks found" in output
+
+
+def test_render_state_list_table_shows_row_count_in_title() -> None:
+    console = Console(record=True, width=100)
+
+    render_state(console, "Todos", [{"content": "Ship CLI"}, {"content": "Polish TUI"}])
+
+    output = console.export_text()
+
+    assert "Todos (2)" in output
+
+
+def test_render_state_formats_list_of_empty_mappings_as_named_empty_state() -> None:
+    console = Console(record=True, width=100)
+
+    render_state(console, "Tasks", [{}])
+
+    output = console.export_text()
+
+    assert "Tasks" in output
+    assert "No tasks found" in output
