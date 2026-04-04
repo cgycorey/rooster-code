@@ -10,6 +10,7 @@ def test_cock_code_env_names_are_mapped() -> None:
         "COCK_CODE_BASE_URL": "https://example.test",
         "COCK_CODE_MODEL": "test-model",
         "COCK_CODE_API_TYPE": "openai-completions",
+        "COCK_CODE_SEARCH_URL": "https://search.example/search",
     }
 
     resolved = resolve_runtime_env(env)
@@ -18,6 +19,7 @@ def test_cock_code_env_names_are_mapped() -> None:
     assert resolved.base_url == "https://example.test"
     assert resolved.model == "test-model"
     assert resolved.api_type == "openai-completions"
+    assert resolved.search_url == "https://search.example/search"
 
 
 def test_config_from_namespace_loads_runtime_files_and_kv_pairs(tmp_path) -> None:
@@ -134,3 +136,86 @@ def test_config_from_namespace_loads_cock_code_values_from_local_dotenv(tmp_path
     assert config.base_url == "https://dotenv.test"
     assert config.model == "glm-5:cloud"
     assert config.api_type == "openai-completions"
+
+
+def test_config_from_namespace_loads_search_url_from_local_dotenv(tmp_path, monkeypatch) -> None:
+    from cock_code.config import config_from_namespace
+
+    (tmp_path / ".env").write_text(
+        'COCK_CODE_SEARCH_URL="https://searx.example/search"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    args = argparse.Namespace(
+        model=None,
+        cwd=None,
+        allowed_tools=None,
+        disallowed_tools=None,
+        resume=None,
+        session_id=None,
+        continue_session=False,
+        fork_session=None,
+        persist_session=True,
+        permission_mode=None,
+        max_turns=None,
+        max_budget_usd=None,
+        max_tokens=None,
+        thinking_budget=None,
+        debug=False,
+        sandbox=False,
+        include_partials=False,
+        env=None,
+        custom_headers=None,
+        agents_file=None,
+        hooks_file=None,
+        json_schema_file=None,
+        mcp_file=None,
+        extra_args_file=None,
+    )
+
+    config = config_from_namespace(args, {})
+
+    assert config.search_url == "https://searx.example/search"
+
+
+def test_config_from_namespace_prefers_cli_search_url_over_dotenv(tmp_path, monkeypatch) -> None:
+    from cock_code.config import config_from_namespace
+
+    (tmp_path / ".env").write_text(
+        'COCK_CODE_SEARCH_URL="https://searx.example/search"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    args = argparse.Namespace(
+        model=None,
+        cwd=None,
+        allowed_tools=None,
+        disallowed_tools=None,
+        resume=None,
+        session_id=None,
+        continue_session=False,
+        fork_session=None,
+        persist_session=True,
+        permission_mode=None,
+        max_turns=None,
+        max_budget_usd=None,
+        max_tokens=None,
+        thinking_budget=None,
+        debug=False,
+        sandbox=False,
+        include_partials=False,
+        env=None,
+        custom_headers=None,
+        agents_file=None,
+        hooks_file=None,
+        json_schema_file=None,
+        mcp_file=None,
+        extra_args_file=None,
+        search_url="http://127.0.0.1:8080/search",
+    )
+
+    config = config_from_namespace(args, {})
+
+    assert config.search_url == "http://127.0.0.1:8080/search"

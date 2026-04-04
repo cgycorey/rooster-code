@@ -14,6 +14,7 @@ class RuntimeConfig:
     base_url: str | None = None
     model: str | None = None
     api_type: str | None = None
+    search_url: str | None = None
     cwd: str | None = None
     allowed_tools: list[str] | None = None
     disallowed_tools: list[str] | None = None
@@ -66,6 +67,7 @@ def resolve_runtime_env(env: Mapping[str, str]) -> RuntimeConfig:
         base_url=merged_env.get("COCK_CODE_BASE_URL"),
         model=merged_env.get("COCK_CODE_MODEL"),
         api_type=merged_env.get("COCK_CODE_API_TYPE"),
+        search_url=merged_env.get("COCK_CODE_SEARCH_URL"),
     )
 
 
@@ -92,6 +94,7 @@ def config_from_namespace(args: argparse.Namespace, env: Mapping[str, str]) -> R
         base_url=resolved.base_url,
         model=args.model or resolved.model,
         api_type=resolved.api_type,
+        search_url=getattr(args, "search_url", None) or resolved.search_url,
         cwd=args.cwd,
         allowed_tools=getattr(args, "allowed_tools", None),
         disallowed_tools=getattr(args, "disallowed_tools", None),

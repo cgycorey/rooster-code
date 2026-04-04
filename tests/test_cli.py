@@ -41,6 +41,8 @@ def test_ask_command_accepts_shared_runtime_flags() -> None:
             "Read",
             "--disallowed-tool",
             "Bash",
+            "--search-url",
+            "http://127.0.0.1:8080/search",
         ]
     )
 
@@ -50,6 +52,7 @@ def test_ask_command_accepts_shared_runtime_flags() -> None:
     assert args.resume == "sess-1"
     assert args.allowed_tools == ["Read"]
     assert args.disallowed_tools == ["Bash"]
+    assert args.search_url == "http://127.0.0.1:8080/search"
 
 
 def test_main_dispatches_ask(monkeypatch) -> None:
@@ -174,6 +177,85 @@ def test_run_ask_installs_and_clears_question_handler(monkeypatch) -> None:
         pass
 
     assert captured == ["set", "clear"]
+
+
+def test_run_ask_installs_default_search_backend(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeAgent:
+        async def query(self, prompt: str):
+            if False:
+                yield None
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "render_event_stream", lambda console, events, omit_duplicate_result=False: (_ for _ in ()).throw(StopAsyncIteration()))
+    monkeypatch.setattr(cli, "set_question_handler", lambda handler: None)
+    monkeypatch.setattr(cli, "clear_question_handler", lambda: None)
+    monkeypatch.setattr(cli, "install_search_backend", lambda config: captured.setdefault("search_url", config.search_url))
+
+    try:
+        cli.asyncio.run(cli.run_ask("hello", RuntimeConfig(model="m1", search_url="https://searx.example/search")))
+    except RuntimeError:
+        pass
+
+    assert captured == {"search_url": "https://searx.example/search"}
+
+
+def test_install_search_backend_uses_local_default_url(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_set_search_fn(fn):
+        captured["fn"] = fn
+
+    monkeypatch.setattr(cli, "set_search_fn", fake_set_search_fn)
+
+    cli.install_search_backend(RuntimeConfig(model="m1"))
+
+    assert callable(captured["fn"])
+
+
+def test_install_search_backend_uses_post_json_mapping(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"results": [{"title": "A", "url": "https://a.test", "content": "snippet a"}]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json):
+            captured["url"] = url
+            captured["json"] = json
+            return FakeResponse()
+
+    def fake_set_search_fn(fn):
+        captured["fn"] = fn
+
+    monkeypatch.setattr(cli, "set_search_fn", fake_set_search_fn)
+    monkeypatch.setattr(cli.httpx, "AsyncClient", FakeClient)
+
+    cli.install_search_backend(RuntimeConfig(model="m1", search_url="http://127.0.0.1:8080/search"))
+
+    results = cli.asyncio.run(captured["fn"]("open agent sdk", 5))
+
+    assert captured["url"] == "http://127.0.0.1:8080/search"
+    assert captured["json"] == {"q": "open agent sdk", "format": "json", "pageno": 1, "safesearch": 1}
+    assert results == [{"title": "A", "url": "https://a.test", "snippet": "snippet a"}]
 
 
 def test_sessions_help_mentions_mutation_commands() -> None:

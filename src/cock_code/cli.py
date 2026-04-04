@@ -4,6 +4,9 @@ import argparse
 import asyncio
 import os
 import signal
+from urllib.parse import urlencode
+
+import httpx
 
 from rich.prompt import Prompt
 
@@ -35,6 +38,41 @@ def clear_question_handler():
     from open_agent_sdk.tools.ask_user import set_question_handler as sdk_set_question_handler
 
     return sdk_set_question_handler(None)
+
+
+def set_search_fn(fn):
+    from open_agent_sdk.tools.web_search import set_search_fn as sdk_set_search_fn
+
+    return sdk_set_search_fn(fn)
+
+
+def install_search_backend(config) -> None:
+    search_url = config.search_url or "http://127.0.0.1:8080/search"
+
+    async def searxng_search(query: str, max_results: int) -> list[dict[str, str]]:
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(
+                search_url,
+                json={
+                    "q": query,
+                    "format": "json",
+                    "pageno": 1,
+                    "safesearch": 1,
+                },
+            )
+            response.raise_for_status()
+        payload = response.json()
+        results = payload.get("results", [])[:max_results]
+        return [
+            {
+                "title": str(item.get("title", "")),
+                "url": str(item.get("url", "")),
+                "snippet": str(item.get("content", "")),
+            }
+            for item in results
+        ]
+
+    set_search_fn(searxng_search)
 
 
 def create_runtime_agent(config):
@@ -119,6 +157,7 @@ def add_runtime_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cwd", help="Working directory for the agent")
     parser.add_argument("--model", help="Override COCK_CODE_MODEL for this run")
     parser.add_argument("--permission-mode", help="SDK permission mode")
+    parser.add_argument("--search-url", help="SearXNG search endpoint URL")
     parser.add_argument("--max-turns", type=int, help="Maximum SDK turns")
     parser.add_argument("--max-budget-usd", type=float, help="Maximum spend for this run")
     parser.add_argument("--max-tokens", type=int, help="Maximum output tokens")
@@ -214,6 +253,7 @@ def build_parser() -> argparse.ArgumentParser:
 async def run_ask(prompt: str, config) -> int:
     console = build_console()
     render_banner(console, "ask", config)
+    install_search_backend(config)
 
     async def question_handler(question: str) -> str:
         return Prompt.ask(question)
@@ -252,6 +292,7 @@ async def run_ask(prompt: str, config) -> int:
 async def run_chat(config) -> int:
     console = build_console()
     render_banner(console, "chat", config)
+    install_search_backend(config)
     agent = create_runtime_agent(config)
     interrupted = False
 
