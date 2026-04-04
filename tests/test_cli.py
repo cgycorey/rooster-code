@@ -121,6 +121,7 @@ def test_main_dispatches_chat(monkeypatch) -> None:
 
 def test_run_ask_routes_explicit_agent_request(monkeypatch) -> None:
     captured: dict[str, object] = {}
+    panels: list[tuple[str, str]] = []
 
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: (_ for _ in ()).throw(AssertionError("should not create top-level agent")))
@@ -132,7 +133,7 @@ def test_run_ask_routes_explicit_agent_request(monkeypatch) -> None:
         return "AGENT_PATH=used"
 
     monkeypatch.setattr(cli, "run_named_agent_prompt", fake_run_named_agent_prompt)
-    monkeypatch.setattr(cli, "render_text_panel", lambda console, title, text, style: captured.update({"title": title, "text": text}))
+    monkeypatch.setattr(cli, "render_agent_panel", lambda console, title, text, style: panels.append((title, text)))
 
     exit_code = cli.asyncio.run(
         cli.run_ask(
@@ -142,12 +143,12 @@ def test_run_ask_routes_explicit_agent_request(monkeypatch) -> None:
     )
 
     assert exit_code == 0
-    assert captured == {
-        "agent_name": "reviewer",
-        "prompt": "Use the reviewer agent to answer.",
-        "title": "Assistant",
-        "text": "AGENT_PATH=used",
-    }
+    assert captured["agent_name"] == "reviewer"
+    assert captured["prompt"] == "Use the reviewer agent to answer."
+    assert panels == [
+        ("Agent Started", "reviewer"),
+        ("Agent Result", "AGENT_PATH=used"),
+    ]
 
 
 def test_run_ask_installs_and_clears_question_handler(monkeypatch) -> None:

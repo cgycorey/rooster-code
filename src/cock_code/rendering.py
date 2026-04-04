@@ -116,6 +116,10 @@ def render_diff_panel(console: Console, title: str, diff_text: str) -> None:
     console.print(Panel(Syntax(diff_text, "diff", word_wrap=True), title=title, border_style="green", expand=True))
 
 
+def render_agent_panel(console: Console, title: str, text: str, style: str = "blue") -> None:
+    render_text_panel(console, title, text, style)
+
+
 async def render_event_stream(
     console: Console,
     events: AsyncIterator[SDKMessage],
@@ -130,6 +134,9 @@ async def render_event_stream(
         if event.type.value == "tool_result":
             if event.is_error and event.result_content:
                 render_notice(console, event.tool_name or "Tool Error", event.result_content, "red")
+                continue
+            if event.tool_name == "Agent" and event.result_content:
+                render_agent_panel(console, "Agent Result", event.result_content, "blue")
                 continue
             if event.tool_name == "Edit":
                 diff_text = extract_unified_diff(event.result_content)

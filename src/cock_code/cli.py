@@ -15,6 +15,7 @@ from cock_code.rendering import (
     render_event_stream,
     render_help,
     render_notice,
+    render_agent_panel,
     render_session_info,
     render_session_table,
     render_state,
@@ -221,8 +222,9 @@ async def run_ask(prompt: str, config) -> int:
     requested_agent = find_requested_agent_name(config, prompt)
     if requested_agent:
         try:
+            render_agent_panel(console, "Agent Started", requested_agent, "blue")
             text = await run_named_agent_prompt(config, requested_agent, prompt)
-            render_text_panel(console, "Assistant", text, "cyan")
+            render_agent_panel(console, "Agent Result", text, "blue")
             return 0
         except Exception as exc:
             render_notice(console, "Error", str(exc), "red")
@@ -316,8 +318,9 @@ async def run_chat(config) -> int:
             requested_agent = find_requested_agent_name(config, user_input)
             if requested_agent:
                 try:
+                    render_agent_panel(console, "Agent Started", requested_agent, "blue")
                     text = await run_named_agent_prompt(config, requested_agent, user_input)
-                    render_text_panel(console, "Assistant", text, "cyan")
+                    render_agent_panel(console, "Agent Result", text, "blue")
                 except Exception as exc:
                     render_notice(console, "Error", str(exc), "red")
                 continue

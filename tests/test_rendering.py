@@ -125,6 +125,24 @@ def test_render_event_stream_shows_tool_error_notice() -> None:
     assert "read /tmp/a.py first" in output
 
 
+def test_render_event_stream_shows_agent_result_panel() -> None:
+    console = Console(record=True, width=100)
+
+    async def events():
+        yield SDKMessage(
+            type=SDKMessageType.TOOL_RESULT,
+            tool_name="Agent",
+            result_content="AGENT_PATH=used",
+        )
+
+    asyncio.run(render_event_stream(console, events()))
+
+    output = console.export_text()
+
+    assert "Agent Result" in output
+    assert "AGENT_PATH=used" in output
+
+
 def test_render_banner_shows_mode_and_runtime_context() -> None:
     console = Console(record=True, width=100)
     config = RuntimeConfig(model="claude-sonnet-4-5", cwd="/tmp/project", resume="sess-1")

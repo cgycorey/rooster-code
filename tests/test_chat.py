@@ -102,6 +102,7 @@ def test_run_chat_requests_duplicate_result_omission(monkeypatch) -> None:
 
 def test_run_chat_routes_explicit_agent_request(monkeypatch) -> None:
     captured: dict[str, object] = {}
+    panels: list[tuple[str, str]] = []
     prompts = iter(["Use the reviewer agent to answer.", "/exit"])
 
     class FakeAgent:
@@ -119,7 +120,7 @@ def test_run_chat_routes_explicit_agent_request(monkeypatch) -> None:
         return "AGENT_PATH=used"
 
     monkeypatch.setattr(cli, "run_named_agent_prompt", fake_run_named_agent_prompt)
-    monkeypatch.setattr(cli, "render_text_panel", lambda console, title, text, style: captured.update({"title": title, "text": text}))
+    monkeypatch.setattr(cli, "render_agent_panel", lambda console, title, text, style: panels.append((title, text)))
 
     exit_code = cli.asyncio.run(
         cli.run_chat(RuntimeConfig(model="m2", agents={"reviewer": {"description": "reviewer"}}))
@@ -128,8 +129,10 @@ def test_run_chat_routes_explicit_agent_request(monkeypatch) -> None:
     assert exit_code == 0
     assert captured["agent_name"] == "reviewer"
     assert captured["prompt"] == "Use the reviewer agent to answer."
-    assert captured["title"] == "Assistant"
-    assert captured["text"] == "AGENT_PATH=used"
+    assert panels == [
+        ("Agent Started", "reviewer"),
+        ("Agent Result", "AGENT_PATH=used"),
+    ]
     assert captured["closed"] is True
 
 
