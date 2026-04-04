@@ -11,6 +11,7 @@ from rich.pretty import Pretty
 from rich.rule import Rule
 from rich.syntax import Syntax
 from rich.table import Table
+from rich.text import Text
 
 from cock_code.config import RuntimeConfig
 
@@ -29,7 +30,45 @@ def build_console() -> Console:
     return Console(highlight=False)
 
 
+def build_rooster_head() -> Text:
+    rows = [
+        [("              ", ""), ("▄", "bold red"), ("▄", "bold red"), ("▄", "bold red")],
+        [("           ", ""), ("▄████", "bold red"), ("▄", "bold red")],
+        [("         ", ""), ("▄████████", "bold red"), ("▄", "bold red")],
+        [("       ", ""), ("▄████████████", "bold red"), ("▄", "bold red")],
+        [("      ", ""), ("████████", "red"), ("  ", ""), ("◉", "bold white"), ("  ", ""), ("████", "red"), (" ", ""), ("▶▶", "bold yellow")],
+        [("      ", ""), ("████████████████", "red")],
+        [("       ", ""), ("▀████████████", "red"), ("▄", "bold red")],
+        [("         ", ""), ("▀██████", "red"), ("▄██", "bold red")],
+        [("            ", ""), ("▀██", "red"), ("██", "bold red")],
+    ]
+
+    text = Text()
+    for row in rows:
+        for segment, style in row:
+            text.append(segment, style=style or None)
+        text.append("\n")
+    return text
+
+
+def build_cock_code_wordmark() -> Text:
+    wordmark = Text()
+    lines = [
+        "  ██████  ██████   ██████ ██   ██     ██████  ██████  ██████  ███████ ",
+        " ██      ██    ██ ██      ██  ██     ██      ██    ██ ██   ██ ██      ",
+        " ██      ██    ██ ██      █████      ██      ██    ██ ██   ██ █████   ",
+        " ██      ██    ██ ██      ██  ██     ██      ██    ██ ██   ██ ██      ",
+        "  ██████  ██████   ██████ ██   ██     ██████  ██████  ██████  ███████ ",
+    ]
+    for line in lines:
+        wordmark.append(line, style="bold white on red")
+        wordmark.append("\n")
+    return wordmark
+
+
 def render_banner(console: Console, mode: str, config: RuntimeConfig) -> None:
+    console.print(build_rooster_head())
+    console.print(build_cock_code_wordmark())
     console.print(Rule(f"[bold cyan]COCK-CODE {mode.upper()}[/]", align="left", style="cyan"))
 
     table = Table(show_header=False, box=None, pad_edge=False)

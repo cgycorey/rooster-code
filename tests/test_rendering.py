@@ -157,6 +157,20 @@ def test_render_banner_shows_mode_and_runtime_context() -> None:
     assert "sess-1" in output
 
 
+def test_render_banner_shows_cock_code_band_and_ascii_rooster() -> None:
+    console = Console(record=True, width=100)
+
+    render_banner(console, "ask", RuntimeConfig(model="m"))
+
+    output = console.export_text()
+
+    assert "COCK" in output
+    assert "CODE" in output
+    assert "◉" in output
+    assert "▶▶" in output or "▶" in output
+    assert "▄▄" in output
+
+
 def test_summarize_tool_result_truncates_output() -> None:
     result = summarize_tool_result("x" * 200, max_chars=32)
 
