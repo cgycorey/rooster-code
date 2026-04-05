@@ -160,13 +160,35 @@ def render_agent_panel(console: Console, title: str, text: str, style: str = "bl
     render_text_panel(console, title, text, style)
 
 
+def render_activity_trace(console: Console, entries: list[Mapping[str, object]]) -> None:
+    for entry in entries:
+        action = str(entry.get("action", "Working"))
+        tool = str(entry.get("tool", ""))
+        target = str(entry.get("target", ""))
+        parts = [action]
+        if tool:
+            parts.append(tool)
+        if target:
+            parts.append(target)
+        console.print(Text(f"Activity: {' · '.join(parts)}", style="dim"))
+
+
 async def render_event_stream(
     console: Console,
     events: AsyncIterator[SDKMessage],
     omit_duplicate_result: bool = False,
+    show_activity_trace: bool = False,
 ) -> None:
     last_assistant_text = ""
     async for event in events:
+        if show_activity_trace:
+            activity_trace = event.system_data.get("activity_trace", [])
+            if isinstance(activity_trace, list):
+                trace_entries = [entry for entry in activity_trace if isinstance(entry, Mapping)]
+                if trace_entries:
+                    render_activity_trace(console, trace_entries)
+                elif event.type.value == "tool_result" and event.tool_name:
+                    render_activity_trace(console, [{"action": "Running tool", "tool": event.tool_name}])
         thinking_text = summarize_thinking(extract_thinking(event.message))
         if thinking_text:
             render_text_panel(console, "Thinking", thinking_text, "magenta")

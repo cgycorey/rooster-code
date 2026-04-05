@@ -22,7 +22,7 @@ def test_render_event_stream_labels_assistant_output() -> None:
     async def events():
         yield SDKMessage(type=SDKMessageType.ASSISTANT, text="hello")
 
-    asyncio.run(render_event_stream(console, events()))
+    asyncio.run(render_event_stream(console, events(), show_activity_trace=True))
 
     output = console.export_text()
 
@@ -53,7 +53,7 @@ def test_render_event_stream_skips_empty_assistant_panel() -> None:
         yield SDKMessage(type=SDKMessageType.ASSISTANT, text="")
         yield SDKMessage(type=SDKMessageType.RESULT, text="done")
 
-    asyncio.run(render_event_stream(console, events()))
+    asyncio.run(render_event_stream(console, events(), show_activity_trace=True))
 
     output = console.export_text()
 
@@ -78,7 +78,7 @@ def test_render_event_stream_shows_short_thinking_panel() -> None:
             ),
         )
 
-    asyncio.run(render_event_stream(console, events()))
+    asyncio.run(render_event_stream(console, events(), show_activity_trace=True))
 
     output = console.export_text()
 
@@ -141,6 +141,29 @@ def test_render_event_stream_shows_agent_result_panel() -> None:
 
     assert "Agent Result" in output
     assert "AGENT_PATH=used" in output
+
+
+def test_render_event_stream_shows_activity_trace_for_tool_result() -> None:
+    console = Console(record=True, width=100)
+
+    async def events():
+        yield SDKMessage(
+            type=SDKMessageType.TOOL_RESULT,
+            tool_name="Read",
+            result_content="hello",
+            system_data={
+                "activity_trace": [
+                    {"action": "Reading file", "tool": "Read", "target": "/tmp/a.py"}
+                ]
+            },
+        )
+
+    asyncio.run(render_event_stream(console, events(), show_activity_trace=True))
+
+    output = console.export_text()
+
+    assert "Activity: Reading file · Read · /tmp/a.py" in output
+    assert "╭" not in output
 
 
 def test_render_banner_shows_mode_and_runtime_context() -> None:
