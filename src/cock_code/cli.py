@@ -93,6 +93,12 @@ async def run_named_agent_prompt(config, agent_name: str, prompt: str) -> str:
     return await runtime_run_named_agent_prompt(config, agent_name, prompt)
 
 
+async def compact_current_session(agent):
+    from cock_code.runtime import compact_current_session as runtime_compact_current_session
+
+    return await runtime_compact_current_session(agent)
+
+
 async def list_sessions():
     from cock_code.runtime import list_sessions as runtime_list_sessions
 
@@ -315,6 +321,23 @@ async def run_chat(config) -> int:
             if command.name == "clear":
                 agent.clear()
                 render_notice(console, "Cleared", "Agent history cleared.", "green")
+                continue
+            if command.name == "compact":
+                try:
+                    result = await compact_current_session(agent)
+                except Exception as exc:
+                    render_notice(console, "Compact Error", str(exc), "red")
+                    continue
+
+                title = "Compacted" if result["compacted"] else "Compaction skipped"
+                style = "green" if result["compacted"] else "yellow"
+                details = str(result["summary"] or result["reason"] or "No summary returned.")
+                render_notice(
+                    console,
+                    title,
+                    f"Tokens: {result['before_tokens']} → {result['after_tokens']}\n\n{details}",
+                    style,
+                )
                 continue
             if command.name == "help":
                 render_help(console)

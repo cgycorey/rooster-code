@@ -158,6 +158,67 @@ def test_run_chat_clears_agent_history(monkeypatch) -> None:
     assert captured["closed"] is True
 
 
+def test_run_chat_compacts_agent_history(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/compact", "/exit"])
+    notices: list[tuple[str, str, str]] = []
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_compact_current_session(agent) -> dict[str, object]:
+        captured["agent"] = agent
+        return {
+            "compacted": True,
+            "summary": "summary text",
+            "before_tokens": 1200,
+            "after_tokens": 240,
+            "reason": "",
+        }
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "compact_current_session", fake_compact_current_session, raising=False)
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(cli.Prompt, "ask", lambda *args, **kwargs: next(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert isinstance(captured["agent"], FakeAgent)
+    assert captured["closed"] is True
+    assert notices[0][0] == "Compacted"
+    assert notices[0][2] == "green"
+    assert "1200 → 240" in notices[0][1]
+    assert "summary text" in notices[0][1]
+
+
+def test_run_chat_shows_compact_error_when_compaction_fails(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/compact", "/exit"])
+    notices: list[tuple[str, str, str]] = []
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_compact_current_session(agent) -> dict[str, object]:
+        raise RuntimeError("Compaction failed.")
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "compact_current_session", fake_compact_current_session, raising=False)
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(cli.Prompt, "ask", lambda *args, **kwargs: next(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert captured["closed"] is True
+    assert notices[0] == ("Compact Error", "Compaction failed.", "red")
+
+
 def test_run_chat_updates_model(monkeypatch) -> None:
     captured: dict[str, object] = {}
     prompts = iter(["/model new-model", "/exit"])
@@ -295,6 +356,7 @@ def test_run_chat_help_renders_available_commands(monkeypatch) -> None:
     assert exit_code == 0
     output = console.export_text()
     assert "Help" in output
+    assert "/compact" in output
     assert "/exit" in output
     assert "/status" in output
 
