@@ -5,6 +5,7 @@ import builtins
 import importlib
 import signal
 import sys
+from typing import Callable, Coroutine, cast
 
 import cock_code.cli as cli
 from cock_code.config import RuntimeConfig
@@ -87,12 +88,13 @@ def test_run_ask_streams_events_and_closes_agent(monkeypatch) -> None:
         captured["config"] = config
         return FakeAgent()
 
-    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False) -> None:
+    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False, show_activity_trace: bool = False) -> None:
         messages = []
         async for event in events:
             messages.append(event.type.value)
         captured["messages"] = messages
         captured["omit_duplicate_result"] = omit_duplicate_result
+        captured["show_activity_trace"] = show_activity_trace
 
     monkeypatch.setattr(cli, "create_runtime_agent", fake_create_runtime_agent)
     monkeypatch.setattr(cli, "render_event_stream", fake_render_event_stream)
@@ -104,6 +106,7 @@ def test_run_ask_streams_events_and_closes_agent(monkeypatch) -> None:
     assert captured["prompt"] == "hello"
     assert captured["messages"] == ["assistant", "result"]
     assert captured["omit_duplicate_result"] is True
+    assert captured["show_activity_trace"] is False
     assert captured["closed"] is True
 
 
@@ -251,7 +254,8 @@ def test_install_search_backend_uses_post_json_mapping(monkeypatch) -> None:
 
     cli.install_search_backend(RuntimeConfig(model="m1", search_url="http://127.0.0.1:8080/search"))
 
-    results = cli.asyncio.run(captured["fn"]("open agent sdk", 5))
+    search_fn = cast(Callable[[str, int], Coroutine[object, object, list[dict[str, str]]]], captured["fn"])
+    results = cli.asyncio.run(search_fn("open agent sdk", 5))
 
     assert captured["url"] == "http://127.0.0.1:8080/search"
     assert captured["json"] == {"q": "open agent sdk", "format": "json", "pageno": 1, "safesearch": 1}

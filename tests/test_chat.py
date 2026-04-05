@@ -50,12 +50,13 @@ def test_run_chat_streams_user_prompt(monkeypatch) -> None:
         async def close(self) -> None:
             captured["closed"] = True
 
-    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False) -> None:
+    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False, show_activity_trace: bool = False) -> None:
         messages = []
         async for event in events:
             messages.append(event.type.value)
         captured["messages"] = messages
         captured["omit_duplicate_result"] = omit_duplicate_result
+        captured["show_activity_trace"] = show_activity_trace
 
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
@@ -68,6 +69,7 @@ def test_run_chat_streams_user_prompt(monkeypatch) -> None:
     assert captured["prompt"] == "hello"
     assert captured["messages"] == ["assistant", "result"]
     assert captured["omit_duplicate_result"] is True
+    assert captured["show_activity_trace"] is True
     assert captured["closed"] is True
 
 
@@ -83,8 +85,9 @@ def test_run_chat_requests_duplicate_result_omission(monkeypatch) -> None:
         async def close(self) -> None:
             captured["closed"] = True
 
-    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False) -> None:
+    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False, show_activity_trace: bool = False) -> None:
         captured["omit_duplicate_result"] = omit_duplicate_result
+        captured["show_activity_trace"] = show_activity_trace
         async for _event in events:
             pass
 
@@ -97,6 +100,7 @@ def test_run_chat_requests_duplicate_result_omission(monkeypatch) -> None:
 
     assert exit_code == 0
     assert captured["omit_duplicate_result"] is True
+    assert captured["show_activity_trace"] is True
     assert captured["closed"] is True
 
 
@@ -114,12 +118,19 @@ def test_run_chat_routes_explicit_agent_request(monkeypatch) -> None:
     monkeypatch.setattr(cli.Prompt, "ask", lambda *args, **kwargs: next(prompts))
     monkeypatch.setattr(cli, "find_requested_agent_name", lambda config, prompt: "reviewer")
 
-    async def fake_run_named_agent_prompt(config, agent_name: str, prompt: str) -> str:
+    async def fake_stream_named_agent_events(config, agent_name: str, prompt: str):
         captured["agent_name"] = agent_name
         captured["prompt"] = prompt
-        return "AGENT_PATH=used"
+        yield SDKMessage(type=SDKMessageType.SYSTEM, text="starting")
+        yield SDKMessage(type=SDKMessageType.RESULT, text="AGENT_PATH=used")
 
-    monkeypatch.setattr(cli, "run_named_agent_prompt", fake_run_named_agent_prompt)
+    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False, show_activity_trace: bool = False) -> None:
+        captured["omit_duplicate_result"] = omit_duplicate_result
+        captured["show_activity_trace"] = show_activity_trace
+        captured["messages"] = [event.type.value async for event in events]
+
+    monkeypatch.setattr(cli, "stream_named_agent_events", fake_stream_named_agent_events)
+    monkeypatch.setattr(cli, "render_event_stream", fake_render_event_stream)
     monkeypatch.setattr(cli, "render_agent_panel", lambda console, title, text, style: panels.append((title, text)))
 
     exit_code = cli.asyncio.run(
@@ -129,10 +140,10 @@ def test_run_chat_routes_explicit_agent_request(monkeypatch) -> None:
     assert exit_code == 0
     assert captured["agent_name"] == "reviewer"
     assert captured["prompt"] == "Use the reviewer agent to answer."
-    assert panels == [
-        ("Agent Started", "reviewer"),
-        ("Agent Result", "AGENT_PATH=used"),
-    ]
+    assert panels == [("Agent Started", "reviewer")]
+    assert captured["omit_duplicate_result"] is True
+    assert captured["show_activity_trace"] is True
+    assert captured["messages"] == ["system", "result"]
     assert captured["closed"] is True
 
 

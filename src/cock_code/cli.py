@@ -93,6 +93,13 @@ async def run_named_agent_prompt(config, agent_name: str, prompt: str) -> str:
     return await runtime_run_named_agent_prompt(config, agent_name, prompt)
 
 
+async def stream_named_agent_events(config, agent_name: str, prompt: str):
+    from cock_code.runtime import stream_named_agent_events as runtime_stream_named_agent_events
+
+    async for event in runtime_stream_named_agent_events(config, agent_name, prompt):
+        yield event
+
+
 async def compact_current_session(agent):
     from cock_code.runtime import compact_current_session as runtime_compact_current_session
 
@@ -281,7 +288,7 @@ async def run_ask(prompt: str, config) -> int:
     agent = create_runtime_agent(config)
 
     try:
-        await render_event_stream(console, agent.query(prompt), omit_duplicate_result=True)
+        await render_event_stream(console, agent.query(prompt), omit_duplicate_result=True, show_activity_trace=False)
     except Exception as exc:
         render_notice(console, "Error", str(exc), "red")
         return 1
@@ -383,14 +390,18 @@ async def run_chat(config) -> int:
             if requested_agent:
                 try:
                     render_agent_panel(console, "Agent Started", requested_agent, "blue")
-                    text = await run_named_agent_prompt(config, requested_agent, user_input)
-                    render_agent_panel(console, "Agent Result", text, "blue")
+                    await render_event_stream(
+                        console,
+                        stream_named_agent_events(config, requested_agent, user_input),
+                        omit_duplicate_result=True,
+                        show_activity_trace=True,
+                    )
                 except Exception as exc:
                     render_notice(console, "Error", str(exc), "red")
                 continue
             
             try:
-                await render_event_stream(console, agent.query(user_input), omit_duplicate_result=True)
+                await render_event_stream(console, agent.query(user_input), omit_duplicate_result=True, show_activity_trace=True)
             except Exception as exc:
                 render_notice(console, "Error", str(exc), "red")
                 continue
