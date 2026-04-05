@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 import contextlib
+from pathlib import Path
 from typing import Any, cast
 from open_agent_sdk import (
     AgentOptions,
@@ -24,9 +25,15 @@ from open_agent_sdk import (
     is_plan_mode_active,
     get_session_info as sdk_get_session_info,
     get_session_messages as sdk_get_session_messages,
+    get_user_invocable_skills,
+    init_bundled_skills,
     list_sessions as sdk_list_sessions,
+    format_skills_for_prompt,
     rename_session as sdk_rename_session,
+    register_skill,
+    SkillDefinition,
     tag_session as sdk_tag_session,
+    unregister_skill,
 )
 from open_agent_sdk.types import SDKMessage, SDKMessageType, SDKSystemSubtype
 from open_agent_sdk.providers import CreateMessageParams
@@ -34,6 +41,106 @@ from open_agent_sdk.tools import _mailboxes
 
 from cock_code.config import RuntimeConfig
 from cock_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeReadTool, RuntimeTraceTool, TurnTracker
+
+
+_loaded_local_skill_names: set[str] = set()
+
+
+def _parse_skill_metadata(text: str) -> tuple[dict[str, str], str]:
+    if not text.startswith("---\n"):
+        return {}, text
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return {}, text
+    header = text[4:end]
+    body = text[end + 5 :]
+    metadata: dict[str, str] = {}
+    for raw_line in header.splitlines():
+        line = raw_line.strip()
+        if not line or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        metadata[key.strip()] = value.strip()
+    return metadata, body.strip()
+
+
+def _parse_list_field(value: str) -> list[str]:
+    raw = value.strip()
+    if raw.startswith("[") and raw.endswith("]"):
+        raw = raw[1:-1]
+    return [item.strip().strip('"').strip("'") for item in raw.split(",") if item.strip()]
+
+
+def _build_filesystem_skill_definition(skill_dir: Path) -> SkillDefinition | None:
+    skill_file = skill_dir / "SKILL.md"
+    if not skill_file.exists():
+        return None
+
+    metadata, body = _parse_skill_metadata(skill_file.read_text(encoding="utf-8"))
+    name = metadata.get("name") or skill_dir.name
+    description = metadata.get("description") or body.splitlines()[0].strip() if body.strip() else skill_dir.name
+    when_to_use = metadata.get("when_to_use", "")
+    argument_hint = metadata.get("argument_hint", "")
+    aliases = _parse_list_field(metadata["aliases"]) if "aliases" in metadata else []
+    allowed_tools = _parse_list_field(metadata["allowed_tools"]) if "allowed_tools" in metadata else []
+    model = metadata.get("model", "")
+    context = metadata.get("context", "inline")
+    agent = metadata.get("agent", "")
+    user_invocable = metadata.get("user_invocable", "true").lower() != "false"
+
+    async def get_prompt(args: str, ctx: ToolContext, *, content: str = body) -> list[dict[str, str]]:
+        prompt_text = content.strip()
+        if args.strip():
+            prompt_text = f"{prompt_text}\n\nUser request: {args.strip()}"
+        return [{"type": "text", "text": prompt_text}]
+
+    return SkillDefinition(
+        name=name,
+        description=description,
+        aliases=aliases,
+        when_to_use=when_to_use,
+        argument_hint=argument_hint,
+        allowed_tools=allowed_tools,
+        model=model,
+        user_invocable=user_invocable,
+        context="fork" if context == "fork" else "inline",
+        agent=agent,
+        get_prompt=get_prompt,
+    )
+
+
+def _resolve_skills_dir(config: RuntimeConfig) -> Path | None:
+    if config.skills_dir:
+        return Path(config.skills_dir)
+    base = Path(config.cwd or ".")
+    candidate = base / "skills"
+    return candidate if candidate.exists() else None
+
+
+def _ensure_skills_loaded(config: RuntimeConfig) -> None:
+    global _loaded_local_skill_names
+    init_bundled_skills()
+
+    for name in list(_loaded_local_skill_names):
+        unregister_skill(name)
+    _loaded_local_skill_names.clear()
+
+    skills_dir = _resolve_skills_dir(config)
+    if not skills_dir or not skills_dir.exists():
+        return
+
+    for child in skills_dir.iterdir():
+        if not child.is_dir():
+            continue
+        definition = _build_filesystem_skill_definition(child)
+        if definition is None:
+            continue
+        register_skill(definition)
+        _loaded_local_skill_names.add(definition.name)
+
+
+def list_skill_names() -> list[str]:
+    return sorted(skill.name for skill in get_user_invocable_skills())
 
 
 def _effective_agents(config: RuntimeConfig) -> dict[str, Any]:
@@ -95,6 +202,10 @@ def _agent_context_prompt(config: RuntimeConfig) -> str:
         else:
             description = ""
         lines.append(f"- {name}: {description}".rstrip())
+
+    skills_prompt = format_skills_for_prompt(config.max_tokens)
+    if skills_prompt:
+        lines.extend(["", "# Available Skills", skills_prompt])
     return "\n".join(lines)
 
 
@@ -189,6 +300,7 @@ def build_agent_options(
     include_runtime_agent_tool: bool = True,
     system_prompt: str = "",
 ) -> AgentOptions:
+    _ensure_skills_loaded(config)
     agent_prompt = _agent_context_prompt(config)
     return AgentOptions(
         api_key=config.api_key or "",

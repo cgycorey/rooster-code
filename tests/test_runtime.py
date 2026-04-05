@@ -1,14 +1,27 @@
 import asyncio
 from pathlib import Path
+from typing import Coroutine, cast
 
 import cock_code.runtime as runtime
 import pytest
 from open_agent_sdk import SDKMessage, SDKMessageType, ToolContext, ToolResult
 from open_agent_sdk.providers import CreateMessageResponse
+from open_agent_sdk.skills import clear_skills, get_skill
 from cock_code.config import RuntimeConfig
 
 from cock_code.runtime import build_agent_options, create_runtime_agent
 from cock_code.runtime import enforce_session_retention, find_requested_agent_name
+
+
+@pytest.fixture(autouse=True)
+def reset_sdk_skills():
+    clear_skills()
+    import open_agent_sdk.skills.bundled as bundled_mod
+
+    bundled_mod._initialized = False
+    yield
+    clear_skills()
+    bundled_mod._initialized = False
 
 
 def test_build_agent_options_uses_explicit_api_fields() -> None:
@@ -54,6 +67,7 @@ def test_build_agent_options_carries_runtime_configuration() -> None:
         hooks={"PreToolUse": []},
         json_schema={"type": "object"},
         mcp_servers={"fs": {"type": "stdio", "command": "echo", "args": ["hi"]}},
+        skills_dir="/tmp/skills",
         extra_args={"temperature": 0},
     )
 
@@ -84,6 +98,96 @@ def test_build_agent_options_carries_runtime_configuration() -> None:
     assert options.json_schema == {"type": "object"}
     assert options.mcp_servers == {"fs": {"type": "stdio", "command": "echo", "args": ["hi"]}}
     assert options.extra_args == {"temperature": 0}
+
+
+def test_build_agent_options_includes_bundled_and_local_skills(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "explain"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: explain
+description: Explain a concept simply.
+when_to_use: When the user wants a simple explanation.
+---
+
+Explain the user request clearly and simply.
+""",
+        encoding="utf-8",
+    )
+
+    options = build_agent_options(
+        RuntimeConfig(
+            api_key="a",
+            base_url="https://example.test",
+            model="m",
+            skills_dir=str(tmp_path / "skills"),
+        )
+    )
+
+    assert "- commit:" in options.append_system_prompt
+    assert "- explain:" in options.append_system_prompt
+
+
+def test_list_skill_names_includes_bundled_and_local_skills(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "explain"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: explain
+description: Explain a concept simply.
+---
+
+Explain the user request clearly and simply.
+""",
+        encoding="utf-8",
+    )
+
+    build_agent_options(
+        RuntimeConfig(
+            api_key="a",
+            base_url="https://example.test",
+            model="m",
+            skills_dir=str(tmp_path / "skills"),
+        )
+    )
+
+    names = runtime.list_skill_names()
+
+    assert "commit" in names
+    assert "explain" in names
+
+
+def test_repo_plan_skill_loads_and_has_detailed_generic_prompt() -> None:
+    repo_skills_dir = Path(__file__).resolve().parents[1] / "skills"
+
+    build_agent_options(
+        RuntimeConfig(
+            api_key="a",
+            base_url="https://example.test",
+            model="m",
+            skills_dir=str(repo_skills_dir),
+        )
+    )
+
+    assert "plan" in runtime.list_skill_names()
+
+    skill = get_skill("plan")
+    assert skill is not None
+    assert skill.description
+    assert skill.get_prompt is not None
+    prompt_fn = cast(Coroutine[object, object, list[dict[str, object]]], skill.get_prompt("add auth support", ToolContext()))
+    blocks = asyncio.run(prompt_fn)
+    text = "\n".join(str(block["text"]) for block in blocks if block.get("type") == "text")
+
+    assert "Goal" in text
+    assert "Files to inspect" in text
+    assert "Files likely to change" in text
+    assert "Implementation plan" in text
+    assert "Tests to add or run" in text
+    assert "Verification commands" in text
+    assert "Do not implement yet" in text
+    assert "Do not save the plan unless the user explicitly asks" in text
+    assert "User request: add auth support" in text
 
 
 def test_create_runtime_agent_does_not_inject_custom_transport(monkeypatch) -> None:

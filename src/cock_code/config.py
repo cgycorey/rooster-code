@@ -37,6 +37,7 @@ class RuntimeConfig:
     hooks: dict[str, Any] = field(default_factory=dict)
     json_schema: dict[str, Any] | None = None
     mcp_servers: dict[str, Any] = field(default_factory=dict)
+    skills_dir: str | None = None
     extra_args: dict[str, Any] = field(default_factory=dict)
 
 
@@ -117,5 +118,6 @@ def config_from_namespace(args: argparse.Namespace, env: Mapping[str, str]) -> R
         hooks=load_json_file(getattr(args, "hooks_file", None)) or {},
         json_schema=load_json_file(getattr(args, "json_schema_file", None)),
         mcp_servers=load_json_file(getattr(args, "mcp_file", None)) or {},
+        skills_dir=getattr(args, "skills_dir", None),
         extra_args=load_json_file(getattr(args, "extra_args_file", None)) or {},
     )

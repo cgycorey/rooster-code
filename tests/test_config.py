@@ -30,12 +30,14 @@ def test_config_from_namespace_loads_runtime_files_and_kv_pairs(tmp_path) -> Non
     schema_file = tmp_path / "schema.json"
     mcp_file = tmp_path / "mcp.json"
     extra_args_file = tmp_path / "extra.json"
+    skills_dir = tmp_path / "skills"
 
     agents_file.write_text(json.dumps({"reviewer": {"description": "code reviewer"}}), encoding="utf-8")
     hooks_file.write_text(json.dumps({"PreToolUse": []}), encoding="utf-8")
     schema_file.write_text(json.dumps({"type": "object"}), encoding="utf-8")
     mcp_file.write_text(json.dumps({"fs": {"type": "stdio", "command": "echo", "args": ["hi"]}}), encoding="utf-8")
     extra_args_file.write_text(json.dumps({"temperature": 0}), encoding="utf-8")
+    skills_dir.mkdir()
 
     args = argparse.Namespace(
         model="cli-model",
@@ -62,6 +64,7 @@ def test_config_from_namespace_loads_runtime_files_and_kv_pairs(tmp_path) -> Non
         json_schema_file=str(schema_file),
         mcp_file=str(mcp_file),
         extra_args_file=str(extra_args_file),
+        skills_dir=str(skills_dir),
     )
 
     config = config_from_namespace(args, {"COCK_CODE_API_KEY": "env-key", "COCK_CODE_BASE_URL": "https://env.test"})
@@ -92,6 +95,7 @@ def test_config_from_namespace_loads_runtime_files_and_kv_pairs(tmp_path) -> Non
     assert config.json_schema == {"type": "object"}
     assert config.mcp_servers == {"fs": {"type": "stdio", "command": "echo", "args": ["hi"]}}
     assert config.extra_args == {"temperature": 0}
+    assert config.skills_dir == str(skills_dir)
 
 
 def test_config_from_namespace_loads_cock_code_values_from_local_dotenv(tmp_path, monkeypatch) -> None:
@@ -128,6 +132,7 @@ def test_config_from_namespace_loads_cock_code_values_from_local_dotenv(tmp_path
         json_schema_file=None,
         mcp_file=None,
         extra_args_file=None,
+        skills_dir=None,
     )
 
     config = config_from_namespace(args, {})
@@ -213,6 +218,7 @@ def test_config_from_namespace_prefers_cli_search_url_over_dotenv(tmp_path, monk
         json_schema_file=None,
         mcp_file=None,
         extra_args_file=None,
+        skills_dir=None,
         search_url="http://127.0.0.1:8080/search",
     )
 
