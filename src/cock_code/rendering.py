@@ -109,6 +109,7 @@ def render_help(console: Console) -> None:
     table.add_column("What it does")
     table.add_row("/help", "Show available chat commands")
     table.add_row("/clear", "Clear current agent history")
+    table.add_row("/compact", "Summarize the current chat history")
     table.add_row("/model <name>", "Switch models")
     table.add_row("/permission <mode>", "Update permission mode")
     table.add_row("/tools", "Show available tools")
