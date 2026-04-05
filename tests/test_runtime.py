@@ -1,5 +1,8 @@
-from cock_code.config import RuntimeConfig
 import asyncio
+
+import cock_code.runtime as runtime
+import pytest
+from cock_code.config import RuntimeConfig
 
 from cock_code.runtime import build_agent_options, create_runtime_agent
 from cock_code.runtime import enforce_session_retention, find_requested_agent_name
@@ -215,3 +218,194 @@ def test_enforce_session_retention_deletes_sessions_beyond_limit(monkeypatch) ->
     asyncio.run(enforce_session_retention(limit=20))
 
     assert deleted == [f"sess-{index}" for index in range(20, 25)]
+
+
+def test_compact_current_session_rewrites_agent_history(monkeypatch) -> None:
+    original_history = [
+        {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+    ]
+    compacted_history = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "[Previous conversation summary]\n\nsummary"}],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "I understand the context. Let me continue from where we left off."}],
+        },
+    ]
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = list(original_history)
+            self.initialized = False
+
+        async def _initialize(self) -> None:
+            self.initialized = True
+
+        def _ensure_client(self):
+            return object()
+
+        def _resolve_model(self) -> str:
+            return "claude-sonnet-4-5"
+
+    agent = FakeAgent()
+
+    async def fake_compact_conversation(client, model, messages, state):
+        assert client is not None
+        assert model == "claude-sonnet-4-5"
+        assert messages == original_history
+        return {
+            "compacted_messages": compacted_history,
+            "summary": "summary",
+            "state": {"compacted": True},
+        }
+
+    monkeypatch.setattr(runtime, "compact_conversation", fake_compact_conversation, raising=False)
+    monkeypatch.setattr(runtime, "create_auto_compact_state", lambda: {"compacted": False}, raising=False)
+    monkeypatch.setattr(
+        runtime,
+        "estimate_messages_tokens",
+        lambda messages: 1200 if messages == original_history else 240,
+        raising=False,
+    )
+
+    result = asyncio.run(runtime.compact_current_session(agent))
+
+    assert agent.initialized is True
+    assert agent._history == compacted_history
+    assert result == {
+        "compacted": True,
+        "summary": "summary",
+        "before_tokens": 1200,
+        "after_tokens": 240,
+        "reason": "",
+    }
+
+
+def test_compact_current_session_skips_small_history(monkeypatch) -> None:
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = [{"role": "user", "content": [{"type": "text", "text": "hello"}]}]
+
+        async def _initialize(self) -> None:
+            return None
+
+    agent = FakeAgent()
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+
+    result = asyncio.run(runtime.compact_current_session(agent))
+
+    assert result == {
+        "compacted": False,
+        "summary": "",
+        "before_tokens": 42,
+        "after_tokens": 42,
+        "reason": "Need at least two messages before compaction.",
+    }
+
+
+def test_compact_current_session_omits_private_history_blocks(monkeypatch) -> None:
+    original_history = [
+        {"role": "system", "content": [{"type": "text", "text": "hidden system prompt"}]},
+        {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+        {"role": "assistant", "content": [{"type": "tool_result", "content": "SECRET=value"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+    ]
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = list(original_history)
+
+        async def _initialize(self) -> None:
+            return None
+
+        def _ensure_client(self):
+            return object()
+
+        def _resolve_model(self) -> str:
+            return "claude-sonnet-4-5"
+
+    agent = FakeAgent()
+
+    async def fake_compact_conversation(client, model, messages, state):
+        assert messages == [
+            {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+        ]
+        return {
+            "compacted_messages": messages,
+            "summary": "visible summary only",
+            "state": type("State", (), {"consecutive_failures": 0})(),
+        }
+
+    monkeypatch.setattr(runtime, "compact_conversation", fake_compact_conversation, raising=False)
+    monkeypatch.setattr(runtime, "create_auto_compact_state", lambda: type("State", (), {"consecutive_failures": 0})(), raising=False)
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: len(messages), raising=False)
+
+    result = asyncio.run(runtime.compact_current_session(agent))
+
+    assert result["summary"] == "visible summary only"
+
+
+def test_compact_current_session_raises_on_sdk_compaction_failure(monkeypatch) -> None:
+    original_history = [
+        {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+    ]
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = list(original_history)
+
+        async def _initialize(self) -> None:
+            return None
+
+        def _ensure_client(self):
+            return object()
+
+        def _resolve_model(self) -> str:
+            return "claude-sonnet-4-5"
+
+    agent = FakeAgent()
+
+    async def fake_compact_conversation(client, model, messages, state):
+        return {
+            "compacted_messages": messages,
+            "summary": "",
+            "state": type("State", (), {"consecutive_failures": 1})(),
+        }
+
+    monkeypatch.setattr(runtime, "compact_conversation", fake_compact_conversation, raising=False)
+    monkeypatch.setattr(runtime, "create_auto_compact_state", lambda: type("State", (), {"consecutive_failures": 0})(), raising=False)
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+
+    with pytest.raises(RuntimeError, match="Compaction failed"):
+        asyncio.run(runtime.compact_current_session(agent))
+
+
+def test_compact_current_session_rejects_non_anthropic_backends(monkeypatch) -> None:
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = [
+                {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+            ]
+
+        async def _initialize(self) -> None:
+            return None
+
+        def get_api_type(self) -> str:
+            return "openai-completions"
+
+        def _ensure_client(self):
+            raise AssertionError("should not create client")
+
+        def _resolve_model(self) -> str:
+            return "gpt-4o-mini"
+
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+
+    with pytest.raises(RuntimeError, match="requires an anthropic-messages backend"):
+        asyncio.run(runtime.compact_current_session(FakeAgent()))

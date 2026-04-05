@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 from open_agent_sdk import (
     AgentOptions,
     ToolContext,
     ToolResult,
     PermissionMode,
     ThinkingConfig,
+    compact_conversation,
+    create_auto_compact_state,
     create_agent,
     delete_session as sdk_delete_session,
+    estimate_messages_tokens,
     fork_session as sdk_fork_session,
     get_all_base_tools,
     get_all_cron_jobs,
@@ -245,6 +248,97 @@ def _create_sdk_agent(
 
 def create_runtime_agent(config: RuntimeConfig):
     return _create_sdk_agent(config)
+
+
+def _filter_history_for_manual_compaction(history: list[dict[str, object]]) -> list[dict[str, object]]:
+    filtered: list[dict[str, object]] = []
+    for message in history:
+        role = message.get("role")
+        if role not in {"user", "assistant"}:
+            continue
+
+        content = message.get("content", [])
+        if isinstance(content, str):
+            text = content.strip()
+            if text:
+                filtered.append({"role": role, "content": [{"type": "text", "text": text}]})
+            continue
+
+        if not isinstance(content, list):
+            continue
+
+        text_blocks: list[dict[str, str]] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            mapping = cast(dict[str, Any], block)
+            if mapping.get("type") != "text":
+                continue
+            text = str(mapping.get("text", "")).strip()
+            if text:
+                text_blocks.append({"type": "text", "text": text})
+
+        if text_blocks:
+            filtered.append({"role": role, "content": text_blocks})
+
+    return filtered
+
+
+def _did_compaction_fail(initial_state: object, result_state: object) -> bool:
+    initial_failures = int(getattr(initial_state, "consecutive_failures", 0) or 0)
+    result_failures = int(getattr(result_state, "consecutive_failures", 0) or 0)
+    return result_failures > initial_failures
+
+
+async def compact_current_session(agent) -> dict[str, object]:
+    if hasattr(agent, "_initialize"):
+        await agent._initialize()
+
+    history = list(getattr(agent, "_history", []))
+    compactable_history = _filter_history_for_manual_compaction(history)
+    before_tokens = estimate_messages_tokens(compactable_history)
+
+    if len(compactable_history) < 2:
+        return {
+            "compacted": False,
+            "summary": "",
+            "before_tokens": before_tokens,
+            "after_tokens": before_tokens,
+            "reason": "Need at least two messages before compaction.",
+        }
+
+    ensure_client = getattr(agent, "_ensure_client", None)
+    resolve_model = getattr(agent, "_resolve_model", None)
+    get_api_type = getattr(agent, "get_api_type", None)
+    if not callable(ensure_client) or not callable(resolve_model):
+        raise RuntimeError("Agent does not expose the SDK compaction prerequisites.")
+    if callable(get_api_type) and get_api_type() != "anthropic-messages":
+        raise RuntimeError("Manual compaction currently requires an anthropic-messages backend.")
+
+    initial_state = create_auto_compact_state()
+
+    result = await compact_conversation(
+        ensure_client(),
+        resolve_model(),
+        compactable_history,
+        initial_state,
+    )
+    result_state = result.get("state")
+    if _did_compaction_fail(initial_state, result_state):
+        raise RuntimeError("Compaction failed.")
+
+    compacted_history = list(result.get("compacted_messages", compactable_history))
+    agent._history = compacted_history
+    after_tokens = estimate_messages_tokens(compacted_history)
+
+    compacted = compacted_history != compactable_history
+    return {
+        "compacted": compacted,
+        "summary": str(result.get("summary", "")),
+        "before_tokens": before_tokens,
+        "after_tokens": after_tokens,
+        "reason": "" if compacted else "Compaction produced no smaller history.",
+    }
 
 
 async def list_sessions():
