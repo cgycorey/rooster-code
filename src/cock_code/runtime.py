@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
+import contextlib
 from typing import Any, cast
 from open_agent_sdk import (
     AgentOptions,
@@ -26,11 +28,12 @@ from open_agent_sdk import (
     rename_session as sdk_rename_session,
     tag_session as sdk_tag_session,
 )
+from open_agent_sdk.types import SDKMessage, SDKMessageType, SDKSystemSubtype
 from open_agent_sdk.providers import CreateMessageParams
 from open_agent_sdk.tools import _mailboxes
 
 from cock_code.config import RuntimeConfig
-from cock_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeReadTool, TurnTracker
+from cock_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeReadTool, RuntimeTraceTool, TurnTracker
 
 
 def _effective_agents(config: RuntimeConfig) -> dict[str, Any]:
@@ -121,6 +124,32 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
     return ToolResult(tool_use_id="", content=text or f"Agent {agent_name} completed with no text output.")
 
 
+async def _stream_subagent(config: RuntimeConfig, input: dict[str, Any], context: ToolContext):
+    prompt = str(input.get("prompt", "")).strip()
+    if not prompt:
+        yield SDKMessage(type=SDKMessageType.RESULT, text="Error: prompt is required", is_error=True)
+        return
+
+    if input.get("run_in_background"):
+        yield SDKMessage(type=SDKMessageType.RESULT, text="Error: background agents are not supported in cock-code yet", is_error=True)
+        return
+
+    agent_name, definition = _resolve_agent_definition(config, input)
+    if definition is None:
+        message = f"Error: unknown agent '{agent_name or 'unspecified'}'" if _effective_agents(config) else "Error: no agents configured"
+        yield SDKMessage(type=SDKMessageType.RESULT, text=message, is_error=True)
+        return
+
+    child_config = _build_subagent_config(config, definition, input, context)
+    system_prompt = str(definition.get("prompt") or definition.get("system_prompt") or definition.get("description") or "")
+    child_agent = _create_sdk_agent(child_config, include_runtime_agent_tool=False, system_prompt=system_prompt)
+    try:
+        async for event in child_agent.query(prompt):
+            yield event
+    finally:
+        await child_agent.close()
+
+
 def find_requested_agent_name(config: RuntimeConfig, prompt: str) -> str | None:
     lower_prompt = prompt.lower()
     for name in _effective_agents(config):
@@ -139,6 +168,15 @@ async def run_named_agent_prompt(config: RuntimeConfig, agent_name: str, prompt:
         ToolContext(cwd=config.cwd or ".", env=config.env),
     )
     return str(result.content)
+
+
+async def stream_named_agent_events(config: RuntimeConfig, agent_name: str, prompt: str):
+    async for event in _stream_subagent(
+        config,
+        {"name": agent_name, "prompt": prompt, "description": agent_name},
+        ToolContext(cwd=config.cwd or ".", env=config.env),
+    ):
+        yield event
 
 
 def _runtime_tools(config: RuntimeConfig, include_runtime_agent_tool: bool) -> list[Any]:
@@ -207,8 +245,61 @@ def _create_sdk_agent(
 
         async def wrapped_query(prompt: str, overrides: dict[str, Any] | None = None):
             tracker.reset()
-            async for event in original_query(prompt, overrides):
-                yield event
+            event_queue: asyncio.Queue[SDKMessage | None] = asyncio.Queue()
+
+            async def pump_query() -> None:
+                try:
+                    async for event in original_query(prompt, overrides):
+                        await event_queue.put(event)
+                finally:
+                    await event_queue.put(None)
+
+            query_task = asyncio.create_task(pump_query())
+            activity_task = asyncio.create_task(tracker.next_activity())
+            event_task = asyncio.create_task(event_queue.get())
+            try:
+                while True:
+                    done, _pending = await asyncio.wait(
+                        {activity_task, event_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+
+                    if activity_task in done:
+                        activity = activity_task.result()
+                        yield SDKMessage(
+                            type=SDKMessageType.SYSTEM,
+                            subtype=SDKSystemSubtype.STATUS,
+                            system_data={"activity_trace": [activity]},
+                        )
+                        activity_task = asyncio.create_task(tracker.next_activity())
+
+                    if event_task in done:
+                        event = event_task.result()
+                        if event is None:
+                            if query_task.done() and (exc := query_task.exception()) is not None:
+                                raise exc
+                            break
+                        pending_activities = tracker.consume_pending_activities()
+                        for activity in pending_activities:
+                            yield SDKMessage(
+                                type=SDKMessageType.SYSTEM,
+                                subtype=SDKSystemSubtype.STATUS,
+                                system_data={"activity_trace": [activity]},
+                            )
+                        sdk_event = event
+                        if getattr(sdk_event, "type", None) and getattr(sdk_event.type, "value", "") == "tool_result":
+                            activity_trace = tracker.consume_activity_trace()
+                            if activity_trace:
+                                sdk_event.system_data["activity_trace"] = activity_trace
+                        yield sdk_event
+                        event_task = asyncio.create_task(event_queue.get())
+            finally:
+                for task in (activity_task, event_task, query_task):
+                    if task is query_task and task.done() and not task.cancelled():
+                        continue
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await task
 
         setattr(agent, "query", wrapped_query)
 
@@ -221,16 +312,16 @@ def _create_sdk_agent(
             new_pool = []
             for tool in getattr(agent, "_tool_pool", []):
                 if getattr(tool, "name", "") == "Agent" and not replaced:
-                    new_pool.append(RuntimeAgentTool(lambda input, context: _run_subagent(config, input, context)))
+                    new_pool.append(RuntimeAgentTool(lambda input, context: _run_subagent(config, input, context), tracker))
                     replaced = True
                 elif getattr(tool, "name", "") == "Read":
                     new_pool.append(RuntimeReadTool(tool, tracker))
                 elif getattr(tool, "name", "") == "Edit":
                     new_pool.append(RuntimeEditTool(tool, tracker))
                 elif getattr(tool, "name", "") != "Agent":
-                    new_pool.append(tool)
+                    new_pool.append(RuntimeTraceTool(tool, tracker))
             if not replaced:
-                new_pool.append(RuntimeAgentTool(lambda input, context: _run_subagent(config, input, context)))
+                new_pool.append(RuntimeAgentTool(lambda input, context: _run_subagent(config, input, context), tracker))
             agent._tool_pool = new_pool
 
         setattr(agent, "_initialize", wrapped_initialize)
@@ -239,7 +330,15 @@ def _create_sdk_agent(
 
         async def wrapped_initialize_without_agent() -> None:
             await original_initialize()
-            agent._tool_pool = [tool for tool in getattr(agent, "_tool_pool", []) if getattr(tool, "name", "") != "Agent"]
+            new_pool = []
+            for tool in getattr(agent, "_tool_pool", []):
+                if getattr(tool, "name", "") == "Read":
+                    new_pool.append(RuntimeReadTool(tool, tracker))
+                elif getattr(tool, "name", "") == "Edit":
+                    new_pool.append(RuntimeEditTool(tool, tracker))
+                elif getattr(tool, "name", "") != "Agent":
+                    new_pool.append(RuntimeTraceTool(tool, tracker))
+            agent._tool_pool = new_pool
 
         setattr(agent, "_initialize", wrapped_initialize_without_agent)
     return agent

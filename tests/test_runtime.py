@@ -1,7 +1,9 @@
 import asyncio
+from pathlib import Path
 
 import cock_code.runtime as runtime
 import pytest
+from open_agent_sdk import SDKMessage, SDKMessageType, ToolContext, ToolResult
 from open_agent_sdk.providers import CreateMessageResponse
 from cock_code.config import RuntimeConfig
 
@@ -186,6 +188,238 @@ def test_create_runtime_agent_adds_default_task_agent_without_agents(monkeypatch
     asyncio.run(agent._initialize())
 
     assert [tool.name for tool in agent._tool_pool] == ["Read", "Agent"]
+
+
+def test_create_runtime_agent_attaches_activity_trace_to_tool_result(monkeypatch, tmp_path: Path) -> None:
+    class ReadTool:
+        name = "Read"
+
+        async def call(self, input, context):
+            return ToolResult(tool_use_id="", content="file body")
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = []
+
+        async def _initialize(self) -> None:
+            self._tool_pool = [ReadTool()]
+
+        async def query(self, prompt, overrides=None):
+            await self._tool_pool[0].call({"file_path": "sample.txt"}, ToolContext(cwd=str(tmp_path), env={}))
+            yield SDKMessage(type=SDKMessageType.TOOL_RESULT, tool_name="Read", result_content="file body")
+
+    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+
+    agent = create_runtime_agent(RuntimeConfig(api_key="test", base_url="https://nano-gpt.com/api/v1", model="m1"))
+    (tmp_path / "sample.txt").write_text("hello\n", encoding="utf-8")
+    asyncio.run(agent._initialize())
+
+    async def collect_events():
+        return [event async for event in agent.query("read sample")]
+
+    events = asyncio.run(collect_events())
+
+    assert events[0].system_data["activity_trace"] == [
+        {"action": "Reading file", "tool": "Read", "target": str(tmp_path / "sample.txt")}
+    ]
+
+
+def test_create_runtime_agent_emits_activity_system_event_before_tool_result(monkeypatch, tmp_path: Path) -> None:
+    class ReadTool:
+        name = "Read"
+
+        async def call(self, input, context):
+            await asyncio.sleep(0)
+            return ToolResult(tool_use_id="", content="file body")
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = []
+
+        async def _initialize(self) -> None:
+            self._tool_pool = [ReadTool()]
+
+        async def query(self, prompt, overrides=None):
+            await self._tool_pool[0].call({"file_path": "sample.txt"}, ToolContext(cwd=str(tmp_path), env={}))
+            yield SDKMessage(type=SDKMessageType.TOOL_RESULT, tool_name="Read", result_content="file body")
+
+    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+
+    agent = create_runtime_agent(RuntimeConfig(api_key="test", base_url="https://nano-gpt.com/api/v1", model="m1"))
+    (tmp_path / "sample.txt").write_text("hello\n", encoding="utf-8")
+    asyncio.run(agent._initialize())
+
+    async def collect_events():
+        return [event async for event in agent.query("read sample")]
+
+    events = asyncio.run(collect_events())
+
+    assert [event.type for event in events] == [SDKMessageType.SYSTEM, SDKMessageType.TOOL_RESULT]
+    assert events[0].system_data["activity_trace"] == [
+        {"action": "Reading file", "tool": "Read", "target": str(tmp_path / "sample.txt")}
+    ]
+
+
+def test_create_runtime_agent_emits_edit_activity_system_event_before_tool_result(monkeypatch, tmp_path: Path) -> None:
+    class ReadTool:
+        name = "Read"
+
+        async def call(self, input, context):
+            return ToolResult(tool_use_id="", content="file body")
+
+    class EditTool:
+        name = "Edit"
+
+        async def call(self, input, context):
+            target = tmp_path / "sample.txt"
+            target.write_text("new\n", encoding="utf-8")
+            return ToolResult(tool_use_id="", content=f"Successfully edited {target}")
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = []
+
+        async def _initialize(self) -> None:
+            self._tool_pool = [ReadTool(), EditTool()]
+
+        async def query(self, prompt, overrides=None):
+            await self._tool_pool[0].call({"file_path": "sample.txt"}, ToolContext(cwd=str(tmp_path), env={}))
+            await self._tool_pool[1].call(
+                {"file_path": "sample.txt", "old_string": "old", "new_string": "new"},
+                ToolContext(cwd=str(tmp_path), env={}),
+            )
+            yield SDKMessage(type=SDKMessageType.TOOL_RESULT, tool_name="Edit", result_content="done")
+
+    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+
+    agent = create_runtime_agent(RuntimeConfig(api_key="test", base_url="https://nano-gpt.com/api/v1", model="m1"))
+    (tmp_path / "sample.txt").write_text("old\n", encoding="utf-8")
+    asyncio.run(agent._initialize())
+
+    async def collect_events():
+        return [event async for event in agent.query("edit sample")]
+
+    events = asyncio.run(collect_events())
+
+    assert [event.type for event in events] == [SDKMessageType.SYSTEM, SDKMessageType.SYSTEM, SDKMessageType.TOOL_RESULT]
+    assert events[0].system_data["activity_trace"] == [
+        {"action": "Reading file", "tool": "Read", "target": str(tmp_path / "sample.txt")}
+    ]
+    assert events[1].system_data["activity_trace"] == [
+        {"action": "Editing file", "tool": "Edit", "target": str(tmp_path / "sample.txt")}
+    ]
+
+
+def test_create_runtime_agent_emits_generic_tool_activity_before_tool_result(monkeypatch) -> None:
+    class BashTool:
+        name = "Bash"
+
+        async def call(self, input, context):
+            return ToolResult(tool_use_id="", content="done")
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = []
+
+        async def _initialize(self) -> None:
+            self._tool_pool = [BashTool()]
+
+        async def query(self, prompt, overrides=None):
+            await self._tool_pool[0].call({"command": "pytest -q"}, ToolContext(cwd="/tmp/project", env={}))
+            yield SDKMessage(type=SDKMessageType.TOOL_RESULT, tool_name="Bash", result_content="done")
+
+    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+
+    agent = create_runtime_agent(RuntimeConfig(api_key="test", base_url="https://nano-gpt.com/api/v1", model="m1"))
+    asyncio.run(agent._initialize())
+
+    async def collect_events():
+        return [event async for event in agent.query("run tests")]
+
+    events = asyncio.run(collect_events())
+
+    assert [event.type for event in events] == [SDKMessageType.SYSTEM, SDKMessageType.TOOL_RESULT]
+    assert events[0].system_data["activity_trace"] == [
+        {"action": "Running tool", "tool": "Bash", "target": "pytest -q"}
+    ]
+
+
+def test_create_runtime_agent_preserves_query_exceptions(monkeypatch) -> None:
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = []
+
+        async def _initialize(self) -> None:
+            return None
+
+        async def query(self, prompt, overrides=None):
+            raise RuntimeError("boom")
+            yield
+
+    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+
+    agent = create_runtime_agent(RuntimeConfig(api_key="test", base_url="https://nano-gpt.com/api/v1", model="m1"))
+
+    async def collect_events():
+        return [event async for event in agent.query("hello")]
+
+    with pytest.raises(RuntimeError, match="boom"):
+        asyncio.run(collect_events())
+
+
+def test_stream_named_agent_events_emits_child_tool_activity(monkeypatch, tmp_path: Path) -> None:
+    class ReadTool:
+        name = "Read"
+
+        async def call(self, input, context):
+            return ToolResult(tool_use_id="", content="file body")
+
+    class FakeChildAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = []
+
+        async def _initialize(self) -> None:
+            self._tool_pool = [ReadTool()]
+
+        async def query(self, prompt, overrides=None):
+            if not self._tool_pool:
+                await self._initialize()
+            await self._tool_pool[0].call({"file_path": "child.txt"}, ToolContext(cwd=str(tmp_path), env={}))
+            yield SDKMessage(type=SDKMessageType.TOOL_RESULT, tool_name="Read", result_content="file body")
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeChildAgent())
+
+    async def collect_events():
+        return [
+            event
+            async for event in runtime.stream_named_agent_events(
+                RuntimeConfig(
+                    api_key="test",
+                    base_url="https://nano-gpt.com/api/v1",
+                    model="m1",
+                    agents={"reviewer": {"description": "reviewer"}},
+                    cwd=str(tmp_path),
+                ),
+                "reviewer",
+                "read the child file",
+            )
+        ]
+
+    events = asyncio.run(collect_events())
+
+    assert [event.type for event in events] == [SDKMessageType.SYSTEM, SDKMessageType.TOOL_RESULT]
+    assert events[0].system_data["activity_trace"] == [
+        {"action": "Reading file", "tool": "Read", "target": str(tmp_path / "child.txt")}
+    ]
 
 
 def test_build_agent_options_includes_default_task_agent_context() -> None:
