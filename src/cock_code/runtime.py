@@ -8,8 +8,6 @@ from open_agent_sdk import (
     ToolResult,
     PermissionMode,
     ThinkingConfig,
-    compact_conversation,
-    create_auto_compact_state,
     create_agent,
     delete_session as sdk_delete_session,
     estimate_messages_tokens,
@@ -28,6 +26,7 @@ from open_agent_sdk import (
     rename_session as sdk_rename_session,
     tag_session as sdk_tag_session,
 )
+from open_agent_sdk.providers import CreateMessageParams
 from open_agent_sdk.tools import _mailboxes
 
 from cock_code.config import RuntimeConfig
@@ -284,10 +283,74 @@ def _filter_history_for_manual_compaction(history: list[dict[str, object]]) -> l
     return filtered
 
 
-def _did_compaction_fail(initial_state: object, result_state: object) -> bool:
-    initial_failures = int(getattr(initial_state, "consecutive_failures", 0) or 0)
-    result_failures = int(getattr(result_state, "consecutive_failures", 0) or 0)
-    return result_failures > initial_failures
+def _build_manual_compaction_summary_prompt(messages: list[dict[str, object]]) -> str:
+    conversation_text = ""
+    for msg in messages:
+        role = str(msg.get("role", "user"))
+        content = msg.get("content", [])
+        text_parts: list[str] = []
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                mapping = cast(dict[str, Any], block)
+                if mapping.get("type") == "text":
+                    text_parts.append(str(mapping.get("text", "")))
+        elif isinstance(content, str):
+            text_parts.append(content)
+
+        text = "\n".join(part for part in text_parts if part).strip()
+        if text:
+            conversation_text += f"\n{role}: {text[:5000]}\n"
+
+    return (
+        "Summarize the following conversation concisely, "
+        "preserving key decisions, code changes, and context needed to continue:\n\n"
+        + conversation_text[:50000]
+    )
+
+
+async def _compact_with_provider(agent, messages: list[dict[str, object]]) -> tuple[str, list[dict[str, object]]]:
+    ensure_provider = getattr(agent, "_ensure_provider", None)
+    resolve_model = getattr(agent, "_resolve_model", None)
+    if not callable(ensure_provider) or not callable(resolve_model):
+        raise RuntimeError("Agent does not expose the SDK compaction prerequisites.")
+
+    provider = ensure_provider()
+    create_message = getattr(provider, "create_message", None)
+    if not callable(create_message):
+        raise RuntimeError("Agent provider does not support message creation.")
+
+    response = await create_message(
+        CreateMessageParams(
+            model=resolve_model(),
+            max_tokens=2048,
+            messages=[
+                {
+                    "role": "user",
+                    "content": _build_manual_compaction_summary_prompt(messages),
+                }
+            ],
+        )
+    )
+    summary = "".join(
+        str(block.get("text", ""))
+        for block in response.content
+        if isinstance(block, dict) and block.get("type") == "text"
+    ).strip()
+    if not summary:
+        raise RuntimeError("Compaction produced an empty summary.")
+    compacted_messages: list[dict[str, object]] = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": f"[Previous conversation summary]\n\n{summary}"}],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "I understand the context. Let me continue from where we left off."}],
+        },
+    ]
+    return summary, compacted_messages
 
 
 async def compact_current_session(agent) -> dict[str, object]:
@@ -307,34 +370,14 @@ async def compact_current_session(agent) -> dict[str, object]:
             "reason": "Need at least two messages before compaction.",
         }
 
-    ensure_client = getattr(agent, "_ensure_client", None)
-    resolve_model = getattr(agent, "_resolve_model", None)
-    get_api_type = getattr(agent, "get_api_type", None)
-    if not callable(ensure_client) or not callable(resolve_model):
-        raise RuntimeError("Agent does not expose the SDK compaction prerequisites.")
-    if callable(get_api_type) and get_api_type() != "anthropic-messages":
-        raise RuntimeError("Manual compaction currently requires an anthropic-messages backend.")
-
-    initial_state = create_auto_compact_state()
-
-    result = await compact_conversation(
-        ensure_client(),
-        resolve_model(),
-        compactable_history,
-        initial_state,
-    )
-    result_state = result.get("state")
-    if _did_compaction_fail(initial_state, result_state):
-        raise RuntimeError("Compaction failed.")
-
-    compacted_history = list(result.get("compacted_messages", compactable_history))
+    summary, compacted_history = await _compact_with_provider(agent, compactable_history)
     agent._history = compacted_history
     after_tokens = estimate_messages_tokens(compacted_history)
 
     compacted = compacted_history != compactable_history
     return {
         "compacted": compacted,
-        "summary": str(result.get("summary", "")),
+        "summary": summary,
         "before_tokens": before_tokens,
         "after_tokens": after_tokens,
         "reason": "" if compacted else "Compaction produced no smaller history.",
