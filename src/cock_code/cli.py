@@ -106,6 +106,12 @@ async def compact_current_session(agent):
     return await runtime_compact_current_session(agent)
 
 
+def list_skill_names() -> list[str]:
+    from cock_code.runtime import list_skill_names as runtime_list_skill_names
+
+    return runtime_list_skill_names()
+
+
 async def list_sessions():
     from cock_code.runtime import list_sessions as runtime_list_sessions
 
@@ -193,6 +199,7 @@ def add_runtime_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--agents-file", help="JSON file for subagent definitions")
     parser.add_argument("--hooks-file", help="JSON file for hook configuration")
     parser.add_argument("--mcp-file", help="JSON file for MCP server configuration")
+    parser.add_argument("--skills-dir", help="Directory containing local SKILL.md bundles")
     parser.set_defaults(persist_session=True)
 
 
@@ -361,6 +368,9 @@ async def run_chat(config) -> int:
                 continue
             if command.name == "tools":
                 render_tool_table(console, list_tool_names())
+                continue
+            if command.name == "skills":
+                render_state(console, "Skills", {"skills": list_skill_names()})
                 continue
             if command.name == "sessions":
                 render_session_table(console, await list_sessions())

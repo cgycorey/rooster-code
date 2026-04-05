@@ -113,6 +113,7 @@ def render_help(console: Console) -> None:
     table.add_row("/model <name>", "Switch models")
     table.add_row("/permission <mode>", "Update permission mode")
     table.add_row("/tools", "Show available tools")
+    table.add_row("/skills", "Show available skills")
     table.add_row("/sessions", "Show saved sessions")
     table.add_row("/status", "Show current chat runtime state")
     table.add_row("/resume <id>", "Resume another session")

@@ -44,6 +44,8 @@ def test_ask_command_accepts_shared_runtime_flags() -> None:
             "Bash",
             "--search-url",
             "http://127.0.0.1:8080/search",
+            "--skills-dir",
+            "/tmp/skills",
         ]
     )
 
@@ -54,6 +56,7 @@ def test_ask_command_accepts_shared_runtime_flags() -> None:
     assert args.allowed_tools == ["Read"]
     assert args.disallowed_tools == ["Bash"]
     assert args.search_url == "http://127.0.0.1:8080/search"
+    assert args.skills_dir == "/tmp/skills"
 
 
 def test_main_dispatches_ask(monkeypatch) -> None:

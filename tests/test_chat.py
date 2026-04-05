@@ -297,6 +297,27 @@ def test_run_chat_shows_tool_list(monkeypatch) -> None:
     assert captured["closed"] is True
 
 
+def test_run_chat_shows_skill_list(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/skills", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "list_skill_names", lambda: ["commit", "explain"])
+    monkeypatch.setattr(cli, "render_state", lambda console, title, state: captured.setdefault("state", (title, state)))
+    monkeypatch.setattr(cli.Prompt, "ask", lambda *args, **kwargs: next(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert captured["state"] == ("Skills", {"skills": ["commit", "explain"]})
+    assert captured["closed"] is True
+
+
 def test_run_chat_shows_sessions(monkeypatch) -> None:
     captured: dict[str, object] = {}
     prompts = iter(["/sessions", "/exit"])
@@ -368,6 +389,7 @@ def test_run_chat_help_renders_available_commands(monkeypatch) -> None:
     output = console.export_text()
     assert "Help" in output
     assert "/compact" in output
+    assert "/skills" in output
     assert "/exit" in output
     assert "/status" in output
 
