@@ -190,6 +190,85 @@ def test_repo_plan_skill_loads_and_has_detailed_generic_prompt() -> None:
     assert "User request: add auth support" in text
 
 
+def test_stream_skill_events_runs_inline_skills_on_current_agent(monkeypatch) -> None:
+    class FakeAgent:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object] | None]] = []
+
+        async def query(self, prompt: str, overrides: dict[str, object] | None = None):
+            self.calls.append((prompt, overrides))
+            yield SDKMessage(type=SDKMessageType.SYSTEM, text="inline-start")
+            yield SDKMessage(type=SDKMessageType.RESULT, text="inline-result")
+
+    async def fake_skill_call(self, input, context):
+        return ToolResult(
+            tool_use_id="",
+            content='{"success": true, "commandName": "plan", "status": "inline", "prompt": "Goal\\n- test", "allowedTools": ["Read"], "model": "m-inline"}',
+        )
+
+    monkeypatch.setattr(runtime.SkillTool, "call", fake_skill_call)
+
+    agent = FakeAgent()
+
+    async def collect_events():
+        return [
+            event
+            async for event in runtime.stream_skill_events(
+                RuntimeConfig(api_key="x", base_url="https://example.test", model="m", skills_dir="skills"),
+                agent,
+                "plan",
+                "add auth support",
+            )
+        ]
+
+    events = asyncio.run(collect_events())
+
+    assert [event.type for event in events] == [SDKMessageType.SYSTEM, SDKMessageType.SYSTEM, SDKMessageType.RESULT]
+    assert agent.calls == [("Goal\n- test", {"model": "m-inline", "allowed_tools": ["Read"]})]
+
+
+def test_stream_skill_events_forks_child_agent_for_forked_skills(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def query(self, prompt: str, overrides: dict[str, object] | None = None):
+            yield SDKMessage(type=SDKMessageType.SYSTEM, text="fork-start")
+            yield SDKMessage(type=SDKMessageType.RESULT, text="fork-result")
+
+        async def close(self) -> None:
+            return None
+
+    class FakeParentAgent:
+        async def query(self, prompt: str, overrides: dict[str, object] | None = None):
+            raise AssertionError("forked skill should not use parent agent")
+            yield
+
+    async def fake_skill_call(self, input, context):
+        return ToolResult(
+            tool_use_id="",
+            content='{"success": true, "commandName": "review", "status": "forked", "prompt": "Review changes", "model": "m-fork"}',
+        )
+
+    created: list[RuntimeConfig] = []
+
+    monkeypatch.setattr(runtime.SkillTool, "call", fake_skill_call)
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=True, system_prompt="": created.append(config) or FakeChildAgent())
+
+    async def collect_events():
+        return [
+            event
+            async for event in runtime.stream_skill_events(
+                RuntimeConfig(api_key="x", base_url="https://example.test", model="m", skills_dir="skills"),
+                FakeParentAgent(),
+                "review",
+                "check code",
+            )
+        ]
+
+    events = asyncio.run(collect_events())
+
+    assert [event.type for event in events] == [SDKMessageType.SYSTEM, SDKMessageType.SYSTEM, SDKMessageType.RESULT]
+    assert created[0].model == "m-fork"
+
+
 def test_create_runtime_agent_does_not_inject_custom_transport(monkeypatch) -> None:
     class FakeAgent:
         _client = None

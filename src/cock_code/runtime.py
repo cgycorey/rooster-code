@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 import contextlib
+import json
 from pathlib import Path
 from typing import Any, cast
 from open_agent_sdk import (
@@ -25,6 +26,7 @@ from open_agent_sdk import (
     is_plan_mode_active,
     get_session_info as sdk_get_session_info,
     get_session_messages as sdk_get_session_messages,
+    get_skill,
     get_user_invocable_skills,
     init_bundled_skills,
     list_sessions as sdk_list_sessions,
@@ -38,6 +40,7 @@ from open_agent_sdk import (
 from open_agent_sdk.types import SDKMessage, SDKMessageType, SDKSystemSubtype
 from open_agent_sdk.providers import CreateMessageParams
 from open_agent_sdk.tools import _mailboxes
+from open_agent_sdk.tools.skill_tool import SkillTool
 
 from cock_code.config import RuntimeConfig
 from cock_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeReadTool, RuntimeTraceTool, TurnTracker
@@ -287,6 +290,53 @@ async def stream_named_agent_events(config: RuntimeConfig, agent_name: str, prom
         {"name": agent_name, "prompt": prompt, "description": agent_name},
         ToolContext(cwd=config.cwd or ".", env=config.env),
     ):
+        yield event
+
+
+async def _stream_skill(config: RuntimeConfig, agent, skill_name: str, args: str):
+    _ensure_skills_loaded(config)
+    context = ToolContext(cwd=config.cwd or ".", env=config.env)
+    result = await SkillTool().call({"skill": skill_name, "args": args}, context)
+    if result.is_error:
+        yield SDKMessage(type=SDKMessageType.RESULT, text=str(result.content), is_error=True)
+        return
+
+    payload = json.loads(str(result.content))
+    prompt_text = str(payload.get("prompt", "")).strip()
+    if not prompt_text:
+        yield SDKMessage(type=SDKMessageType.RESULT, text=f'Error: Skill "{skill_name}" returned no prompt', is_error=True)
+        return
+
+    yield SDKMessage(type=SDKMessageType.SYSTEM, text=f"skill:{payload.get('commandName', skill_name)}")
+
+    overrides: dict[str, Any] = {}
+    if payload.get("model"):
+        overrides["model"] = str(payload["model"])
+    if isinstance(payload.get("allowedTools"), list):
+        overrides["allowed_tools"] = payload["allowedTools"]
+
+    if payload.get("status") == "forked":
+        child_config = replace(
+            config,
+            model=str(payload.get("model") or config.model or ""),
+            allowed_tools=payload.get("allowedTools") if isinstance(payload.get("allowedTools"), list) else config.allowed_tools,
+            persist_session=False,
+        )
+        child_agent = _create_sdk_agent(child_config, include_runtime_agent_tool=True)
+        try:
+            async for event in child_agent.query(prompt_text):
+                yield event
+        finally:
+            await child_agent.close()
+        return
+
+    query_overrides = overrides or None
+    async for event in agent.query(prompt_text, query_overrides):
+        yield event
+
+
+async def stream_skill_events(config: RuntimeConfig, agent, skill_name: str, args: str):
+    async for event in _stream_skill(config, agent, skill_name, args):
         yield event
 
 
