@@ -100,6 +100,13 @@ async def stream_named_agent_events(config, agent_name: str, prompt: str):
         yield event
 
 
+async def stream_skill_events(config, agent, skill_name: str, args: str):
+    from cock_code.runtime import stream_skill_events as runtime_stream_skill_events
+
+    async for event in runtime_stream_skill_events(config, agent, skill_name, args):
+        yield event
+
+
 async def compact_current_session(agent):
     from cock_code.runtime import compact_current_session as runtime_compact_current_session
 
@@ -391,6 +398,19 @@ async def run_chat(config) -> int:
                 config.resume = command.args[0]
                 agent = create_runtime_agent(config)
                 render_notice(console, "Session", f"Resumed {command.args[0]}", "green")
+                continue
+            available_skills = set(list_skill_names())
+            if command.name in available_skills:
+                try:
+                    render_agent_panel(console, "Skill Started", command.name, "blue")
+                    await render_event_stream(
+                        console,
+                        stream_skill_events(config, agent, command.name, " ".join(command.args)),
+                        omit_duplicate_result=True,
+                        show_activity_trace=True,
+                    )
+                except Exception as exc:
+                    render_notice(console, "Error", str(exc), "red")
                 continue
             if user_input.startswith("/"):
                 render_notice(console, "Unknown command", user_input, "red")
