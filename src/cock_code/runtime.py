@@ -304,8 +304,23 @@ def _build_manual_compaction_summary_prompt(messages: list[dict[str, object]]) -
             conversation_text += f"\n{role}: {text[:5000]}\n"
 
     return (
-        "Summarize the following conversation concisely, "
-        "preserving key decisions, code changes, and context needed to continue:\n\n"
+        "Summarize this session for immediate continuation. Be concise and preserve only information needed to keep working without re-discovery. "
+        "Use the exact section headings below and prefer bullet points under each heading. If a section has nothing useful, write 'None'.\n\n"
+        "## Goal\n"
+        "- The current objective and success condition.\n\n"
+        "## Current State\n"
+        "- What is already done, in progress, and not started.\n\n"
+        "## Key Decisions\n"
+        "- Important implementation or product decisions and why they were made.\n\n"
+        "## Code/Files\n"
+        "- Files, modules, commands, or tests that matter for continuing the work.\n\n"
+        "## Constraints / What to Avoid\n"
+        "- Scope limits, invariants, failed approaches, or things that must not change.\n\n"
+        "## Blockers / Open Questions\n"
+        "- Only unresolved items that materially affect the next step.\n\n"
+        "## Next Step\n"
+        "- The single best next action to take.\n\n"
+        "## Transcript\n"
         + conversation_text[:50000]
     )
 

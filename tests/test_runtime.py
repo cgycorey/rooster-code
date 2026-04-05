@@ -286,6 +286,24 @@ def test_compact_current_session_rewrites_agent_history(monkeypatch) -> None:
     }
 
 
+def test_build_manual_compaction_summary_prompt_uses_structured_handoff() -> None:
+    prompt = runtime._build_manual_compaction_summary_prompt([
+        {"role": "user", "content": [{"type": "text", "text": "Please add OpenAI-compatible /compact support."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "I switched manual compaction to the provider abstraction."}]},
+    ])
+
+    assert "Summarize this session for immediate continuation" in prompt
+    assert "## Goal" in prompt
+    assert "## Current State" in prompt
+    assert "## Key Decisions" in prompt
+    assert "## Code/Files" in prompt
+    assert "## Constraints / What to Avoid" in prompt
+    assert "## Blockers / Open Questions" in prompt
+    assert "## Next Step" in prompt
+    assert "user: Please add OpenAI-compatible /compact support." in prompt
+    assert "assistant: I switched manual compaction to the provider abstraction." in prompt
+
+
 def test_compact_current_session_skips_small_history(monkeypatch) -> None:
     class FakeAgent:
         def __init__(self) -> None:
@@ -347,10 +365,14 @@ def test_compact_current_session_omits_private_history_blocks(monkeypatch) -> No
     result = asyncio.run(runtime.compact_current_session(agent))
 
     assert provider.params is not None
-    assert provider.params.messages == [{
-        "role": "user",
-        "content": "Summarize the following conversation concisely, preserving key decisions, code changes, and context needed to continue:\n\n\nuser: hello\n\nassistant: hi\n",
-    }]
+    assert provider.params.messages[0]["role"] == "user"
+    prompt = provider.params.messages[0]["content"]
+    assert "## Goal" in prompt
+    assert "## Current State" in prompt
+    assert "## Key Decisions" in prompt
+    assert "## Transcript" in prompt
+    assert "user: hello" in prompt
+    assert "assistant: hi" in prompt
     assert result["summary"] == "visible summary only"
 
 
@@ -452,10 +474,13 @@ def test_compact_current_session_supports_openai_compatible_provider(monkeypatch
 
     assert provider.params is not None
     assert provider.params.model == "gpt-4o-mini"
-    assert provider.params.messages == [{
-        "role": "user",
-        "content": "Summarize the following conversation concisely, preserving key decisions, code changes, and context needed to continue:\n\n\nuser: hello\n\nassistant: hi\n",
-    }]
+    assert provider.params.messages[0]["role"] == "user"
+    prompt = provider.params.messages[0]["content"]
+    assert "## Goal" in prompt
+    assert "## Code/Files" in prompt
+    assert "## Next Step" in prompt
+    assert "user: hello" in prompt
+    assert "assistant: hi" in prompt
     assert result == {
         "compacted": True,
         "summary": "summary from openai",
