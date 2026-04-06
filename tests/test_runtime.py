@@ -223,8 +223,14 @@ def test_stream_skill_events_runs_inline_skills_on_current_agent(monkeypatch) ->
 
     events = asyncio.run(collect_events())
 
-    assert [event.type for event in events] == [SDKMessageType.SYSTEM, SDKMessageType.SYSTEM, SDKMessageType.RESULT]
+    assert [event.type for event in events] == [SDKMessageType.SYSTEM, SDKMessageType.SYSTEM, SDKMessageType.RESULT, SDKMessageType.SYSTEM]
     assert agent.calls == [("Goal\n- test", {"model": "m-inline", "allowed_tools": ["Read"]})]
+    assert events[0].system_data["activity_trace"] == [
+        {"action": "Resolved subagent", "tool": "Skill", "target": "plan (inline)"}
+    ]
+    assert events[-1].system_data["activity_trace"] == [
+        {"action": "Completed subagent", "tool": "Skill", "target": "plan"}
+    ]
 
 
 def test_stream_skill_events_forks_child_agent_for_forked_skills(monkeypatch) -> None:
@@ -265,8 +271,14 @@ def test_stream_skill_events_forks_child_agent_for_forked_skills(monkeypatch) ->
 
     events = asyncio.run(collect_events())
 
-    assert [event.type for event in events] == [SDKMessageType.SYSTEM, SDKMessageType.SYSTEM, SDKMessageType.RESULT]
+    assert [event.type for event in events] == [SDKMessageType.SYSTEM, SDKMessageType.SYSTEM, SDKMessageType.RESULT, SDKMessageType.SYSTEM]
     assert created[0].model == "m-fork"
+    assert events[0].system_data["activity_trace"] == [
+        {"action": "Resolved subagent", "tool": "Skill", "target": "review (forked)"}
+    ]
+    assert events[-1].system_data["activity_trace"] == [
+        {"action": "Completed subagent", "tool": "Skill", "target": "review"}
+    ]
 
 
 def test_create_runtime_agent_does_not_inject_custom_transport(monkeypatch) -> None:
@@ -398,8 +410,163 @@ def test_run_subagent_summary_falls_back_to_final_text_for_outcome(monkeypatch) 
 
     text = str(result.content)
     assert "Outcome: explored the recent changes and identified the likely cause" in text
-    assert "Files: None" in text
-    assert "Commands: None" in text
+    assert "Files:" not in text
+    assert "Commands:" not in text
+    assert "Findings:" not in text
+    assert "Open issues:" not in text
+    assert "Next step:" not in text
+
+
+def test_run_subagent_default_task_does_not_force_read_only_tool_subset(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeChildAgent:
+        async def prompt(self, prompt: str):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(text="done", messages=[])
+
+        async def close(self) -> None:
+            return None
+
+    def fake_create_sdk_agent(config, include_runtime_agent_tool=False, system_prompt=""):
+        captured["allowed_tools"] = config.allowed_tools
+        captured["system_prompt"] = system_prompt
+        return FakeChildAgent()
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", fake_create_sdk_agent)
+
+    asyncio.run(
+        runtime._run_subagent(
+            RuntimeConfig(model="m1"),
+            {"prompt": "check changes", "description": "task"},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+    )
+
+    assert captured["allowed_tools"] is None
+    assert "read-only" not in str(captured["system_prompt"]).lower()
+
+
+def test_run_subagent_routes_named_skill_instead_of_unknown_agent(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str, overrides=None):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="reviewed the changes",
+                messages=[
+                    {"role": "assistant", "content": [{"type": "text", "text": "Outcome: reviewed the changes"}]},
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_skill_call(self, input, context):
+        return ToolResult(
+            tool_use_id="",
+            content='{"success": true, "commandName": "review", "status": "inline", "prompt": "Review the latest commit", "model": "m-review"}',
+        )
+
+    monkeypatch.setattr(runtime.SkillTool, "call", fake_skill_call)
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+
+    result = asyncio.run(
+        runtime._run_subagent(
+            RuntimeConfig(model="m1", skills_dir="skills"),
+            {"name": "review", "prompt": "check last commit", "description": "review"},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+    )
+
+    text = str(result.content)
+    assert "unknown agent" not in text.lower()
+    assert "Outcome: reviewed the changes" in text
+
+
+def test_run_subagent_routes_review_like_prompt_to_review_skill(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str, overrides=None):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="reviewed the changes",
+                messages=[
+                    {"role": "assistant", "content": [{"type": "text", "text": "Outcome: reviewed the changes"}]},
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    captured: dict[str, object] = {}
+
+    async def fake_skill_call(self, input, context):
+        captured["skill"] = input["skill"]
+        captured["args"] = input["args"]
+        return ToolResult(
+            tool_use_id="",
+            content='{"success": true, "commandName": "review", "status": "inline", "prompt": "Review the latest commit", "model": "m-review"}',
+        )
+
+    monkeypatch.setattr(runtime.SkillTool, "call", fake_skill_call)
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+
+    result = asyncio.run(
+        runtime._run_subagent(
+            RuntimeConfig(model="m1", skills_dir="skills"),
+            {"prompt": "Review last commit quality", "description": "Review last commit quality"},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+    )
+
+    assert captured == {"skill": "review", "args": "last commit quality"}
+    assert "Outcome: reviewed the changes" in str(result.content)
+
+
+def test_run_subagent_rejects_meta_review_output_from_delegated_skill(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str, overrides=None):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="Let me check for style consistency and any other potential issues:",
+                messages=[
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Let me check for style consistency and any other potential issues:",
+                            }
+                        ],
+                    }
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_skill_call(self, input, context):
+        return ToolResult(
+            tool_use_id="",
+            content='{"success": true, "commandName": "review", "status": "forked", "prompt": "Review the latest commit", "model": "m-review"}',
+        )
+
+    monkeypatch.setattr(runtime.SkillTool, "call", fake_skill_call)
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+
+    result = asyncio.run(
+        runtime._run_subagent(
+            RuntimeConfig(model="m1", skills_dir="skills"),
+            {"name": "review", "prompt": "check last commit", "description": "review"},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+    )
+
+    assert result.is_error is True
+    assert "did not complete" in str(result.content).lower()
 
 
 def test_create_runtime_agent_replaces_placeholder_agent_tool_after_initialize(monkeypatch) -> None:
@@ -713,9 +880,53 @@ def test_stream_named_agent_events_emits_child_tool_activity(monkeypatch, tmp_pa
 
     events = asyncio.run(collect_events())
 
-    assert [event.type for event in events] == [SDKMessageType.SYSTEM, SDKMessageType.TOOL_RESULT]
+    assert [event.type for event in events] == [SDKMessageType.SYSTEM, SDKMessageType.SYSTEM, SDKMessageType.TOOL_RESULT, SDKMessageType.SYSTEM]
     assert events[0].system_data["activity_trace"] == [
+        {"action": "Resolved subagent", "tool": "Agent", "target": "reviewer"}
+    ]
+    assert events[1].system_data["activity_trace"] == [
         {"action": "Reading file", "tool": "Read", "target": str(tmp_path / "child.txt")}
+    ]
+    assert events[-1].system_data["activity_trace"] == [
+        {"action": "Completed subagent", "tool": "Agent", "target": "reviewer"}
+    ]
+
+
+def test_stream_named_agent_events_emits_skill_resolution_visibility(monkeypatch) -> None:
+    class FakeAgent:
+        async def query(self, prompt: str, overrides=None):
+            yield SDKMessage(type=SDKMessageType.RESULT, text="done")
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_skill_call(self, input, context):
+        return ToolResult(
+            tool_use_id="",
+            content='{"success": true, "commandName": "review", "status": "inline", "prompt": "Review latest commit"}',
+        )
+
+    monkeypatch.setattr(runtime.SkillTool, "call", fake_skill_call)
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeAgent())
+
+    async def collect_events():
+        return [
+            event
+            async for event in runtime.stream_named_agent_events(
+                RuntimeConfig(api_key="test", base_url="https://nano-gpt.com/api/v1", model="m1", skills_dir="skills"),
+                "review",
+                "review last commit",
+            )
+        ]
+
+    events = asyncio.run(collect_events())
+
+    assert [event.type for event in events] == [SDKMessageType.SYSTEM, SDKMessageType.RESULT, SDKMessageType.SYSTEM]
+    assert events[0].system_data["activity_trace"] == [
+        {"action": "Resolved subagent", "tool": "Skill", "target": "review (inline)"}
+    ]
+    assert events[-1].system_data["activity_trace"] == [
+        {"action": "Completed subagent", "tool": "Skill", "target": "review"}
     ]
 
 

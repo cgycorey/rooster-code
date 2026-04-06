@@ -146,14 +146,37 @@ def list_skill_names() -> list[str]:
     return sorted(skill.name for skill in get_user_invocable_skills())
 
 
+def _resolve_subagent_skill_request(config: RuntimeConfig, input: dict[str, Any]) -> tuple[str, str] | None:
+    _ensure_skills_loaded(config)
+    available = {name.lower(): name for name in list_skill_names()}
+    if not available:
+        return None
+
+    requested = str(input.get("name") or input.get("subagent_type") or "").strip().lower()
+    prompt = str(input.get("prompt") or "").strip()
+    description = str(input.get("description") or "").strip()
+
+    if requested and requested in available:
+        return available[requested], prompt or description
+
+    for source in (prompt, description):
+        if not source:
+            continue
+        parts = source.split(maxsplit=1)
+        head = parts[0].lower()
+        if head in available:
+            return available[head], parts[1] if len(parts) > 1 else ""
+
+    return None
+
+
 def _effective_agents(config: RuntimeConfig) -> dict[str, Any]:
     if config.agents:
         return config.agents
     return {
         "task": {
-            "description": "General read-only task agent",
-            "prompt": "You are a careful read-only task agent. Use only safe inspection tools and answer briefly.",
-            "tools": ["Read", "Grep", "Glob"],
+            "description": "General task agent",
+            "prompt": "You are a careful general-purpose task agent. Use tools and skills deliberately, prefer minimal changes, and summarize your results clearly.",
             "max_turns": 3,
         }
     }
@@ -262,12 +285,30 @@ def _format_subagent_summary(result_text: str, messages: list[dict[str, Any]]) -
                     next_steps.append(line.partition(":")[2].strip())
 
     lines = [f"Outcome: {'; '.join(outcomes) if outcomes else (result_text or 'None')}" ]
-    lines.append(f"Files: {'; '.join(files) if files else 'None'}")
-    lines.append(f"Commands: {'; '.join(commands) if commands else 'None'}")
-    lines.append(f"Findings: {'; '.join(findings) if findings else 'None'}")
-    lines.append(f"Open issues: {'; '.join(open_issues) if open_issues else 'None'}")
-    lines.append(f"Next step: {'; '.join(next_steps) if next_steps else 'None'}")
+    if files:
+        lines.append(f"Files: {'; '.join(files)}")
+    if commands:
+        lines.append(f"Commands: {'; '.join(commands)}")
+    if findings:
+        lines.append(f"Findings: {'; '.join(findings)}")
+    if open_issues:
+        lines.append(f"Open issues: {'; '.join(open_issues)}")
+    if next_steps:
+        lines.append(f"Next step: {'; '.join(next_steps)}")
     return "\n".join(lines)
+
+
+def _activity_status_event(action: str, tool: str, target: str) -> SDKMessage:
+    return SDKMessage(
+        type=SDKMessageType.SYSTEM,
+        subtype=SDKSystemSubtype.STATUS,
+        system_data={"activity_trace": [{"action": action, "tool": tool, "target": target}]},
+    )
+
+
+def _looks_like_meta_preamble(text: str) -> bool:
+    normalized = text.strip().lower()
+    return normalized.startswith("let me ") or normalized.startswith("i'll ") or normalized.startswith("i will ")
 
 
 async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: ToolContext) -> ToolResult:
@@ -277,6 +318,50 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
 
     if input.get("run_in_background"):
         return ToolResult(tool_use_id="", content="Error: background agents are not supported in cock-code yet", is_error=True)
+
+    if skill_request := _resolve_subagent_skill_request(config, input):
+        skill_name, args = skill_request
+        working_config = replace(config, persist_session=False)
+        working_agent = _create_sdk_agent(working_config, include_runtime_agent_tool=False)
+        try:
+            tool_context = ToolContext(cwd=context.cwd, env=context.env)
+            result = await SkillTool().call({"skill": skill_name, "args": args}, tool_context)
+            if result.is_error:
+                return ToolResult(tool_use_id="", content=str(result.content), is_error=True)
+
+            payload = json.loads(str(result.content))
+            prompt_text = str(payload.get("prompt", "")).strip()
+            if not prompt_text:
+                return ToolResult(tool_use_id="", content=f'Error: Skill "{skill_name}" returned no prompt', is_error=True)
+
+            overrides: dict[str, Any] = {}
+            if payload.get("model"):
+                overrides["model"] = str(payload["model"])
+            if isinstance(payload.get("allowedTools"), list):
+                overrides["allowed_tools"] = payload["allowedTools"]
+
+            if payload.get("status") == "forked":
+                child_config = replace(
+                    working_config,
+                    model=str(payload.get("model") or working_config.model or ""),
+                    allowed_tools=payload.get("allowedTools") if isinstance(payload.get("allowedTools"), list) else working_config.allowed_tools,
+                    persist_session=False,
+                )
+                child_agent = _create_sdk_agent(child_config, include_runtime_agent_tool=False)
+                try:
+                    query_result = await child_agent.prompt(prompt_text)
+                finally:
+                    await child_agent.close()
+            else:
+                query_result = await working_agent.prompt(prompt_text, overrides or None)
+
+            text = query_result.text.strip() if query_result.text else ""
+            if payload.get("commandName") == "review" and _looks_like_meta_preamble(text):
+                return ToolResult(tool_use_id="", content="Error: delegated review did not complete", is_error=True)
+            summary = _format_subagent_summary(text, query_result.messages)
+            return ToolResult(tool_use_id="", content=summary or f'Skill "{skill_name}" completed with no text output.')
+        finally:
+            await working_agent.close()
 
     agent_name, definition = _resolve_agent_definition(config, input)
     if definition is None:
@@ -307,6 +392,16 @@ async def _stream_subagent(config: RuntimeConfig, input: dict[str, Any], context
         yield SDKMessage(type=SDKMessageType.RESULT, text="Error: background agents are not supported in cock-code yet", is_error=True)
         return
 
+    if skill_request := _resolve_subagent_skill_request(config, input):
+        skill_name, args = skill_request
+        working_agent = _create_sdk_agent(replace(config, persist_session=False), include_runtime_agent_tool=False)
+        try:
+            async for event in _stream_skill(config, working_agent, skill_name, args):
+                yield event
+        finally:
+            await working_agent.close()
+        return
+
     agent_name, definition = _resolve_agent_definition(config, input)
     if definition is None:
         message = f"Error: unknown agent '{agent_name or 'unspecified'}'" if _effective_agents(config) else "Error: no agents configured"
@@ -317,10 +412,12 @@ async def _stream_subagent(config: RuntimeConfig, input: dict[str, Any], context
     system_prompt = str(definition.get("prompt") or definition.get("system_prompt") or definition.get("description") or "")
     child_agent = _create_sdk_agent(child_config, include_runtime_agent_tool=False, system_prompt=system_prompt)
     try:
+        yield _activity_status_event("Resolved subagent", "Agent", agent_name)
         async for event in child_agent.query(prompt):
             yield event
     finally:
         await child_agent.close()
+    yield _activity_status_event("Completed subagent", "Agent", agent_name)
 
 
 def find_requested_agent_name(config: RuntimeConfig, prompt: str) -> str | None:
@@ -366,7 +463,9 @@ async def _stream_skill(config: RuntimeConfig, agent, skill_name: str, args: str
         yield SDKMessage(type=SDKMessageType.RESULT, text=f'Error: Skill "{skill_name}" returned no prompt', is_error=True)
         return
 
-    yield SDKMessage(type=SDKMessageType.SYSTEM, text=f"skill:{payload.get('commandName', skill_name)}")
+    command_name = str(payload.get("commandName", skill_name))
+    status = str(payload.get("status") or "inline")
+    yield _activity_status_event("Resolved subagent", "Skill", f"{command_name} ({status})")
 
     overrides: dict[str, Any] = {}
     if payload.get("model"):
@@ -387,11 +486,13 @@ async def _stream_skill(config: RuntimeConfig, agent, skill_name: str, args: str
                 yield event
         finally:
             await child_agent.close()
+        yield _activity_status_event("Completed subagent", "Skill", command_name)
         return
 
     query_overrides = overrides or None
     async for event in agent.query(prompt_text, query_overrides):
         yield event
+    yield _activity_status_event("Completed subagent", "Skill", command_name)
 
 
 async def stream_skill_events(config: RuntimeConfig, agent, skill_name: str, args: str):
