@@ -288,6 +288,120 @@ def test_create_runtime_agent_does_not_inject_custom_transport(monkeypatch) -> N
     assert agent._client is None
 
 
+def test_run_subagent_returns_rich_plain_text_summary(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="implemented the change",
+                messages=[
+                    {"role": "user", "content": [{"type": "text", "text": "Add feature X"}]},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Outcome: implemented the change\nFiles: src/a.py, tests/test_a.py\nCommands: pytest tests/test_a.py -q\nOpen issues: none\nNext step: run full suite",
+                            }
+                        ],
+                    },
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+
+    result = asyncio.run(
+        runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"builder": {"description": "build agent"}}),
+            {"name": "builder", "prompt": "do work", "description": "builder"},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+    )
+
+    text = str(result.content)
+    assert "Outcome:" in text
+    assert "Outcome: implemented the change" in text
+    assert "Files:" in text
+    assert "src/a.py" in text
+    assert "Commands:" in text
+    assert "pytest tests/test_a.py -q" in text
+    assert "Open issues:" in text
+    assert "Next step:" in text
+
+
+def test_run_subagent_summary_excludes_user_text_and_unlabeled_assistant_text(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="implemented the change",
+                messages=[
+                    {"role": "user", "content": [{"type": "text", "text": "SECRET user request"}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": "intermediate reasoning that should not leak"}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": "Files: src/a.py"}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": "Commands: pytest tests/test_a.py -q"}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": "Open issues: none"}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": "Next step: run full suite"}]},
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+
+    result = asyncio.run(
+        runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"builder": {"description": "build agent"}}),
+            {"name": "builder", "prompt": "do work", "description": "builder"},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+    )
+
+    text = str(result.content)
+    assert "SECRET user request" not in text
+    assert "intermediate reasoning that should not leak" not in text
+    assert "Files: src/a.py" in text
+    assert "Commands: pytest tests/test_a.py -q" in text
+
+
+def test_run_subagent_summary_falls_back_to_final_text_for_outcome(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="explored the recent changes and identified the likely cause",
+                messages=[
+                    {"role": "user", "content": [{"type": "text", "text": "use subagent to explore changes made"}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": "explored the recent changes and identified the likely cause"}]},
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+
+    result = asyncio.run(
+        runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"task": {"description": "explore agent"}}),
+            {"name": "task", "prompt": "explore changes", "description": "task"},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+    )
+
+    text = str(result.content)
+    assert "Outcome: explored the recent changes and identified the likely cause" in text
+    assert "Files: None" in text
+    assert "Commands: None" in text
+
+
 def test_create_runtime_agent_replaces_placeholder_agent_tool_after_initialize(monkeypatch) -> None:
     class PlaceholderAgentTool:
         name = "Agent"

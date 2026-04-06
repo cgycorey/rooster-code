@@ -212,6 +212,64 @@ def _agent_context_prompt(config: RuntimeConfig) -> str:
     return "\n".join(lines)
 
 
+def _extract_text_blocks(message: dict[str, Any]) -> list[str]:
+    content = message.get("content", [])
+    if isinstance(content, str):
+        text = content.strip()
+        return [text] if text else []
+    if not isinstance(content, list):
+        return []
+    parts: list[str] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") != "text":
+            continue
+        text = str(block.get("text", "")).strip()
+        if text:
+            parts.append(text)
+    return parts
+
+
+def _format_subagent_summary(result_text: str, messages: list[dict[str, Any]]) -> str:
+    outcomes: list[str] = []
+    files: list[str] = []
+    commands: list[str] = []
+    open_issues: list[str] = []
+    next_steps: list[str] = []
+    findings: list[str] = []
+
+    for message in messages:
+        if str(message.get("role", "")) != "assistant":
+            continue
+        for text in _extract_text_blocks(message):
+            for raw_line in text.splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                lower = line.lower()
+                if lower.startswith("outcome:"):
+                    outcomes.append(line.partition(":")[2].strip())
+                elif lower.startswith("files:"):
+                    files.append(line.partition(":")[2].strip())
+                elif lower.startswith("commands:"):
+                    commands.append(line.partition(":")[2].strip())
+                elif lower.startswith("findings:"):
+                    findings.append(line.partition(":")[2].strip())
+                elif lower.startswith("open issues:"):
+                    open_issues.append(line.partition(":")[2].strip())
+                elif lower.startswith("next step:"):
+                    next_steps.append(line.partition(":")[2].strip())
+
+    lines = [f"Outcome: {'; '.join(outcomes) if outcomes else (result_text or 'None')}" ]
+    lines.append(f"Files: {'; '.join(files) if files else 'None'}")
+    lines.append(f"Commands: {'; '.join(commands) if commands else 'None'}")
+    lines.append(f"Findings: {'; '.join(findings) if findings else 'None'}")
+    lines.append(f"Open issues: {'; '.join(open_issues) if open_issues else 'None'}")
+    lines.append(f"Next step: {'; '.join(next_steps) if next_steps else 'None'}")
+    return "\n".join(lines)
+
+
 async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: ToolContext) -> ToolResult:
     prompt = str(input.get("prompt", "")).strip()
     if not prompt:
@@ -235,7 +293,8 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
         await child_agent.close()
 
     text = result.text.strip() if result.text else ""
-    return ToolResult(tool_use_id="", content=text or f"Agent {agent_name} completed with no text output.")
+    summary = _format_subagent_summary(text, result.messages)
+    return ToolResult(tool_use_id="", content=summary or f"Agent {agent_name} completed with no text output.")
 
 
 async def _stream_subagent(config: RuntimeConfig, input: dict[str, Any], context: ToolContext):
