@@ -7,6 +7,7 @@ import pytest
 from open_agent_sdk import SDKMessage, SDKMessageType, ToolContext, ToolResult
 from open_agent_sdk.providers import CreateMessageResponse
 from open_agent_sdk.skills import clear_skills, get_skill
+from open_agent_sdk.tools import clear_mailboxes, clear_tasks, get_all_tasks, read_mailbox
 from cock_code.config import RuntimeConfig
 
 from cock_code.runtime import build_agent_options, create_runtime_agent
@@ -22,6 +23,20 @@ def reset_sdk_skills():
     yield
     clear_skills()
     bundled_mod._initialized = False
+
+
+@pytest.fixture(autouse=True)
+def reset_sdk_tasks():
+    clear_tasks()
+    yield
+    clear_tasks()
+
+
+@pytest.fixture(autouse=True)
+def reset_sdk_mailboxes():
+    clear_mailboxes()
+    yield
+    clear_mailboxes()
 
 
 def test_build_agent_options_uses_explicit_api_fields() -> None:
@@ -417,6 +432,31 @@ def test_run_subagent_summary_falls_back_to_final_text_for_outcome(monkeypatch) 
     assert "Next step:" not in text
 
 
+def test_run_subagent_summary_does_not_emit_outcome_none(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(text="", messages=[])
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+
+    result = asyncio.run(
+        runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"task": {"description": "explore agent"}}),
+            {"name": "task", "prompt": "explore changes", "description": "task"},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+    )
+
+    text = str(result.content)
+    assert "Outcome: None" not in text
+    assert "Outcome: No useful output returned" in text
+
+
 def test_run_subagent_default_task_does_not_force_read_only_tool_subset(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -446,6 +486,185 @@ def test_run_subagent_default_task_does_not_force_read_only_tool_subset(monkeypa
 
     assert captured["allowed_tools"] is None
     assert "read-only" not in str(captured["system_prompt"]).lower()
+
+
+def test_run_subagent_background_creates_sdk_task_and_updates_output(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="background done",
+                messages=[
+                    {"role": "assistant", "content": [{"type": "text", "text": "Outcome: background done"}]},
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+
+    async def run_case():
+        result = await runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"builder": {"description": "build agent"}}),
+            {"name": "builder", "prompt": "do work", "description": "builder", "run_in_background": True},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+        assert result.is_error is False
+        assert "Created task" in str(result.content)
+        tasks = get_all_tasks()
+        assert len(tasks) == 1
+        task_id = next(iter(tasks))
+        assert tasks[task_id]["status"] == "in_progress"
+        for _ in range(50):
+            if tasks[task_id]["status"] == "completed":
+                break
+            await asyncio.sleep(0)
+        assert tasks[task_id]["status"] == "completed"
+        assert "Outcome: background done" in tasks[task_id]["output"]
+
+    asyncio.run(run_case())
+
+
+def test_run_subagent_background_marks_failure_and_output(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str):
+            raise RuntimeError("background exploded")
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+
+    async def run_case():
+        result = await runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"builder": {"description": "build agent"}}),
+            {"name": "builder", "prompt": "do work", "description": "builder", "run_in_background": True},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+        assert result.is_error is False
+        assert "Created task" in str(result.content)
+        tasks = get_all_tasks()
+        task_id = next(iter(tasks))
+        for _ in range(50):
+            if tasks[task_id]["status"] != "in_progress":
+                break
+            await asyncio.sleep(0)
+        assert tasks[task_id]["status"] == "cancelled"
+        assert "background exploded" in tasks[task_id]["output"]
+
+    asyncio.run(run_case())
+
+
+def test_run_subagent_background_writes_completion_notification_to_mailbox(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="background done",
+                messages=[
+                    {"role": "assistant", "content": [{"type": "text", "text": "Outcome: background done"}]},
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+
+    async def run_case():
+        result = await runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"builder": {"description": "build agent"}}),
+            {
+                "name": "builder",
+                "prompt": "do work",
+                "description": "builder",
+                "run_in_background": True,
+                "mailbox": "session-1",
+            },
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+        assert result.is_error is False
+        tasks = get_all_tasks()
+        task_id = next(iter(tasks))
+        for _ in range(50):
+            if tasks[task_id]["status"] == "completed":
+                break
+            await asyncio.sleep(0)
+
+    asyncio.run(run_case())
+
+    messages = read_mailbox("session-1")
+    assert messages == [
+        {
+            "type": "background_task_completed",
+            "task_id": "task_1",
+            "status": "completed",
+            "subject": "builder",
+            "output": "Outcome: background done",
+        }
+    ]
+
+
+def test_run_subagent_background_does_not_create_task_for_unknown_agent() -> None:
+    async def run_case():
+        result = await runtime._run_subagent(
+            RuntimeConfig(model="m1"),
+            {"name": "task1", "prompt": "check some files", "description": "task1", "run_in_background": True},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+        assert result.is_error is True
+        assert "unknown agent 'task1'" in str(result.content)
+        assert get_all_tasks() == {}
+
+    asyncio.run(run_case())
+
+
+def test_create_background_subagent_task_raises_on_sdk_error(monkeypatch) -> None:
+    async def fake_call(self, input, context):
+        return ToolResult(tool_use_id="", content="boom", is_error=True)
+
+    monkeypatch.setattr(runtime.TaskCreateTool, "call", fake_call)
+
+    async def run_case():
+        with pytest.raises(RuntimeError, match="Failed to create task: boom"):
+            await runtime._create_background_subagent_task("subject", "desc", "/tmp/project", {})
+
+    asyncio.run(run_case())
+
+
+def test_create_background_subagent_task_raises_on_unexpected_output(monkeypatch) -> None:
+    async def fake_call(self, input, context):
+        return ToolResult(tool_use_id="", content="unexpected format")
+
+    monkeypatch.setattr(runtime.TaskCreateTool, "call", fake_call)
+
+    async def run_case():
+        with pytest.raises(RuntimeError, match="Could not parse task ID"):
+            await runtime._create_background_subagent_task("subject", "desc", "/tmp/project", {})
+
+    asyncio.run(run_case())
+
+
+def test_create_background_subagent_task_uses_real_context(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_call(self, input, context):
+        captured["cwd"] = context.cwd
+        captured["env"] = context.env
+        return ToolResult(tool_use_id="", content="Created task task_1: subject")
+
+    monkeypatch.setattr(runtime.TaskCreateTool, "call", fake_call)
+
+    async def run_case():
+        task_id = await runtime._create_background_subagent_task("subject", "desc", "/tmp/project", {"FOO": "bar"})
+        assert task_id == "task_1"
+
+    asyncio.run(run_case())
+
+    assert captured == {"cwd": "/tmp/project", "env": {"FOO": "bar"}}
 
 
 def test_run_subagent_routes_named_skill_instead_of_unknown_agent(monkeypatch) -> None:
@@ -483,6 +702,37 @@ def test_run_subagent_routes_named_skill_instead_of_unknown_agent(monkeypatch) -
     text = str(result.content)
     assert "unknown agent" not in text.lower()
     assert "Outcome: reviewed the changes" in text
+
+
+def test_cancel_background_subagent_tasks_marks_tasks_cancelled(monkeypatch) -> None:
+    started = asyncio.Event()
+
+    class SlowChildAgent:
+        async def prompt(self, prompt: str):
+            started.set()
+            await asyncio.sleep(60)
+            raise AssertionError("should have been cancelled")
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": SlowChildAgent())
+
+    async def run_case():
+        result = await runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"builder": {"description": "build agent"}}),
+            {"name": "builder", "prompt": "do work", "description": "builder", "run_in_background": True},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+        assert result.is_error is False
+        tasks = get_all_tasks()
+        task_id = next(iter(tasks))
+        await started.wait()
+        await runtime.cancel_background_subagent_tasks()
+        assert tasks[task_id]["status"] == "cancelled"
+        assert "Cancelled by shutdown" in tasks[task_id]["output"]
+
+    asyncio.run(run_case())
 
 
 def test_run_subagent_routes_review_like_prompt_to_review_skill(monkeypatch) -> None:

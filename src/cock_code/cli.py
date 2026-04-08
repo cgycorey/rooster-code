@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import os
 import signal
 from urllib.parse import urlencode
@@ -173,6 +174,59 @@ def get_state_snapshot(name: str, agent_name: str | None = None):
     return runtime_get_state_snapshot(name, agent_name)
 
 
+async def get_task_output(task_id: str) -> str:
+    from cock_code.runtime import get_task_output as runtime_get_task_output
+
+    return await runtime_get_task_output(task_id)
+
+
+async def stop_task(task_id: str) -> bool:
+    from cock_code.runtime import stop_task as runtime_stop_task
+
+    return await runtime_stop_task(task_id)
+
+
+async def start_background_agent_task(config, agent_name: str, prompt: str) -> str:
+    from cock_code.runtime import start_background_agent_task as runtime_start_background_agent_task
+
+    return await runtime_start_background_agent_task(config, agent_name, prompt)
+
+
+async def wait_for_task(task_id: str) -> dict[str, object]:
+    from cock_code.runtime import wait_for_task as runtime_wait_for_task
+
+    return await runtime_wait_for_task(task_id)
+
+
+def append_task_result_to_context(agent, task_id: str, task_result: dict[str, object]) -> None:
+    output = str(task_result.get("output", "")).strip()
+    status = str(task_result.get("status", "")).strip()
+    if status not in {"completed", "cancelled"} or not output:
+        return
+    history = getattr(agent, "_history", None)
+    if not isinstance(history, list):
+        return
+    history.append(
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": f"Background task {task_id} result:\n\n{output}"}],
+        }
+    )
+
+
+def read_background_notifications(agent, config) -> list[dict[str, object]]:
+    from cock_code.runtime import read_background_notifications as runtime_read_background_notifications
+
+    mailbox = config.resume or config.session_id or getattr(agent, "get_session_id", lambda: "default")()
+    return runtime_read_background_notifications(str(mailbox))
+
+
+async def cancel_background_subagent_tasks() -> None:
+    from cock_code.runtime import cancel_background_subagent_tasks as runtime_cancel_background_subagent_tasks
+
+    await runtime_cancel_background_subagent_tasks()
+
+
 def list_tool_names() -> list[str]:
     from cock_code.runtime import list_tool_names as runtime_list_tool_names
 
@@ -308,6 +362,7 @@ async def run_ask(prompt: str, config) -> int:
         return 1
     finally:
         clear_question_handler()
+        await cancel_background_subagent_tasks()
         await agent.close()
 
     if config.persist_session:
@@ -323,6 +378,12 @@ async def run_chat(config) -> int:
     agent = create_runtime_agent(config)
     interrupted = False
 
+    def prompt_once() -> tuple[str, str | BaseException]:
+        try:
+            return ("ok", Prompt.ask("cock-code"))
+        except (KeyboardInterrupt, EOFError) as exc:
+            return ("error", exc)
+
     async def question_handler(question: str) -> str:
         return Prompt.ask(question)
 
@@ -330,12 +391,35 @@ async def run_chat(config) -> int:
 
     try:
         while True:
+            prompt_task: asyncio.Task[object] | None = None
             try:
-                user_input = Prompt.ask("cock-code")
+                prompt_task = asyncio.create_task(asyncio.to_thread(prompt_once))
+                while not prompt_task.done():
+                    for note in read_background_notifications(agent, config):
+                        if note.get("type") == "background_task_completed":
+                            status = str(note.get("status", "completed"))
+                            style = "green" if status == "completed" else "yellow"
+                            render_notice(console, "Background Task", f"{note.get('subject', 'task')} ({note.get('task_id', '')}) {status}", style)
+                    await asyncio.sleep(0.1)
+                prompt_status, prompt_value = await prompt_task
+                if prompt_status == "error":
+                    if not isinstance(prompt_value, BaseException):
+                        raise RuntimeError(f"Unexpected prompt error type: {type(prompt_value)}")
+                    raise prompt_value
+                user_input = str(prompt_value)
             except (KeyboardInterrupt, EOFError):
                 interrupted = True
                 render_notice(console, "Interrupted", "Exiting chat.", "yellow")
                 break
+            finally:
+                if prompt_task is not None and prompt_task.done():
+                    with contextlib.suppress(BaseException):
+                        prompt_task.result()
+            for note in read_background_notifications(agent, config):
+                if note.get("type") == "background_task_completed":
+                    status = str(note.get("status", "completed"))
+                    style = "green" if status == "completed" else "yellow"
+                    render_notice(console, "Background Task", f"{note.get('subject', 'task')} ({note.get('task_id', '')}) {status}", style)
             command = parse_chat_command(user_input)
             if command.name == "exit":
                 break
@@ -378,6 +462,27 @@ async def run_chat(config) -> int:
                 continue
             if command.name == "skills":
                 render_state(console, "Skills", {"skills": list_skill_names()})
+                continue
+            if command.name == "tasks":
+                render_state(console, "Tasks", get_state_snapshot("tasks"))
+                continue
+            if command.name in {"agent-bg", "bg"} and len(command.args) >= 2:
+                try:
+                    task_id = await start_background_agent_task(config, command.args[0], " ".join(command.args[1:]))
+                    render_state(console, "Background Task", {"agent": command.args[0], "task_id": task_id})
+                except Exception as exc:
+                    render_notice(console, "Error", str(exc), "red")
+                continue
+            if command.name == "task-output" and command.args:
+                render_state(console, "Task Output", {"task_id": command.args[0], "output": await get_task_output(command.args[0])})
+                continue
+            if command.name == "task-stop" and command.args:
+                render_state(console, "Task Stopped", {"task_id": command.args[0], "stopped": await stop_task(command.args[0])})
+                continue
+            if command.name == "wait" and command.args:
+                task_result = await wait_for_task(command.args[0])
+                append_task_result_to_context(agent, command.args[0], task_result)
+                render_state(console, "Task Wait", {"task_id": command.args[0], **task_result})
                 continue
             if command.name == "sessions":
                 render_session_table(console, await list_sessions())
@@ -437,9 +542,10 @@ async def run_chat(config) -> int:
                 continue
     finally:
         clear_question_handler()
+        await cancel_background_subagent_tasks()
         if interrupted:
             try:
-                await asyncio.wait_for(agent.close(), timeout=0.1)
+                await asyncio.wait_for(agent.close(), timeout=0.05)
             except TimeoutError:
                 pass
         else:

@@ -31,11 +31,17 @@ from open_agent_sdk import (
     init_bundled_skills,
     list_sessions as sdk_list_sessions,
     format_skills_for_prompt,
+    read_mailbox,
     rename_session as sdk_rename_session,
     register_skill,
     SkillDefinition,
+    TaskCreateTool,
+    TaskOutputTool,
+    TaskStopTool,
+    TaskUpdateTool,
     tag_session as sdk_tag_session,
     unregister_skill,
+    write_to_mailbox,
 )
 from open_agent_sdk.types import SDKMessage, SDKMessageType, SDKSystemSubtype
 from open_agent_sdk.providers import CreateMessageParams
@@ -47,6 +53,7 @@ from cock_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeRe
 
 
 _loaded_local_skill_names: set[str] = set()
+_background_subagent_tasks: set[asyncio.Task[None]] = set()
 
 
 def _parse_skill_metadata(text: str) -> tuple[dict[str, str], str]:
@@ -144,6 +151,47 @@ def _ensure_skills_loaded(config: RuntimeConfig) -> None:
 
 def list_skill_names() -> list[str]:
     return sorted(skill.name for skill in get_user_invocable_skills())
+
+
+async def get_task_output(task_id: str) -> str:
+    result = await TaskOutputTool().call({"task_id": task_id}, ToolContext(cwd=".", env={}))
+    return str(result.content)
+
+
+async def stop_task(task_id: str) -> bool:
+    result = await TaskStopTool().call({"task_id": task_id}, ToolContext(cwd=".", env={}))
+    return not result.is_error
+
+
+def read_background_notifications(mailbox: str) -> list[dict[str, Any]]:
+    return read_mailbox(mailbox)
+
+
+async def start_background_agent_task(config: RuntimeConfig, agent_name: str, prompt: str) -> str:
+    result = await _run_subagent(
+        config,
+        {"name": agent_name, "prompt": prompt, "description": agent_name, "run_in_background": True},
+        ToolContext(cwd=config.cwd or ".", env=config.env),
+    )
+    if result.is_error:
+        raise RuntimeError(str(result.content))
+    text = str(result.content)
+    parts = text.split()
+    if len(parts) >= 3 and parts[0] == "Created" and parts[1] == "task":
+        return parts[2]
+    raise RuntimeError(f"Could not parse background task ID from: {text}")
+
+
+async def wait_for_task(task_id: str, poll_interval: float = 0.1, max_polls: int = 600) -> dict[str, object]:
+    for _ in range(max_polls):
+        task = get_all_tasks().get(task_id)
+        if task is None:
+            return {"status": "missing", "output": ""}
+        status = str(task.get("status", ""))
+        if status in {"completed", "cancelled"}:
+            return {"status": status, "output": str(task.get("output", ""))}
+        await asyncio.sleep(poll_interval)
+    return {"status": str(get_all_tasks().get(task_id, {}).get("status", "in_progress")), "output": str(get_all_tasks().get(task_id, {}).get("output", ""))}
 
 
 def _resolve_subagent_skill_request(config: RuntimeConfig, input: dict[str, Any]) -> tuple[str, str] | None:
@@ -284,7 +332,7 @@ def _format_subagent_summary(result_text: str, messages: list[dict[str, Any]]) -
                 elif lower.startswith("next step:"):
                     next_steps.append(line.partition(":")[2].strip())
 
-    lines = [f"Outcome: {'; '.join(outcomes) if outcomes else (result_text or 'None')}" ]
+    lines = [f"Outcome: {'; '.join(outcomes) if outcomes else (result_text or 'No useful output returned')}" ]
     if files:
         lines.append(f"Files: {'; '.join(files)}")
     if commands:
@@ -306,6 +354,43 @@ def _activity_status_event(action: str, tool: str, target: str) -> SDKMessage:
     )
 
 
+def _track_background_task(task: asyncio.Task[None]) -> None:
+    _background_subagent_tasks.add(task)
+    task.add_done_callback(_background_subagent_tasks.discard)
+
+
+async def _create_background_subagent_task(subject: str, description: str, cwd: str, env: dict[str, str]) -> str:
+    result = await TaskCreateTool().call(
+        {"subject": subject, "description": description, "status": "in_progress"},
+        ToolContext(cwd=cwd, env=env),
+    )
+    if result.is_error:
+        raise RuntimeError(f"Failed to create task: {result.content}")
+    text = str(result.content)
+    parts = text.split()
+    if len(parts) >= 3 and parts[0] == "Created" and parts[1] == "task":
+        return parts[2].rstrip(":")
+    raise RuntimeError(f"Could not parse task ID from: {text}")
+
+
+async def _update_background_subagent_task(task_id: str, *, status: str | None = None, output: str | None = None, cwd: str = ".", env: dict[str, str] | None = None) -> None:
+    payload: dict[str, Any] = {"task_id": task_id}
+    if status is not None:
+        payload["status"] = status
+    if output is not None:
+        payload["output"] = output
+    await TaskUpdateTool().call(payload, ToolContext(cwd=cwd, env=env or {}))
+
+
+async def cancel_background_subagent_tasks() -> None:
+    tasks = list(_background_subagent_tasks)
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+
+
 def _looks_like_meta_preamble(text: str) -> bool:
     normalized = text.strip().lower()
     return normalized.startswith("let me ") or normalized.startswith("i'll ") or normalized.startswith("i will ")
@@ -316,10 +401,90 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
     if not prompt:
         return ToolResult(tool_use_id="", content="Error: prompt is required", is_error=True)
 
-    if input.get("run_in_background"):
-        return ToolResult(tool_use_id="", content="Error: background agents are not supported in cock-code yet", is_error=True)
+    skill_request = _resolve_subagent_skill_request(config, input)
+    agent_name, definition = _resolve_agent_definition(config, input)
 
-    if skill_request := _resolve_subagent_skill_request(config, input):
+    if skill_request is None and definition is None:
+        if _effective_agents(config):
+            return ToolResult(tool_use_id="", content=f"Error: unknown agent '{agent_name or 'unspecified'}'", is_error=True)
+        return ToolResult(tool_use_id="", content="Error: no agents configured", is_error=True)
+
+    if input.get("run_in_background"):
+        task_id = await _create_background_subagent_task(
+            str(input.get("name") or input.get("description") or "subagent"),
+            prompt,
+            context.cwd,
+            context.env,
+        )
+        mailbox = str(input.get("mailbox") or "")
+        subject = str(input.get("name") or input.get("description") or "subagent")
+
+        async def run_background() -> None:
+            try:
+                result = await _run_subagent(config, {**input, "run_in_background": False}, context)
+                await _update_background_subagent_task(
+                    task_id,
+                    status="completed" if not result.is_error else "cancelled",
+                    output=str(result.content),
+                    cwd=context.cwd,
+                    env=context.env,
+                )
+                if mailbox:
+                    write_to_mailbox(
+                        mailbox,
+                        {
+                            "type": "background_task_completed",
+                            "task_id": task_id,
+                            "status": "completed" if not result.is_error else "cancelled",
+                            "subject": subject,
+                            "output": str(result.content),
+                        },
+                    )
+            except asyncio.CancelledError:
+                await _update_background_subagent_task(
+                    task_id,
+                    status="cancelled",
+                    output="Error: Cancelled by shutdown",
+                    cwd=context.cwd,
+                    env=context.env,
+                )
+                if mailbox:
+                    write_to_mailbox(
+                        mailbox,
+                        {
+                            "type": "background_task_completed",
+                            "task_id": task_id,
+                            "status": "cancelled",
+                            "subject": subject,
+                            "output": "Error: Cancelled by shutdown",
+                        },
+                    )
+                raise
+            except Exception as exc:
+                await _update_background_subagent_task(
+                    task_id,
+                    status="cancelled",
+                    output=f"Error: {exc}",
+                    cwd=context.cwd,
+                    env=context.env,
+                )
+                if mailbox:
+                    write_to_mailbox(
+                        mailbox,
+                        {
+                            "type": "background_task_completed",
+                            "task_id": task_id,
+                            "status": "cancelled",
+                            "subject": subject,
+                            "output": f"Error: {exc}",
+                        },
+                    )
+
+        task = asyncio.create_task(run_background())
+        _track_background_task(task)
+        return ToolResult(tool_use_id="", content=f"Created task {task_id}")
+
+    if skill_request:
         skill_name, args = skill_request
         working_config = replace(config, persist_session=False)
         working_agent = _create_sdk_agent(working_config, include_runtime_agent_tool=False)
@@ -363,12 +528,8 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
         finally:
             await working_agent.close()
 
-    agent_name, definition = _resolve_agent_definition(config, input)
     if definition is None:
-        if _effective_agents(config):
-            return ToolResult(tool_use_id="", content=f"Error: unknown agent '{agent_name or 'unspecified'}'", is_error=True)
-        return ToolResult(tool_use_id="", content="Error: no agents configured", is_error=True)
-
+        return ToolResult(tool_use_id="", content="Error: no agent definition resolved", is_error=True)
     child_config = _build_subagent_config(config, definition, input, context)
     system_prompt = str(definition.get("prompt") or definition.get("system_prompt") or definition.get("description") or "")
     child_agent = _create_sdk_agent(child_config, include_runtime_agent_tool=False, system_prompt=system_prompt)

@@ -297,6 +297,290 @@ def test_run_chat_shows_tool_list(monkeypatch) -> None:
     assert captured["closed"] is True
 
 
+def test_run_chat_shows_task_list(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/tasks", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "get_state_snapshot", lambda name, agent_name=None: {"task_1": {"status": "completed"}} if name == "tasks" else {})
+    monkeypatch.setattr(cli, "render_state", lambda console, title, data: captured.setdefault("state", (title, data)))
+    monkeypatch.setattr(cli.Prompt, "ask", lambda *args, **kwargs: next(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert captured["state"] == ("Tasks", {"task_1": {"status": "completed"}})
+    assert captured["closed"] is True
+
+
+def test_run_chat_shows_task_output(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/task-output task_1", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    async def fake_get_task_output(task_id: str) -> str:
+        return "done" if task_id == "task_1" else ""
+
+    monkeypatch.setattr(cli, "get_task_output", fake_get_task_output)
+    monkeypatch.setattr(cli, "render_state", lambda console, title, data: captured.setdefault("state", (title, data)))
+    monkeypatch.setattr(cli.Prompt, "ask", lambda *args, **kwargs: next(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert captured["state"] == ("Task Output", {"task_id": "task_1", "output": "done"})
+    assert captured["closed"] is True
+
+
+def test_run_chat_stops_task(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/task-stop task_1", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    async def fake_stop_task(task_id: str) -> bool:
+        captured.setdefault("stopped", task_id)
+        return True
+
+    monkeypatch.setattr(cli, "stop_task", fake_stop_task)
+    monkeypatch.setattr(cli, "render_state", lambda console, title, data: captured.setdefault("state", (title, data)))
+    monkeypatch.setattr(cli.Prompt, "ask", lambda *args, **kwargs: next(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert captured["stopped"] == "task_1"
+    assert captured["state"] == ("Task Stopped", {"task_id": "task_1", "stopped": True})
+    assert captured["closed"] is True
+
+
+def test_run_chat_shows_background_completion_notifications(monkeypatch) -> None:
+    prompts = iter(["/exit"])
+    notices: list[tuple[str, str, str]] = []
+
+    class FakeAgent:
+        def get_session_id(self) -> str:
+            return "session-1"
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(
+        cli,
+        "read_background_notifications",
+        lambda agent, config: [
+            {
+                "type": "background_task_completed",
+                "task_id": "task_1",
+                "status": "completed",
+                "subject": "builder",
+            }
+        ],
+    )
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(cli.Prompt, "ask", lambda *args, **kwargs: next(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert notices[0] == ("Background Task", "builder (task_1) completed", "green")
+
+
+def test_run_chat_shows_background_completion_while_waiting_for_input(monkeypatch) -> None:
+    import threading
+
+    notices: list[tuple[str, str, str]] = []
+    release_prompt = threading.Event()
+    observed: dict[str, object] = {"notified_before_return": False}
+
+    class FakeAgent:
+        def get_session_id(self) -> str:
+            return "session-1"
+
+        async def close(self) -> None:
+            return None
+
+    def fake_prompt(_label: str) -> str:
+        observed["notified_before_return"] = release_prompt.wait(0.2)
+        return "/exit"
+
+    notification_calls = iter([
+        [{"type": "background_task_completed", "task_id": "task_1", "status": "completed", "subject": "builder"}],
+        [],
+    ])
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    def fake_read_notifications(agent, config):
+        notes = next(notification_calls, [])
+        if notes:
+            release_prompt.set()
+        return notes
+
+    monkeypatch.setattr(cli, "read_background_notifications", fake_read_notifications)
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(cli.Prompt, "ask", fake_prompt)
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert observed["notified_before_return"] is True
+    assert notices[0] == ("Background Task", "builder (task_1) completed", "green")
+
+
+def test_run_chat_starts_background_agent_task(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/agent-bg reviewer check last commit", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_start_background_agent_task(config, agent_name: str, prompt: str) -> str:
+        captured["agent_name"] = agent_name
+        captured["prompt"] = prompt
+        return "task_1"
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "start_background_agent_task", fake_start_background_agent_task)
+    monkeypatch.setattr(cli, "render_state", lambda console, title, data: captured.setdefault("state", (title, data)))
+    monkeypatch.setattr(cli.Prompt, "ask", lambda *args, **kwargs: next(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert captured["agent_name"] == "reviewer"
+    assert captured["prompt"] == "check last commit"
+    assert captured["state"] == ("Background Task", {"agent": "reviewer", "task_id": "task_1"})
+    assert captured["closed"] is True
+
+
+def test_run_chat_starts_background_agent_task_with_bg_alias(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/bg reviewer check last commit", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_start_background_agent_task(config, agent_name: str, prompt: str) -> str:
+        captured["agent_name"] = agent_name
+        captured["prompt"] = prompt
+        return "task_1"
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "start_background_agent_task", fake_start_background_agent_task)
+    monkeypatch.setattr(cli, "render_state", lambda console, title, data: captured.setdefault("state", (title, data)))
+    monkeypatch.setattr(cli.Prompt, "ask", lambda *args, **kwargs: next(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert captured["agent_name"] == "reviewer"
+    assert captured["prompt"] == "check last commit"
+    assert captured["state"] == ("Background Task", {"agent": "reviewer", "task_id": "task_1"})
+    assert captured["closed"] is True
+
+
+def test_run_chat_waits_for_task_when_requested(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/wait task_1", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_wait_for_task(task_id: str) -> dict[str, object]:
+        captured["task_id"] = task_id
+        return {"status": "completed", "output": "done"}
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "wait_for_task", fake_wait_for_task)
+    monkeypatch.setattr(cli, "render_state", lambda console, title, data: captured.setdefault("state", (title, data)))
+    monkeypatch.setattr(cli.Prompt, "ask", lambda *args, **kwargs: next(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert captured["task_id"] == "task_1"
+    assert captured["state"] == ("Task Wait", {"task_id": "task_1", "status": "completed", "output": "done"})
+    assert captured["closed"] is True
+
+
+def test_run_chat_wait_injects_completed_task_output_into_context(monkeypatch) -> None:
+    prompts = iter(["/wait task_1", "/exit"])
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history: list[dict[str, object]] = []
+
+        async def close(self) -> None:
+            return None
+
+    agent = FakeAgent()
+
+    async def fake_wait_for_task(task_id: str) -> dict[str, object]:
+        return {"status": "completed", "output": "Outcome: review complete"}
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: agent)
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "wait_for_task", fake_wait_for_task)
+    monkeypatch.setattr(cli, "render_state", lambda console, title, data: None)
+    monkeypatch.setattr(cli.Prompt, "ask", lambda *args, **kwargs: next(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert agent._history[-1] == {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Background task task_1 result:\n\nOutcome: review complete"}],
+    }
+
+
+def test_run_chat_handles_background_agent_task_error(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/agent-bg any check last commit", "/exit"])
+    notices: list[tuple[str, str, str]] = []
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_start_background_agent_task(config, agent_name: str, prompt: str) -> str:
+        raise RuntimeError("Error: unknown agent 'any'")
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "start_background_agent_task", fake_start_background_agent_task)
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(cli.Prompt, "ask", lambda *args, **kwargs: next(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert notices[0] == ("Error", "Error: unknown agent 'any'", "red")
+    assert captured["closed"] is True
+
+
 def test_run_chat_shows_skill_list(monkeypatch) -> None:
     captured: dict[str, object] = {}
     prompts = iter(["/skills", "/exit"])
@@ -454,6 +738,12 @@ def test_run_chat_help_renders_available_commands(monkeypatch) -> None:
     assert "Help" in output
     assert "/compact" in output
     assert "/skills" in output
+    assert "/tasks" in output
+    assert "/bg" in output
+    assert "/agent-bg" in output
+    assert "/wait" in output
+    assert "/task-output" in output
+    assert "/task-stop" in output
     assert "/exit" in output
     assert "/status" in output
 
