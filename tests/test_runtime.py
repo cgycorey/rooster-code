@@ -7,7 +7,7 @@ import pytest
 from open_agent_sdk import SDKMessage, SDKMessageType, ToolContext, ToolResult
 from open_agent_sdk.providers import CreateMessageResponse
 from open_agent_sdk.skills import clear_skills, get_skill
-from open_agent_sdk.tools import clear_mailboxes, clear_tasks, get_all_tasks, read_mailbox
+from open_agent_sdk.tools import clear_tasks, get_all_tasks
 from cock_code.config import RuntimeConfig
 
 from cock_code.runtime import build_agent_options, create_runtime_agent
@@ -30,13 +30,6 @@ def reset_sdk_tasks():
     clear_tasks()
     yield
     clear_tasks()
-
-
-@pytest.fixture(autouse=True)
-def reset_sdk_mailboxes():
-    clear_mailboxes()
-    yield
-    clear_mailboxes()
 
 
 def test_build_agent_options_uses_explicit_api_fields() -> None:
@@ -557,7 +550,7 @@ def test_run_subagent_background_marks_failure_and_output(monkeypatch) -> None:
     asyncio.run(run_case())
 
 
-def test_run_subagent_background_writes_completion_notification_to_mailbox(monkeypatch) -> None:
+def test_run_subagent_background_surfaces_completion_via_task_store(monkeypatch) -> None:
     class FakeChildAgent:
         async def prompt(self, prompt: str):
             from open_agent_sdk.types import QueryResult
@@ -573,6 +566,7 @@ def test_run_subagent_background_writes_completion_notification_to_mailbox(monke
             return None
 
     monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    runtime._notified_task_ids.clear()
 
     async def run_case():
         result = await runtime._run_subagent(
@@ -582,7 +576,6 @@ def test_run_subagent_background_writes_completion_notification_to_mailbox(monke
                 "prompt": "do work",
                 "description": "builder",
                 "run_in_background": True,
-                "mailbox": "session-1",
             },
             ToolContext(cwd="/tmp/project", env={}),
         )
@@ -596,16 +589,13 @@ def test_run_subagent_background_writes_completion_notification_to_mailbox(monke
 
     asyncio.run(run_case())
 
-    messages = read_mailbox("session-1")
-    assert messages == [
-        {
-            "type": "background_task_completed",
-            "task_id": "task_1",
-            "status": "completed",
-            "subject": "builder",
-            "output": "Outcome: background done",
-        }
-    ]
+    notifications = runtime.read_background_notifications()
+    assert len(notifications) == 1
+    note = notifications[0]
+    assert note["type"] == "background_task_completed"
+    assert note["status"] == "completed"
+    assert note["subject"] == "builder"
+    assert "Outcome: background done" in str(note["output"])
 
 
 def test_run_subagent_background_does_not_create_task_for_unknown_agent() -> None:

@@ -384,12 +384,13 @@ def test_run_chat_shows_background_completion_notifications(monkeypatch) -> None
     monkeypatch.setattr(
         cli,
         "read_background_notifications",
-        lambda agent, config: [
+        lambda: [
             {
                 "type": "background_task_completed",
                 "task_id": "task_1",
                 "status": "completed",
                 "subject": "builder",
+                "output": "Outcome: done",
             }
         ],
     )
@@ -399,7 +400,7 @@ def test_run_chat_shows_background_completion_notifications(monkeypatch) -> None
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
     assert exit_code == 0
-    assert notices[0] == ("Background Task", "builder (task_1) completed", "green")
+    assert notices[0] == ("Background Task", "builder (task_1) completed\nOutcome: done", "green")
 
 
 def test_run_chat_shows_background_completion_while_waiting_for_input(monkeypatch) -> None:
@@ -421,13 +422,13 @@ def test_run_chat_shows_background_completion_while_waiting_for_input(monkeypatc
         return "/exit"
 
     notification_calls = iter([
-        [{"type": "background_task_completed", "task_id": "task_1", "status": "completed", "subject": "builder"}],
+        [{"type": "background_task_completed", "task_id": "task_1", "status": "completed", "subject": "builder", "output": "Outcome: done"}],
         [],
     ])
 
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
-    def fake_read_notifications(agent, config):
+    def fake_read_notifications():
         notes = next(notification_calls, [])
         if notes:
             release_prompt.set()
@@ -441,7 +442,7 @@ def test_run_chat_shows_background_completion_while_waiting_for_input(monkeypatc
 
     assert exit_code == 0
     assert observed["notified_before_return"] is True
-    assert notices[0] == ("Background Task", "builder (task_1) completed", "green")
+    assert notices[0] == ("Background Task", "builder (task_1) completed\nOutcome: done", "green")
 
 
 def test_run_chat_starts_background_agent_task(monkeypatch) -> None:

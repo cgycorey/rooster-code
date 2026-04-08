@@ -214,11 +214,10 @@ def append_task_result_to_context(agent, task_id: str, task_result: dict[str, ob
     )
 
 
-def read_background_notifications(agent, config) -> list[dict[str, object]]:
+def read_background_notifications() -> list[dict[str, object]]:
     from cock_code.runtime import read_background_notifications as runtime_read_background_notifications
 
-    mailbox = config.resume or config.session_id or getattr(agent, "get_session_id", lambda: "default")()
-    return runtime_read_background_notifications(str(mailbox))
+    return runtime_read_background_notifications()
 
 
 async def cancel_background_subagent_tasks() -> None:
@@ -395,11 +394,17 @@ async def run_chat(config) -> int:
             try:
                 prompt_task = asyncio.create_task(asyncio.to_thread(prompt_once))
                 while not prompt_task.done():
-                    for note in read_background_notifications(agent, config):
+                    for note in read_background_notifications():
                         if note.get("type") == "background_task_completed":
                             status = str(note.get("status", "completed"))
                             style = "green" if status == "completed" else "yellow"
-                            render_notice(console, "Background Task", f"{note.get('subject', 'task')} ({note.get('task_id', '')}) {status}", style)
+                            output = str(note.get("output", ""))
+                            subject = str(note.get("subject", "task"))
+                            task_id = str(note.get("task_id", ""))
+                            lines = [f"{subject} ({task_id}) {status}"]
+                            if output:
+                                lines.append(output)
+                            render_notice(console, "Background Task", "\n".join(lines), style)
                     await asyncio.sleep(0.1)
                 prompt_status, prompt_value = await prompt_task
                 if prompt_status == "error":
@@ -415,11 +420,17 @@ async def run_chat(config) -> int:
                 if prompt_task is not None and prompt_task.done():
                     with contextlib.suppress(BaseException):
                         prompt_task.result()
-            for note in read_background_notifications(agent, config):
+            for note in read_background_notifications():
                 if note.get("type") == "background_task_completed":
                     status = str(note.get("status", "completed"))
                     style = "green" if status == "completed" else "yellow"
-                    render_notice(console, "Background Task", f"{note.get('subject', 'task')} ({note.get('task_id', '')}) {status}", style)
+                    output = str(note.get("output", ""))
+                    subject = str(note.get("subject", "task"))
+                    task_id = str(note.get("task_id", ""))
+                    lines = [f"{subject} ({task_id}) {status}"]
+                    if output:
+                        lines.append(output)
+                    render_notice(console, "Background Task", "\n".join(lines), style)
             command = parse_chat_command(user_input)
             if command.name == "exit":
                 break

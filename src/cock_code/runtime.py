@@ -31,7 +31,6 @@ from open_agent_sdk import (
     init_bundled_skills,
     list_sessions as sdk_list_sessions,
     format_skills_for_prompt,
-    read_mailbox,
     rename_session as sdk_rename_session,
     register_skill,
     SkillDefinition,
@@ -41,11 +40,9 @@ from open_agent_sdk import (
     TaskUpdateTool,
     tag_session as sdk_tag_session,
     unregister_skill,
-    write_to_mailbox,
 )
 from open_agent_sdk.types import SDKMessage, SDKMessageType, SDKSystemSubtype
 from open_agent_sdk.providers import CreateMessageParams
-from open_agent_sdk.tools import _mailboxes
 from open_agent_sdk.tools.skill_tool import SkillTool
 
 from cock_code.config import RuntimeConfig
@@ -54,6 +51,7 @@ from cock_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeRe
 
 _loaded_local_skill_names: set[str] = set()
 _background_subagent_tasks: set[asyncio.Task[None]] = set()
+_notified_task_ids: set[str] = set()
 
 
 def _parse_skill_metadata(text: str) -> tuple[dict[str, str], str]:
@@ -163,8 +161,21 @@ async def stop_task(task_id: str) -> bool:
     return not result.is_error
 
 
-def read_background_notifications(mailbox: str) -> list[dict[str, Any]]:
-    return read_mailbox(mailbox)
+def read_background_notifications() -> list[dict[str, object]]:
+    notifications: list[dict[str, object]] = []
+    all_tasks = get_all_tasks()
+    for task_id, task in all_tasks.items():
+        status = str(task.get("status", ""))
+        if status in {"completed", "cancelled"} and task_id not in _notified_task_ids:
+            _notified_task_ids.add(task_id)
+            notifications.append({
+                "type": "background_task_completed",
+                "task_id": task_id,
+                "status": status,
+                "subject": str(task.get("subject", task_id)),
+                "output": str(task.get("output", "")),
+            })
+    return notifications
 
 
 async def start_background_agent_task(config: RuntimeConfig, agent_name: str, prompt: str) -> str:
@@ -416,8 +427,6 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
             context.cwd,
             context.env,
         )
-        mailbox = str(input.get("mailbox") or "")
-        subject = str(input.get("name") or input.get("description") or "subagent")
 
         async def run_background() -> None:
             try:
@@ -429,17 +438,6 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
                     cwd=context.cwd,
                     env=context.env,
                 )
-                if mailbox:
-                    write_to_mailbox(
-                        mailbox,
-                        {
-                            "type": "background_task_completed",
-                            "task_id": task_id,
-                            "status": "completed" if not result.is_error else "cancelled",
-                            "subject": subject,
-                            "output": str(result.content),
-                        },
-                    )
             except asyncio.CancelledError:
                 await _update_background_subagent_task(
                     task_id,
@@ -448,17 +446,6 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
                     cwd=context.cwd,
                     env=context.env,
                 )
-                if mailbox:
-                    write_to_mailbox(
-                        mailbox,
-                        {
-                            "type": "background_task_completed",
-                            "task_id": task_id,
-                            "status": "cancelled",
-                            "subject": subject,
-                            "output": "Error: Cancelled by shutdown",
-                        },
-                    )
                 raise
             except Exception as exc:
                 await _update_background_subagent_task(
@@ -468,17 +455,6 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
                     cwd=context.cwd,
                     env=context.env,
                 )
-                if mailbox:
-                    write_to_mailbox(
-                        mailbox,
-                        {
-                            "type": "background_task_completed",
-                            "task_id": task_id,
-                            "status": "cancelled",
-                            "subject": subject,
-                            "output": f"Error: {exc}",
-                        },
-                    )
 
         task = asyncio.create_task(run_background())
         _track_background_task(task)
@@ -1028,9 +1004,10 @@ def get_state_snapshot(name: str, agent_name: str | None = None):
     if name == "teams":
         return get_all_teams()
     if name == "mailboxes":
+        from open_agent_sdk.tools import _mailboxes as _sdk_mailboxes
         if agent_name is not None:
-            return _mailboxes.get(agent_name, [])
-        return _mailboxes
+            return _sdk_mailboxes.get(agent_name, [])
+        return dict(_sdk_mailboxes)
     if name == "config":
         return get_config()
     if name == "cron":
