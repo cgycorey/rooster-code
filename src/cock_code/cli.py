@@ -405,6 +405,7 @@ async def run_chat(config) -> int:
                             if output:
                                 lines.append(output)
                             render_notice(console, "Background Task", "\n".join(lines), style)
+                            append_task_result_to_context(agent, task_id, {"status": status, "output": output})
                     await asyncio.sleep(0.1)
                 prompt_status, prompt_value = await prompt_task
                 if prompt_status == "error":
@@ -431,6 +432,7 @@ async def run_chat(config) -> int:
                     if output:
                         lines.append(output)
                     render_notice(console, "Background Task", "\n".join(lines), style)
+                    append_task_result_to_context(agent, task_id, {"status": status, "output": output})
             command = parse_chat_command(user_input)
             if command.name == "exit":
                 break
@@ -493,6 +495,8 @@ async def run_chat(config) -> int:
             if command.name == "wait" and command.args:
                 task_result = await wait_for_task(command.args[0])
                 append_task_result_to_context(agent, command.args[0], task_result)
+                from cock_code.runtime import _notified_task_ids
+                _notified_task_ids.add(command.args[0])
                 render_state(console, "Task Wait", {"task_id": command.args[0], **task_result})
                 continue
             if command.name == "sessions":
