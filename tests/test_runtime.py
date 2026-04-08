@@ -765,7 +765,7 @@ def test_run_subagent_routes_review_like_prompt_to_review_skill(monkeypatch) -> 
     assert "Outcome: reviewed the changes" in str(result.content)
 
 
-def test_run_subagent_rejects_meta_review_output_from_delegated_skill(monkeypatch) -> None:
+def test_run_subagent_passes_through_review_output_starting_with_let_me(monkeypatch) -> None:
     class FakeChildAgent:
         async def prompt(self, prompt: str, overrides=None):
             from open_agent_sdk.types import QueryResult
@@ -805,8 +805,8 @@ def test_run_subagent_rejects_meta_review_output_from_delegated_skill(monkeypatc
         )
     )
 
-    assert result.is_error is True
-    assert "did not complete" in str(result.content).lower()
+    assert result.is_error is False
+    assert "Let me check" in str(result.content)
 
 
 def test_create_runtime_agent_replaces_placeholder_agent_tool_after_initialize(monkeypatch) -> None:

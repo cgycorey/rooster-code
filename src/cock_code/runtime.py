@@ -320,11 +320,14 @@ def _format_subagent_summary(result_text: str, messages: list[dict[str, Any]]) -
     open_issues: list[str] = []
     next_steps: list[str] = []
     findings: list[str] = []
+    first_assistant_text: str = ""
 
     for message in messages:
         if str(message.get("role", "")) != "assistant":
             continue
         for text in _extract_text_blocks(message):
+            if not first_assistant_text and text.strip():
+                first_assistant_text = text.strip()
             for raw_line in text.splitlines():
                 line = raw_line.strip()
                 if not line:
@@ -343,7 +346,8 @@ def _format_subagent_summary(result_text: str, messages: list[dict[str, Any]]) -
                 elif lower.startswith("next step:"):
                     next_steps.append(line.partition(":")[2].strip())
 
-    lines = [f"Outcome: {'; '.join(outcomes) if outcomes else (result_text or 'No useful output returned')}" ]
+    fallback = result_text or first_assistant_text or "No useful output returned"
+    lines = [f"Outcome: {'; '.join(outcomes) if outcomes else fallback}" ]
     if files:
         lines.append(f"Files: {'; '.join(files)}")
     if commands:
@@ -402,10 +406,6 @@ async def cancel_background_subagent_tasks() -> None:
             await task
 
 
-def _looks_like_meta_preamble(text: str) -> bool:
-    normalized = text.strip().lower()
-    return normalized.startswith("let me ") or normalized.startswith("i'll ") or normalized.startswith("i will ")
-
 
 async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: ToolContext) -> ToolResult:
     prompt = str(input.get("prompt", "")).strip()
@@ -431,10 +431,13 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
         async def run_background() -> None:
             try:
                 result = await _run_subagent(config, {**input, "run_in_background": False}, context)
+                output = str(result.content)
+                if result.is_error:
+                    output = f"Error: {output}"
                 await _update_background_subagent_task(
                     task_id,
-                    status="completed" if not result.is_error else "cancelled",
-                    output=str(result.content),
+                    status="completed",
+                    output=output,
                     cwd=context.cwd,
                     env=context.env,
                 )
@@ -497,8 +500,6 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
                 query_result = await working_agent.prompt(prompt_text, overrides or None)
 
             text = query_result.text.strip() if query_result.text else ""
-            if payload.get("commandName") == "review" and _looks_like_meta_preamble(text):
-                return ToolResult(tool_use_id="", content="Error: delegated review did not complete", is_error=True)
             summary = _format_subagent_summary(text, query_result.messages)
             return ToolResult(tool_use_id="", content=summary or f'Skill "{skill_name}" completed with no text output.')
         finally:
@@ -526,7 +527,8 @@ async def _stream_subagent(config: RuntimeConfig, input: dict[str, Any], context
         return
 
     if input.get("run_in_background"):
-        yield SDKMessage(type=SDKMessageType.RESULT, text="Error: background agents are not supported in cock-code yet", is_error=True)
+        result = await _run_subagent(config, input, context)
+        yield SDKMessage(type=SDKMessageType.RESULT, text=str(result.content), is_error=result.is_error)
         return
 
     if skill_request := _resolve_subagent_skill_request(config, input):
