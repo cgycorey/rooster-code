@@ -198,6 +198,20 @@ async def wait_for_task(task_id: str) -> dict[str, object]:
     return await runtime_wait_for_task(task_id)
 
 
+def _render_task_notification(console, agent, note: dict[str, object]) -> None:
+    status = str(note.get("status", "completed"))
+    style = "green" if status == "completed" else "yellow"
+    output = str(note.get("output", ""))
+    subject = str(note.get("subject", "task"))
+    task_id = str(note.get("task_id", ""))
+    display_output = output[:500] + ("..." if len(output) > 500 else "")
+    lines = [f"{subject} ({task_id}) {status}"]
+    if display_output:
+        lines.append(display_output)
+    render_notice(console, "Background Task", "\n".join(lines), style)
+    append_task_result_to_context(agent, task_id, {"status": status, "output": output})
+
+
 def append_task_result_to_context(agent, task_id: str, task_result: dict[str, object]) -> None:
     output = str(task_result.get("output", "")).strip()
     status = str(task_result.get("status", "")).strip()
@@ -396,16 +410,7 @@ async def run_chat(config) -> int:
                 while not prompt_task.done():
                     for note in read_background_notifications():
                         if note.get("type") == "background_task_completed":
-                            status = str(note.get("status", "completed"))
-                            style = "green" if status == "completed" else "yellow"
-                            output = str(note.get("output", ""))
-                            subject = str(note.get("subject", "task"))
-                            task_id = str(note.get("task_id", ""))
-                            lines = [f"{subject} ({task_id}) {status}"]
-                            if output:
-                                lines.append(output)
-                            render_notice(console, "Background Task", "\n".join(lines), style)
-                            append_task_result_to_context(agent, task_id, {"status": status, "output": output})
+                            _render_task_notification(console, agent, note)
                     await asyncio.sleep(0.1)
                 prompt_status, prompt_value = await prompt_task
                 if prompt_status == "error":
@@ -423,16 +428,7 @@ async def run_chat(config) -> int:
                         prompt_task.result()
             for note in read_background_notifications():
                 if note.get("type") == "background_task_completed":
-                    status = str(note.get("status", "completed"))
-                    style = "green" if status == "completed" else "yellow"
-                    output = str(note.get("output", ""))
-                    subject = str(note.get("subject", "task"))
-                    task_id = str(note.get("task_id", ""))
-                    lines = [f"{subject} ({task_id}) {status}"]
-                    if output:
-                        lines.append(output)
-                    render_notice(console, "Background Task", "\n".join(lines), style)
-                    append_task_result_to_context(agent, task_id, {"status": status, "output": output})
+                    _render_task_notification(console, agent, note)
             command = parse_chat_command(user_input)
             if command.name == "exit":
                 break
