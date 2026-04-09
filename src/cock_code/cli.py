@@ -232,8 +232,14 @@ def append_task_result_to_context(agent, task_id: str, task_result: dict[str, ob
         return
     history.append(
         {
+            "role": "user",
+            "content": [{"type": "text", "text": f"[Background task {task_id} completed]\n\n{output}"}],
+        }
+    )
+    history.append(
+        {
             "role": "assistant",
-            "content": [{"type": "text", "text": f"Background task {task_id} result:\n\n{output}"}],
+            "content": [{"type": "text", "text": f"Received background task {task_id} result. Ready to continue."}],
         }
     )
 
