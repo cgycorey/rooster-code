@@ -198,6 +198,9 @@ async def wait_for_task(task_id: str) -> dict[str, object]:
     return await runtime_wait_for_task(task_id)
 
 
+_pending_task_results: list[tuple[str, dict[str, object]]] = []
+
+
 def _render_task_notification(console, agent, note: dict[str, object]) -> None:
     status = str(note.get("status", "completed"))
     style = "green" if status == "completed" else "yellow"
@@ -209,7 +212,7 @@ def _render_task_notification(console, agent, note: dict[str, object]) -> None:
     if display_output:
         lines.append(display_output)
     render_notice(console, "Background Task", "\n".join(lines), style)
-    append_task_result_to_context(agent, task_id, {"status": status, "output": output})
+    _pending_task_results.append((task_id, {"status": status, "output": output}))
 
 
 def append_task_result_to_context(agent, task_id: str, task_result: dict[str, object]) -> None:
@@ -226,6 +229,12 @@ def append_task_result_to_context(agent, task_id: str, task_result: dict[str, ob
             "content": [{"type": "text", "text": f"Background task {task_id} result:\n\n{output}"}],
         }
     )
+
+
+def _flush_pending_task_results(agent) -> None:
+    for task_id, result in _pending_task_results:
+        append_task_result_to_context(agent, task_id, result)
+    _pending_task_results.clear()
 
 
 def read_background_notifications() -> list[dict[str, object]]:
@@ -490,9 +499,9 @@ async def run_chat(config) -> int:
                 continue
             if command.name == "wait" and command.args:
                 task_result = await wait_for_task(command.args[0])
-                append_task_result_to_context(agent, command.args[0], task_result)
                 from cock_code.runtime import _notified_task_ids
                 _notified_task_ids.add(command.args[0])
+                _pending_task_results.append((command.args[0], task_result))
                 render_state(console, "Task Wait", {"task_id": command.args[0], **task_result})
                 continue
             if command.name == "sessions":
@@ -547,6 +556,7 @@ async def run_chat(config) -> int:
                 continue
             
             try:
+                _flush_pending_task_results(agent)
                 await render_event_stream(console, agent.query(user_input), omit_duplicate_result=True, show_activity_trace=True)
             except Exception as exc:
                 render_notice(console, "Error", str(exc), "red")

@@ -551,10 +551,7 @@ def test_run_chat_wait_injects_completed_task_output_into_context(monkeypatch) -
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
     assert exit_code == 0
-    assert agent._history[-1] == {
-        "role": "assistant",
-        "content": [{"type": "text", "text": "Background task task_1 result:\n\nOutcome: review complete"}],
-    }
+    assert cli._pending_task_results[-1] == ("task_1", {"status": "completed", "output": "Outcome: review complete"})
 
 
 def test_run_chat_handles_background_agent_task_error(monkeypatch) -> None:
