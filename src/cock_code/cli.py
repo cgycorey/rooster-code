@@ -5,6 +5,8 @@ import asyncio
 import contextlib
 import os
 import signal
+import sys
+import threading
 from urllib.parse import urlencode
 
 import httpx
@@ -198,7 +200,8 @@ async def wait_for_task(task_id: str) -> dict[str, object]:
     return await runtime_wait_for_task(task_id)
 
 
-_pending_task_results: list[tuple[str, dict[str, object]]] = []
+_console_lock = threading.Lock()
+_prompt_label = "cock-code> "
 
 
 def _render_task_notification(console, agent, note: dict[str, object]) -> None:
@@ -211,8 +214,12 @@ def _render_task_notification(console, agent, note: dict[str, object]) -> None:
     lines = [f"{subject} ({task_id}) {status}"]
     if display_output:
         lines.append(display_output)
-    render_notice(console, "Background Task", "\n".join(lines), style)
-    _pending_task_results.append((task_id, {"status": status, "output": output}))
+    with _console_lock:
+        sys.stdout.write("\n")
+        render_notice(console, "Background Task", "\n".join(lines), style)
+        sys.stdout.write(_prompt_label)
+        sys.stdout.flush()
+    append_task_result_to_context(agent, task_id, {"status": status, "output": output})
 
 
 def append_task_result_to_context(agent, task_id: str, task_result: dict[str, object]) -> None:
@@ -230,11 +237,6 @@ def append_task_result_to_context(agent, task_id: str, task_result: dict[str, ob
         }
     )
 
-
-def _flush_pending_task_results(agent) -> None:
-    for task_id, result in _pending_task_results:
-        append_task_result_to_context(agent, task_id, result)
-    _pending_task_results.clear()
 
 
 def read_background_notifications() -> list[dict[str, object]]:
@@ -402,7 +404,10 @@ async def run_chat(config) -> int:
 
     def prompt_once() -> tuple[str, str | BaseException]:
         try:
-            return ("ok", Prompt.ask("cock-code"))
+            with _console_lock:
+                sys.stdout.write(_prompt_label)
+                sys.stdout.flush()
+            return ("ok", input())
         except (KeyboardInterrupt, EOFError) as exc:
             return ("error", exc)
 
@@ -411,15 +416,21 @@ async def run_chat(config) -> int:
 
     set_question_handler(question_handler)
 
+    def _poll_and_render_notifications() -> bool:
+        rendered = False
+        for note in read_background_notifications():
+            if note.get("type") == "background_task_completed":
+                _render_task_notification(console, agent, note)
+                rendered = True
+        return rendered
+
     try:
         while True:
             prompt_task: asyncio.Task[object] | None = None
             try:
                 prompt_task = asyncio.create_task(asyncio.to_thread(prompt_once))
                 while not prompt_task.done():
-                    for note in read_background_notifications():
-                        if note.get("type") == "background_task_completed":
-                            _render_task_notification(console, agent, note)
+                    _poll_and_render_notifications()
                     await asyncio.sleep(0.1)
                 prompt_status, prompt_value = await prompt_task
                 if prompt_status == "error":
@@ -435,9 +446,7 @@ async def run_chat(config) -> int:
                 if prompt_task is not None and prompt_task.done():
                     with contextlib.suppress(BaseException):
                         prompt_task.result()
-            for note in read_background_notifications():
-                if note.get("type") == "background_task_completed":
-                    _render_task_notification(console, agent, note)
+            _poll_and_render_notifications()
             command = parse_chat_command(user_input)
             if command.name == "exit":
                 break
@@ -501,7 +510,7 @@ async def run_chat(config) -> int:
                 task_result = await wait_for_task(command.args[0])
                 from cock_code.runtime import _notified_task_ids
                 _notified_task_ids.add(command.args[0])
-                _pending_task_results.append((command.args[0], task_result))
+                append_task_result_to_context(agent, command.args[0], task_result)
                 render_state(console, "Task Wait", {"task_id": command.args[0], **task_result})
                 continue
             if command.name == "sessions":
@@ -556,7 +565,6 @@ async def run_chat(config) -> int:
                 continue
             
             try:
-                _flush_pending_task_results(agent)
                 await render_event_stream(console, agent.query(user_input), omit_duplicate_result=True, show_activity_trace=True)
             except Exception as exc:
                 render_notice(console, "Error", str(exc), "red")

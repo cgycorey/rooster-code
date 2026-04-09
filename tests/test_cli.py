@@ -296,7 +296,8 @@ def test_run_chat_renders_tool_table_for_tools_command(monkeypatch) -> None:
 
     prompts = iter(["/tools", "/exit"])
 
-    monkeypatch.setattr(cli, "Prompt", type("PromptStub", (), {"ask": staticmethod(lambda _label: next(prompts))}))
+    import builtins
+    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "list_tool_names", lambda: ["Read", "Write"])
