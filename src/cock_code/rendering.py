@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from collections.abc import Mapping
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, cast
@@ -185,9 +187,12 @@ async def render_event_stream(
     events: AsyncIterator[SDKMessage],
     omit_duplicate_result: bool = False,
     show_activity_trace: bool = False,
+    abort_signal: asyncio.Event | None = None,
 ) -> None:
     last_assistant_text = ""
     async for event in events:
+        if abort_signal is not None and abort_signal.is_set():
+            break
         if show_activity_trace:
             activity_trace = event.system_data.get("activity_trace", [])
             if isinstance(activity_trace, list):

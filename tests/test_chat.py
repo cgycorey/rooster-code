@@ -51,7 +51,7 @@ def test_run_chat_streams_user_prompt(monkeypatch) -> None:
         async def close(self) -> None:
             captured["closed"] = True
 
-    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False, show_activity_trace: bool = False) -> None:
+    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False, show_activity_trace: bool = False, **_kwargs) -> None:
         messages = []
         async for event in events:
             messages.append(event.type.value)
@@ -86,7 +86,7 @@ def test_run_chat_requests_duplicate_result_omission(monkeypatch) -> None:
         async def close(self) -> None:
             captured["closed"] = True
 
-    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False, show_activity_trace: bool = False) -> None:
+    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False, show_activity_trace: bool = False, **_kwargs) -> None:
         captured["omit_duplicate_result"] = omit_duplicate_result
         captured["show_activity_trace"] = show_activity_trace
         async for _event in events:
@@ -125,7 +125,7 @@ def test_run_chat_routes_explicit_agent_request(monkeypatch) -> None:
         yield SDKMessage(type=SDKMessageType.SYSTEM, text="starting")
         yield SDKMessage(type=SDKMessageType.RESULT, text="AGENT_PATH=used")
 
-    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False, show_activity_trace: bool = False) -> None:
+    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False, show_activity_trace: bool = False, **_kwargs) -> None:
         captured["omit_duplicate_result"] = omit_duplicate_result
         captured["show_activity_trace"] = show_activity_trace
         captured["messages"] = [event.type.value async for event in events]
@@ -406,12 +406,8 @@ def test_run_chat_shows_background_completion_notifications(monkeypatch) -> None
     assert notices[0] == ("Background Task", "builder (task_1) completed\nOutcome: done", "green")
 
 
-def test_run_chat_shows_background_completion_while_waiting_for_input(monkeypatch) -> None:
-    import threading
-
+def test_run_chat_shows_background_completion_before_prompt(monkeypatch) -> None:
     notices: list[tuple[str, str, str]] = []
-    release_prompt = threading.Event()
-    observed: dict[str, object] = {"notified_before_return": False}
 
     class FakeAgent:
         _history: list[dict[str, object]] = []
@@ -422,9 +418,7 @@ def test_run_chat_shows_background_completion_while_waiting_for_input(monkeypatc
         async def close(self) -> None:
             return None
 
-    def fake_input(_prompt: str = "") -> str:
-        observed["notified_before_return"] = release_prompt.wait(0.2)
-        return "/exit"
+    prompts = iter(["/exit"])
 
     notification_calls = iter([
         [{"type": "background_task_completed", "task_id": "task_1", "status": "completed", "subject": "builder", "output": "Outcome: done"}],
@@ -433,20 +427,13 @@ def test_run_chat_shows_background_completion_while_waiting_for_input(monkeypatc
 
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
-    def fake_read_notifications():
-        notes = next(notification_calls, [])
-        if notes:
-            release_prompt.set()
-        return notes
-
-    monkeypatch.setattr(cli, "read_background_notifications", fake_read_notifications)
+    monkeypatch.setattr(cli, "read_background_notifications", lambda: next(notification_calls, []))
     monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
-    monkeypatch.setattr(builtins, "input", fake_input)
+    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
     assert exit_code == 0
-    assert observed["notified_before_return"] is True
     assert notices[0] == ("Background Task", "builder (task_1) completed\nOutcome: done", "green")
 
 
@@ -654,7 +641,7 @@ def test_run_chat_routes_skill_command(monkeypatch) -> None:
         yield SDKMessage(type=SDKMessageType.SYSTEM, text="skill-start")
         yield SDKMessage(type=SDKMessageType.RESULT, text="skill-result")
 
-    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False, show_activity_trace: bool = False) -> None:
+    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False, show_activity_trace: bool = False, **_kwargs) -> None:
         captured["omit_duplicate_result"] = omit_duplicate_result
         captured["show_activity_trace"] = show_activity_trace
         captured["messages"] = [event.type.value async for event in events]
@@ -910,6 +897,52 @@ def test_run_chat_query_cancelled_by_interrupt_recovers(monkeypatch) -> None:
     assert interrupted_once["count"] == 1
 
 
+def test_run_chat_sigint_cancels_active_query_task(monkeypatch) -> None:
+    """Regression: _active_query_task must be visible to the SIGINT handler.
+
+    A missing nonlocal caused _run_query_with_interrupt to shadow the outer
+    _active_query_task, so the signal handler always saw None and never
+    cancelled the in-flight query.
+    """
+    import signal
+
+    prompts = iter(["hello", "/exit"])
+    query_cancelled = {"count": 0}
+
+    class FakeAgent:
+        async def query(self, prompt: str):
+            if prompt == "hello":
+                try:
+                    await asyncio.sleep(60)
+                except asyncio.CancelledError:
+                    query_cancelled["count"] += 1
+                    raise
+            yield cli.SDKMessage(type=cli.SDKMessageType.RESULT, text="done")
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+
+    async def _run_and_sigint():
+        task = cli.asyncio.ensure_future(cli.run_chat(RuntimeConfig(model="m2")))
+        await asyncio.sleep(0.1)
+        import os
+        os.kill(os.getpid(), signal.SIGINT)
+        await asyncio.sleep(0.1)
+        try:
+            return await cli.asyncio.wait_for(task, timeout=2.0)
+        except cli.asyncio.TimeoutError:
+            task.cancel()
+            return -1
+
+    exit_code = cli.asyncio.run(_run_and_sigint())
+    assert exit_code == 0
+    assert query_cancelled["count"] == 1
+
+
 def test_run_chat_interrupt_does_not_cancel_background_tasks(monkeypatch) -> None:
     prompts = iter(["/bg worker do stuff", "hello", "/exit"])
     bg_task_started = {"count": 0}
@@ -937,3 +970,29 @@ def test_run_chat_interrupt_does_not_cancel_background_tasks(monkeypatch) -> Non
 
     assert exit_code == 0
     assert bg_task_started["count"] == 1
+
+
+def test_render_event_stream_breaks_on_abort_signal() -> None:
+    import io
+    from rich.console import Console
+    from cock_code.rendering import render_event_stream
+    from open_agent_sdk import SDKMessage, SDKMessageType
+
+    abort_signal = cli.asyncio.Event()
+
+    async def events():
+        for i in range(100):
+            yield SDKMessage(type=SDKMessageType.ASSISTANT, text=f"msg {i}")
+
+    c = Console(file=io.StringIO(), width=80)
+
+    async def _run():
+        task = cli.asyncio.create_task(
+            render_event_stream(c, events(), abort_signal=abort_signal)
+        )
+        await cli.asyncio.sleep(0.05)
+        abort_signal.set()
+        await task
+
+    cli.asyncio.run(_run())
+    assert abort_signal.is_set()

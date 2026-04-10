@@ -91,7 +91,7 @@ def test_run_ask_streams_events_and_closes_agent(monkeypatch) -> None:
         captured["config"] = config
         return FakeAgent()
 
-    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False, show_activity_trace: bool = False) -> None:
+    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False, show_activity_trace: bool = False, **_kwargs) -> None:
         messages = []
         async for event in events:
             messages.append(event.type.value)
@@ -173,7 +173,7 @@ def test_run_ask_installs_and_clears_question_handler(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
-    monkeypatch.setattr(cli, "render_event_stream", lambda console, events, omit_duplicate_result=False: (_ for _ in ()).throw(StopAsyncIteration()))
+    monkeypatch.setattr(cli, "render_event_stream", lambda console, events, omit_duplicate_result=False, **_kwargs: (_ for _ in ()).throw(StopAsyncIteration()))
     monkeypatch.setattr(cli, "set_question_handler", lambda handler: captured.append("set" if callable(handler) else "bad"))
     monkeypatch.setattr(cli, "clear_question_handler", lambda: captured.append("clear"))
 
@@ -198,7 +198,7 @@ def test_run_ask_installs_default_search_backend(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
-    monkeypatch.setattr(cli, "render_event_stream", lambda console, events, omit_duplicate_result=False: (_ for _ in ()).throw(StopAsyncIteration()))
+    monkeypatch.setattr(cli, "render_event_stream", lambda console, events, omit_duplicate_result=False, **_kwargs: (_ for _ in ()).throw(StopAsyncIteration()))
     monkeypatch.setattr(cli, "set_question_handler", lambda handler: None)
     monkeypatch.setattr(cli, "clear_question_handler", lambda: None)
     monkeypatch.setattr(cli, "install_search_backend", lambda config: captured.setdefault("search_url", config.search_url))

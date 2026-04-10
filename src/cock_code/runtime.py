@@ -54,6 +54,12 @@ _loaded_local_skill_names: set[str] = set()
 _background_subagent_tasks: set[asyncio.Task[None]] = set()
 _notified_task_ids: set[str] = set()
 _notified_task_ids_lock = threading.Lock()
+_abort_signal: asyncio.Event | None = None
+
+
+def set_abort_signal(event: asyncio.Event | None) -> None:
+    global _abort_signal
+    _abort_signal = event
 
 
 def _parse_skill_metadata(text: str) -> tuple[dict[str, str], str]:
@@ -539,6 +545,8 @@ async def _stream_subagent(config: RuntimeConfig, input: dict[str, Any], context
         working_agent = _create_sdk_agent(replace(config, persist_session=False), include_runtime_agent_tool=False)
         try:
             async for event in _stream_skill(config, working_agent, skill_name, args):
+                if _abort_signal is not None and _abort_signal.is_set():
+                    break
                 yield event
         finally:
             await working_agent.close()
@@ -556,6 +564,8 @@ async def _stream_subagent(config: RuntimeConfig, input: dict[str, Any], context
     try:
         yield _activity_status_event("Resolved subagent", "Agent", agent_name)
         async for event in child_agent.query(prompt):
+            if _abort_signal is not None and _abort_signal.is_set():
+                break
             yield event
     finally:
         await child_agent.close()
@@ -625,6 +635,8 @@ async def _stream_skill(config: RuntimeConfig, agent, skill_name: str, args: str
         child_agent = _create_sdk_agent(child_config, include_runtime_agent_tool=True)
         try:
             async for event in child_agent.query(prompt_text):
+                if _abort_signal is not None and _abort_signal.is_set():
+                    break
                 yield event
         finally:
             await child_agent.close()
@@ -633,6 +645,8 @@ async def _stream_skill(config: RuntimeConfig, agent, skill_name: str, args: str
 
     query_overrides = overrides or None
     async for event in agent.query(prompt_text, query_overrides):
+        if _abort_signal is not None and _abort_signal.is_set():
+            break
         yield event
     yield _activity_status_event("Completed subagent", "Skill", command_name)
 
@@ -723,6 +737,8 @@ def _create_sdk_agent(
             event_task = asyncio.create_task(event_queue.get())
             try:
                 while True:
+                    if _abort_signal is not None and _abort_signal.is_set():
+                        break
                     done, _pending = await asyncio.wait(
                         {activity_task, event_task},
                         return_when=asyncio.FIRST_COMPLETED,
