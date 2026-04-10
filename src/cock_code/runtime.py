@@ -699,6 +699,7 @@ def build_agent_options(
         json_schema=config.json_schema,
         mcp_servers=config.mcp_servers,
         extra_args=config.extra_args,
+        abort_signal=_abort_signal,
     )
 
 
