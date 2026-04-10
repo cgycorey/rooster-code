@@ -5,6 +5,7 @@ from dataclasses import replace
 import contextlib
 import json
 from pathlib import Path
+import threading
 from typing import Any, cast
 from open_agent_sdk import (
     AgentOptions,
@@ -52,6 +53,7 @@ from cock_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeRe
 _loaded_local_skill_names: set[str] = set()
 _background_subagent_tasks: set[asyncio.Task[None]] = set()
 _notified_task_ids: set[str] = set()
+_notified_task_ids_lock = threading.Lock()
 
 
 def _parse_skill_metadata(text: str) -> tuple[dict[str, str], str]:
@@ -164,17 +166,18 @@ async def stop_task(task_id: str) -> bool:
 def read_background_notifications() -> list[dict[str, object]]:
     notifications: list[dict[str, object]] = []
     all_tasks = get_all_tasks()
-    for task_id, task in all_tasks.items():
-        status = str(task.get("status", ""))
-        if status in {"completed", "cancelled"} and task_id not in _notified_task_ids:
-            _notified_task_ids.add(task_id)
-            notifications.append({
-                "type": "background_task_completed",
-                "task_id": task_id,
-                "status": status,
-                "subject": str(task.get("subject", task_id)),
-                "output": str(task.get("output", "")),
-            })
+    with _notified_task_ids_lock:
+        for task_id, task in all_tasks.items():
+            status = str(task.get("status", ""))
+            if status in {"completed", "cancelled"} and task_id not in _notified_task_ids:
+                _notified_task_ids.add(task_id)
+                notifications.append({
+                    "type": "background_task_completed",
+                    "task_id": task_id,
+                    "status": status,
+                    "subject": str(task.get("subject", task_id)),
+                    "output": str(task.get("output", "")),
+                })
     return notifications
 
 

@@ -566,7 +566,33 @@ def test_run_chat_wait_injects_completed_task_output_into_context(monkeypatch) -
     }
 
 
-def test_run_chat_handles_background_agent_task_error(monkeypatch) -> None:
+def test_run_chat_deduplicates_task_injection(monkeypatch) -> None:
+    cli._injected_task_ids.clear()
+    prompts = iter(["/wait task_1", "/wait task_1", "/exit"])
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history: list[dict[str, object]] = []
+
+        async def close(self) -> None:
+            return None
+
+    agent = FakeAgent()
+
+    async def fake_wait_for_task(task_id: str) -> dict[str, object]:
+        return {"status": "completed", "output": "Outcome: done"}
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: agent)
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "wait_for_task", fake_wait_for_task)
+    monkeypatch.setattr(cli, "render_state", lambda console, title, data: None)
+    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    injected_count = sum(1 for m in agent._history if m.get("role") == "user" and "task_1 completed" in str(m.get("content", "")))
+    assert injected_count == 1
     captured: dict[str, object] = {}
     prompts = iter(["/agent-bg any check last commit", "/exit"])
     notices: list[tuple[str, str, str]] = []

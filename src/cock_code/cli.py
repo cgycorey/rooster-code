@@ -200,8 +200,9 @@ async def wait_for_task(task_id: str) -> dict[str, object]:
     return await runtime_wait_for_task(task_id)
 
 
-_console_lock = threading.Lock()
+_console_lock = threading.RLock()
 _prompt_label = "cock-code> "
+_injected_task_ids: set[str] = set()
 
 
 def _render_task_notification(console, agent, note: dict[str, object]) -> None:
@@ -210,16 +211,15 @@ def _render_task_notification(console, agent, note: dict[str, object]) -> None:
     output = str(note.get("output", ""))
     subject = str(note.get("subject", "task"))
     task_id = str(note.get("task_id", ""))
-    display_output = output[:500] + ("..." if len(output) > 500 else "")
     lines = [f"{subject} ({task_id}) {status}"]
-    if display_output:
-        lines.append(display_output)
+    if output:
+        lines.append(output)
     with _console_lock:
         sys.stdout.write("\n")
         render_notice(console, "Background Task", "\n".join(lines), style)
         sys.stdout.write(_prompt_label)
         sys.stdout.flush()
-    append_task_result_to_context(agent, task_id, {"status": status, "output": output})
+        append_task_result_to_context(agent, task_id, {"status": status, "output": output})
 
 
 def append_task_result_to_context(agent, task_id: str, task_result: dict[str, object]) -> None:
@@ -227,21 +227,25 @@ def append_task_result_to_context(agent, task_id: str, task_result: dict[str, ob
     status = str(task_result.get("status", "")).strip()
     if status not in {"completed", "cancelled"} or not output:
         return
-    history = getattr(agent, "_history", None)
-    if not isinstance(history, list):
-        return
-    history.append(
-        {
-            "role": "user",
-            "content": [{"type": "text", "text": f"[Background task {task_id} completed]\n\n{output}"}],
-        }
-    )
-    history.append(
-        {
-            "role": "assistant",
-            "content": [{"type": "text", "text": f"Received background task {task_id} result. Ready to continue."}],
-        }
-    )
+    with _console_lock:
+        if task_id in _injected_task_ids:
+            return
+        _injected_task_ids.add(task_id)
+        history = getattr(agent, "_history", None)
+        if not isinstance(history, list):
+            return
+        history.append(
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": f"[Background task {task_id} completed]\n\n{output}"}],
+            }
+        )
+        history.append(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": f"Received background task {task_id} result. Ready to continue."}],
+            }
+        )
 
 
 
@@ -364,10 +368,12 @@ def build_parser() -> argparse.ArgumentParser:
 async def run_ask(prompt: str, config) -> int:
     console = build_console()
     render_banner(console, "ask", config)
+    _injected_task_ids.clear()
     install_search_backend(config)
 
     async def question_handler(question: str) -> str:
-        return Prompt.ask(question)
+        with _console_lock:
+            return Prompt.ask(question)
 
     set_question_handler(question_handler)
     requested_agent = find_requested_agent_name(config, prompt)
@@ -405,6 +411,7 @@ async def run_chat(config) -> int:
     console = build_console()
     render_banner(console, "chat", config)
     install_search_backend(config)
+    _injected_task_ids.clear()
     agent = create_runtime_agent(config)
     interrupted = False
 
@@ -418,7 +425,8 @@ async def run_chat(config) -> int:
             return ("error", exc)
 
     async def question_handler(question: str) -> str:
-        return Prompt.ask(question)
+        with _console_lock:
+            return Prompt.ask(question)
 
     set_question_handler(question_handler)
 
@@ -514,8 +522,9 @@ async def run_chat(config) -> int:
                 continue
             if command.name == "wait" and command.args:
                 task_result = await wait_for_task(command.args[0])
-                from cock_code.runtime import _notified_task_ids
-                _notified_task_ids.add(command.args[0])
+                from cock_code.runtime import _notified_task_ids, _notified_task_ids_lock
+                with _notified_task_ids_lock:
+                    _notified_task_ids.add(command.args[0])
                 append_task_result_to_context(agent, command.args[0], task_result)
                 render_state(console, "Task Wait", {"task_id": command.args[0], **task_result})
                 continue
@@ -551,6 +560,7 @@ async def run_chat(config) -> int:
                     )
                 except Exception as exc:
                     render_notice(console, "Error", str(exc), "red")
+                _poll_and_render_notifications()
                 continue
             if user_input.startswith("/"):
                 render_notice(console, "Unknown command", user_input, "red")
@@ -568,13 +578,15 @@ async def run_chat(config) -> int:
                     )
                 except Exception as exc:
                     render_notice(console, "Error", str(exc), "red")
+                _poll_and_render_notifications()
                 continue
             
             try:
                 await render_event_stream(console, agent.query(user_input), omit_duplicate_result=True, show_activity_trace=True)
             except Exception as exc:
                 render_notice(console, "Error", str(exc), "red")
-                continue
+            _poll_and_render_notifications()
+            continue
     finally:
         clear_question_handler()
         await cancel_background_subagent_tasks()
