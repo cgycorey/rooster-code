@@ -881,3 +881,59 @@ def test_run_chat_interrupt_does_not_hang_on_slow_close(monkeypatch) -> None:
     exit_code = cli.asyncio.run(cli.asyncio.wait_for(cli.run_chat(RuntimeConfig(model="m2")), timeout=0.2))
 
     assert exit_code == 130
+
+
+def test_run_chat_query_cancelled_by_interrupt_recovers(monkeypatch) -> None:
+    prompts = iter(["hello", "/exit"])
+    interrupted_once = {"count": 0}
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history: list[dict[str, object]] = []
+
+        async def query(self, prompt: str):
+            if prompt == "hello":
+                interrupted_once["count"] += 1
+                raise asyncio.CancelledError()
+            yield cli.SDKMessage(type=cli.SDKMessageType.RESULT, text="done")
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert interrupted_once["count"] == 1
+
+
+def test_run_chat_interrupt_does_not_cancel_background_tasks(monkeypatch) -> None:
+    prompts = iter(["/bg worker do stuff", "hello", "/exit"])
+    bg_task_started = {"count": 0}
+
+    class FakeAgent:
+        async def query(self, prompt: str):
+            if prompt == "hello":
+                raise asyncio.CancelledError()
+            yield cli.SDKMessage(type=cli.SDKMessageType.RESULT, text="done")
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_start_bg(config, agent_name: str, prompt: str) -> str:
+        bg_task_started["count"] += 1
+        return "task_bg1"
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "start_background_agent_task", fake_start_bg)
+    monkeypatch.setattr(cli, "render_state", lambda console, title, data: None)
+    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert bg_task_started["count"] == 1

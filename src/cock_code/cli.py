@@ -415,6 +415,15 @@ async def run_chat(config) -> int:
     agent = create_runtime_agent(config)
     interrupted = False
 
+    def _cancel_query_on_interrupt(signum: int, frame: object) -> None:
+        nonlocal interrupted
+        interrupted = True
+        if _active_query_task is not None and not _active_query_task.done():
+            _active_query_task.cancel()
+
+    _active_query_task: asyncio.Task[None] | None = None
+    _previous_sigint = signal.getsignal(signal.SIGINT)
+
     def prompt_once() -> tuple[str, str | BaseException]:
         try:
             with _console_lock:
@@ -440,6 +449,8 @@ async def run_chat(config) -> int:
 
     try:
         while True:
+            if interrupted:
+                break
             prompt_task: asyncio.Task[object] | None = None
             try:
                 prompt_task = asyncio.create_task(asyncio.to_thread(prompt_once))
@@ -550,16 +561,27 @@ async def run_chat(config) -> int:
                 continue
             available_skills = set(list_skill_names())
             if command.name in available_skills:
+                signal.signal(signal.SIGINT, _cancel_query_on_interrupt)
                 try:
                     render_agent_panel(console, "Skill Started", command.name, "blue")
-                    await render_event_stream(
-                        console,
-                        stream_skill_events(config, agent, command.name, " ".join(command.args)),
-                        omit_duplicate_result=True,
-                        show_activity_trace=True,
+                    _active_query_task = asyncio.create_task(
+                        render_event_stream(
+                            console,
+                            stream_skill_events(config, agent, command.name, " ".join(command.args)),
+                            omit_duplicate_result=True,
+                            show_activity_trace=True,
+                        )
                     )
+                    try:
+                        await _active_query_task
+                    except asyncio.CancelledError:
+                        render_notice(console, "Interrupted", "Skill execution cancelled.", "yellow")
+                        interrupted = False
                 except Exception as exc:
                     render_notice(console, "Error", str(exc), "red")
+                finally:
+                    _active_query_task = None
+                    signal.signal(signal.SIGINT, _previous_sigint)
                 _poll_and_render_notifications()
                 continue
             if user_input.startswith("/"):
@@ -568,26 +590,49 @@ async def run_chat(config) -> int:
 
             requested_agent = find_requested_agent_name(config, user_input)
             if requested_agent:
+                signal.signal(signal.SIGINT, _cancel_query_on_interrupt)
                 try:
                     render_agent_panel(console, "Agent Started", requested_agent, "blue")
-                    await render_event_stream(
-                        console,
-                        stream_named_agent_events(config, requested_agent, user_input),
-                        omit_duplicate_result=True,
-                        show_activity_trace=True,
+                    _active_query_task = asyncio.create_task(
+                        render_event_stream(
+                            console,
+                            stream_named_agent_events(config, requested_agent, user_input),
+                            omit_duplicate_result=True,
+                            show_activity_trace=True,
+                        )
                     )
+                    try:
+                        await _active_query_task
+                    except asyncio.CancelledError:
+                        render_notice(console, "Interrupted", "Agent execution cancelled.", "yellow")
+                        interrupted = False
                 except Exception as exc:
                     render_notice(console, "Error", str(exc), "red")
+                finally:
+                    _active_query_task = None
+                    signal.signal(signal.SIGINT, _previous_sigint)
                 _poll_and_render_notifications()
                 continue
             
+            signal.signal(signal.SIGINT, _cancel_query_on_interrupt)
             try:
-                await render_event_stream(console, agent.query(user_input), omit_duplicate_result=True, show_activity_trace=True)
+                _active_query_task = asyncio.create_task(
+                    render_event_stream(console, agent.query(user_input), omit_duplicate_result=True, show_activity_trace=True)
+                )
+                try:
+                    await _active_query_task
+                except asyncio.CancelledError:
+                    render_notice(console, "Interrupted", "Query cancelled.", "yellow")
+                    interrupted = False
             except Exception as exc:
                 render_notice(console, "Error", str(exc), "red")
+            finally:
+                _active_query_task = None
+                signal.signal(signal.SIGINT, _previous_sigint)
             _poll_and_render_notifications()
             continue
     finally:
+        signal.signal(signal.SIGINT, _previous_sigint)
         clear_question_handler()
         await cancel_background_subagent_tasks()
         if interrupted:
