@@ -48,6 +48,7 @@ from open_agent_sdk.tools.skill_tool import SkillTool
 
 from cock_code.config import RuntimeConfig
 from cock_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeReadTool, RuntimeTraceTool, TurnTracker
+from cock_code.team import patch_tool_pool as _patch_tool_pool
 
 
 _loaded_local_skill_names: set[str] = set()
@@ -55,6 +56,8 @@ _background_subagent_tasks: set[asyncio.Task[None]] = set()
 _notified_task_ids: set[str] = set()
 _notified_task_ids_lock = threading.Lock()
 _abort_signal: asyncio.Event | None = None
+
+patch_tool_pool = _patch_tool_pool
 
 
 def set_abort_signal(event: asyncio.Event | None) -> None:
@@ -286,10 +289,14 @@ def _build_subagent_config(
     )
 
 
-def _agent_context_prompt(config: RuntimeConfig) -> str:
+def _agent_context_prompt(config: RuntimeConfig, team_info: dict[str, Any] | None = None) -> str:
     agents = _effective_agents(config)
 
-    lines = ["# Configured Agents", "Use the Agent tool with the agent name when delegation is helpful."]
+    lines = [
+        "# Configured Agents",
+        "Use the Agent tool with the agent name when delegation is helpful.",
+        "When you delegate work to the Agent tool or a background task, treat that work as assigned to that agent. Do not also perform the same work yourself unless the delegated task failed, was cancelled, or you are explicitly asked to compare or verify it.",
+    ]
     for name, definition in agents.items():
         if isinstance(definition, dict):
             description = str(definition.get("description") or definition.get("prompt") or "")
@@ -300,6 +307,16 @@ def _agent_context_prompt(config: RuntimeConfig) -> str:
     skills_prompt = format_skills_for_prompt(config.max_tokens)
     if skills_prompt:
         lines.extend(["", "# Available Skills", skills_prompt])
+
+    if team_info and team_info.get("active"):
+        members = team_info.get("members", {})
+        team_name = team_info.get("team_name", "")
+        lines.append("")
+        lines.append(f"# Team: {team_name}")
+        lines.append(f"You are the orchestrator for team '{team_name}'. Members: {', '.join(members.keys())}.")
+        lines.append("Use TeamDispatch to assign tasks to members. Use SendMessage to communicate with members.")
+        lines.append("If a team member is already assigned to a task, do not also do that same task yourself unless they fail, stop, or you are explicitly taking over after reviewing their output.")
+
     return "\n".join(lines)
 
 
@@ -322,6 +339,24 @@ def _extract_text_blocks(message: dict[str, Any]) -> list[str]:
     return parts
 
 
+def _looks_like_planning_text(text: str) -> bool:
+    normalized = " ".join(text.strip().lower().split())
+    if not normalized:
+        return False
+    planning_prefixes = (
+        "let me ",
+        "i'll ",
+        "i will ",
+        "first, ",
+        "first ",
+        "next, ",
+        "next ",
+        "to start",
+        "starting with",
+    )
+    return normalized.startswith(planning_prefixes)
+
+
 def _format_subagent_summary(result_text: str, messages: list[dict[str, Any]]) -> str:
     outcomes: list[str] = []
     files: list[str] = []
@@ -329,14 +364,14 @@ def _format_subagent_summary(result_text: str, messages: list[dict[str, Any]]) -
     open_issues: list[str] = []
     next_steps: list[str] = []
     findings: list[str] = []
-    first_assistant_text: str = ""
+    last_assistant_text: str = ""
 
     for message in messages:
         if str(message.get("role", "")) != "assistant":
             continue
         for text in _extract_text_blocks(message):
-            if not first_assistant_text and text.strip():
-                first_assistant_text = text.strip()
+            if text.strip():
+                last_assistant_text = text.strip()
             for raw_line in text.splitlines():
                 line = raw_line.strip()
                 if not line:
@@ -355,7 +390,14 @@ def _format_subagent_summary(result_text: str, messages: list[dict[str, Any]]) -
                 elif lower.startswith("next step:"):
                     next_steps.append(line.partition(":")[2].strip())
 
-    fallback = result_text or first_assistant_text or "No useful output returned"
+    fallback = "No useful output returned"
+    for candidate in (result_text.strip(), last_assistant_text):
+        if not candidate:
+            continue
+        if _looks_like_planning_text(candidate):
+            continue
+        fallback = candidate
+        break
     lines = [f"Outcome: {'; '.join(outcomes) if outcomes else fallback}" ]
     if files:
         lines.append(f"Files: {'; '.join(files)}")
@@ -470,7 +512,14 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
 
         task = asyncio.create_task(run_background())
         _track_background_task(task)
-        return ToolResult(tool_use_id="", content=f"Created task {task_id}")
+        assignee = str(input.get("name") or input.get("subagent_type") or input.get("description") or "subagent")
+        return ToolResult(
+            tool_use_id="",
+            content=(
+                f"Created task {task_id}. This work is now assigned to background agent '{assignee}'. "
+                "Do not also perform the same work yourself unless that task fails, is cancelled, or you are explicitly taking over."
+            ),
+        )
 
     if skill_request:
         skill_name, args = skill_request

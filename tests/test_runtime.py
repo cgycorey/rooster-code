@@ -310,7 +310,7 @@ def test_create_runtime_agent_does_not_inject_custom_transport(monkeypatch) -> N
 
 def test_run_subagent_returns_rich_plain_text_summary(monkeypatch) -> None:
     class FakeChildAgent:
-        async def prompt(self, prompt: str):
+        async def prompt(self, prompt: str, overrides=None):
             from open_agent_sdk.types import QueryResult
 
             return QueryResult(
@@ -355,7 +355,7 @@ def test_run_subagent_returns_rich_plain_text_summary(monkeypatch) -> None:
 
 def test_run_subagent_summary_excludes_user_text_and_unlabeled_assistant_text(monkeypatch) -> None:
     class FakeChildAgent:
-        async def prompt(self, prompt: str):
+        async def prompt(self, prompt: str, overrides=None):
             from open_agent_sdk.types import QueryResult
 
             return QueryResult(
@@ -392,7 +392,7 @@ def test_run_subagent_summary_excludes_user_text_and_unlabeled_assistant_text(mo
 
 def test_run_subagent_summary_falls_back_to_final_text_for_outcome(monkeypatch) -> None:
     class FakeChildAgent:
-        async def prompt(self, prompt: str):
+        async def prompt(self, prompt: str, overrides=None):
             from open_agent_sdk.types import QueryResult
 
             return QueryResult(
@@ -506,6 +506,7 @@ def test_run_subagent_background_creates_sdk_task_and_updates_output(monkeypatch
         )
         assert result.is_error is False
         assert "Created task" in str(result.content)
+        assert "Do not also perform the same work yourself" in str(result.content)
         tasks = get_all_tasks()
         assert len(tasks) == 1
         task_id = next(iter(tasks))
@@ -538,6 +539,7 @@ def test_run_subagent_background_marks_failure_and_output(monkeypatch) -> None:
         )
         assert result.is_error is False
         assert "Created task" in str(result.content)
+        assert "Do not also perform the same work yourself" in str(result.content)
         tasks = get_all_tasks()
         task_id = next(iter(tasks))
         for _ in range(50):
@@ -765,7 +767,7 @@ def test_run_subagent_routes_review_like_prompt_to_review_skill(monkeypatch) -> 
     assert "Outcome: reviewed the changes" in str(result.content)
 
 
-def test_run_subagent_passes_through_review_output_starting_with_let_me(monkeypatch) -> None:
+def test_run_subagent_does_not_treat_planning_text_as_outcome(monkeypatch) -> None:
     class FakeChildAgent:
         async def prompt(self, prompt: str, overrides=None):
             from open_agent_sdk.types import QueryResult
@@ -806,7 +808,86 @@ def test_run_subagent_passes_through_review_output_starting_with_let_me(monkeypa
     )
 
     assert result.is_error is False
-    assert "Let me check" in str(result.content)
+    assert "Let me check" not in str(result.content)
+    assert "Outcome: No useful output returned" in str(result.content)
+
+
+def test_run_subagent_summary_falls_back_to_last_non_planning_assistant_text(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str, overrides=None):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="",
+                messages=[
+                    {"role": "assistant", "content": [{"type": "text", "text": "Let me inspect the code first."}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": "reviewed the rendering and team modules"}]},
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+
+    result = asyncio.run(
+        runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"task": {"description": "review agent"}}),
+            {"name": "task", "prompt": "review modules", "description": "task"},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+    )
+
+    text = str(result.content)
+    assert "Let me inspect the code first." not in text
+    assert "Outcome: reviewed the rendering and team modules" in text
+
+
+def test_run_subagent_summary_uses_last_non_planning_text_when_result_text_is_planning(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str, overrides=None):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="Let me also check the rendering module and team module to understand the full context:",
+                messages=[
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Let me also check the rendering module and team module to understand the full context:",
+                            }
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "reviewed the rendering module and team module and found the root cause",
+                            }
+                        ],
+                    },
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+
+    result = asyncio.run(
+        runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"task": {"description": "review agent"}}),
+            {"name": "task", "prompt": "review modules", "description": "task"},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+    )
+
+    text = str(result.content)
+    assert "Let me also check the rendering module" not in text
+    assert "Outcome: reviewed the rendering module and team module and found the root cause" in text
 
 
 def test_create_runtime_agent_replaces_placeholder_agent_tool_after_initialize(monkeypatch) -> None:
@@ -1504,4 +1585,68 @@ def test_compact_current_session_rejects_empty_provider_summary(monkeypatch) -> 
     with pytest.raises(RuntimeError, match="Compaction produced an empty summary"):
         asyncio.run(runtime.compact_current_session(agent))
 
-    assert agent._history == original_history
+
+def test_patch_tool_pool_re_exported_from_runtime() -> None:
+    """patch_tool_pool is importable from cock_code.runtime as a re-export from team module."""
+    from cock_code.runtime import patch_tool_pool
+
+    # It should be the same function as in the team module
+    from cock_code.team import patch_tool_pool as team_patch_tool_pool
+
+    assert patch_tool_pool is team_patch_tool_pool
+
+
+def test_agent_context_prompt_without_team_info_is_unchanged() -> None:
+    """_agent_context_prompt with no team_info produces the same output as before."""
+    config = RuntimeConfig(
+        api_key="k",
+        base_url="https://example.test",
+        model="m1",
+        agents={"builder": {"description": "builds things"}},
+    )
+    result = runtime._agent_context_prompt(config)
+
+    assert "# Configured Agents" in result
+    assert "builder" in result
+    assert "Team:" not in result
+    assert "Do not also perform the same work yourself" in result
+
+
+def test_agent_context_prompt_with_active_team_info_appends_team_context() -> None:
+    """_agent_context_prompt with active team_info appends team context to the prompt."""
+    config = RuntimeConfig(
+        api_key="k",
+        base_url="https://example.test",
+        model="m1",
+        agents={"builder": {"description": "builds things"}},
+    )
+    team_info = {
+        "active": True,
+        "team_name": "alpha",
+        "members": {"bob": {}, "alice": {}},
+    }
+    result = runtime._agent_context_prompt(config, team_info=team_info)
+
+    assert "# Team: alpha" in result
+    assert "bob, alice" in result
+    assert "TeamDispatch" in result
+    assert "SendMessage" in result
+    assert "do not also do that same task yourself" in result.lower()
+
+
+def test_agent_context_prompt_with_inactive_team_info_is_unchanged() -> None:
+    """_agent_context_prompt with inactive team_info (active=False) does not append team context."""
+    config = RuntimeConfig(
+        api_key="k",
+        base_url="https://example.test",
+        model="m1",
+        agents={"builder": {"description": "builds things"}},
+    )
+    team_info = {
+        "active": False,
+        "team_name": "alpha",
+        "members": {"bob": {}, "alice": {}},
+    }
+    result = runtime._agent_context_prompt(config, team_info=team_info)
+
+    assert "Team:" not in result

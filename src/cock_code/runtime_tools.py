@@ -74,7 +74,7 @@ class RuntimeAgentTool(BaseTool):
     _name = "Agent"
     _description = (
         "Launch a new agent to handle complex, multi-step tasks autonomously. "
-        "Subagents can run in the background or foreground."
+        "Subagents can run in the background or foreground. Once you delegate work to another agent, do not also perform that same work yourself unless the delegated task fails, is cancelled, or you are explicitly asked to compare or verify it."
     )
     _input_schema = ToolInputSchema(
         properties={
