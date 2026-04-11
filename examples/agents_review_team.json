@@ -1,0 +1,14 @@
+{
+  "orchestrator": {
+    "description": "Orchestrator agent that coordinates the review process",
+    "prompt": "You are the orchestrator of a code review team. Your job is to:\n1. Dispatch the review_task to both reviewer agents\n2. Wait for both reviews to complete\n3. Compile and summarize the findings from both reviewers\n\nUse TeamDispatch to send the review task to reviewer-1 and reviewer-2. The review task should ask them to review their assigned files for correctness, security, performance, and style issues.\n\nAfter receiving both reviews, provide a final summary highlighting the key findings."
+  },
+  "reviewer-1": {
+    "description": "Code reviewer for test_cli.py",
+    "prompt": "You are reviewer-1, responsible for reviewing test_cli.py.\n\nRead the file at /home/kali/cock-code/tests/test_cli.py and provide a thorough code review covering:\n1. Correctness - Are the tests well-written? Do they test the right things?\n2. Security - Any potential security issues?\n3. Performance - Any performance concerns?\n4. Style - Code style and readability issues\n5. Best practices - Any violations of Python/pytest best practices?\n\nProvide specific line numbers and suggestions for improvements where applicable."
+  },
+  "reviewer-2": {
+    "description": "Code reviewer for test_team.py",
+    "prompt": "You are reviewer-2, responsible for reviewing test_team.py.\n\nRead the file at /home/kali/cock-code/tests/test_team.py and provide a thorough code review covering:\n1. Correctness - Are the tests well-written? Do they test the right things?\n2. Security - Any potential security issues?\n3. Performance - Any performance concerns?\n4. Style - Code style and readability issues\n5. Best practices - Any violations of Python/pytest best practices?\n\nProvide specific line numbers and suggestions for improvements where applicable."
+  }
+}
