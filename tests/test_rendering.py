@@ -5,11 +5,14 @@ from rich.console import Console
 
 from cock_code.config import RuntimeConfig
 from cock_code.rendering import (
+    render_agents_list,
     render_banner,
     render_event_stream,
+    render_help,
     render_session_info,
     render_session_table,
     render_state,
+    render_team_info,
     render_tool_table,
     render_transcript,
     summarize_tool_result,
@@ -360,3 +363,71 @@ def test_render_state_formats_list_of_empty_mappings_as_named_empty_state() -> N
 
     assert "Tasks" in output
     assert "No tasks found" in output
+
+
+def test_render_agents_list_shows_agent_names_and_descriptions() -> None:
+    console = Console(record=True, width=100)
+
+    render_agents_list(console, {"reviewer": "Reviews code", "writer": "Writes code"})
+
+    output = console.export_text()
+
+    assert "reviewer" in output
+    assert "Reviews code" in output
+    assert "writer" in output
+    assert "Writes code" in output
+
+
+def test_render_agents_list_uses_system_prompt_when_description_missing() -> None:
+    console = Console(record=True, width=100)
+
+    render_agents_list(console, {"reviewer": {"system_prompt": "Reviews code carefully"}})
+
+    output = console.export_text()
+
+    assert "reviewer" in output
+    assert "Reviews code carefully" in output
+
+
+def test_render_agents_list_handles_empty_dict() -> None:
+    console = Console(record=True, width=100)
+
+    render_agents_list(console, {})
+
+    output = console.export_text()
+
+    assert "No agents configured" in output
+
+
+def test_render_team_info_formats_team_status() -> None:
+    console = Console(record=True, width=100)
+
+    render_team_info(console, {"status": "active", "name": "alpha", "members": [{"name": "reviewer", "status": "running"}]})
+
+    output = console.export_text()
+
+    assert "Team" in output
+    assert "active" in output
+
+
+def test_render_help_includes_agents_and_team_commands() -> None:
+    console = Console(record=True, width=100)
+
+    render_help(console)
+
+    output = console.export_text()
+
+    assert "/agents" in output
+    assert "List configured agents" in output
+    assert "/agents add" in output
+    assert "Add an agent definition" in output
+    assert "/agents remove" in output
+    assert "Remove an agent definition" in output
+    assert "/agents show" in output
+    assert "Show agent definition details" in output
+    assert "/team create" in output
+    assert "Create a team with named agents" in output
+    assert "/team info" in output
+    assert "Show team members and status" in output
+    assert "/team stop" in output
+    assert "Disband team" in output

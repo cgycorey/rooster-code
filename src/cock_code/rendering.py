@@ -4,7 +4,7 @@ import asyncio
 
 from collections.abc import Mapping
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -124,6 +124,13 @@ def render_help(console: Console) -> None:
     table.add_row("/wait <id>", "Wait for a background task to finish")
     table.add_row("/sessions", "Show saved sessions")
     table.add_row("/status", "Show current chat runtime state")
+    table.add_row("/agents", "List configured agents")
+    table.add_row("/agents add <name> <desc>", "Add an agent definition")
+    table.add_row("/agents remove <name>", "Remove an agent definition")
+    table.add_row("/agents show <name>", "Show agent definition details")
+    table.add_row("/team create <name> <members>", "Create a team with named agents")
+    table.add_row("/team info", "Show team members and status")
+    table.add_row("/team stop", "Disband team, close all member agents")
     table.add_row("/resume <id>", "Resume another session")
     table.add_row("/exit", "Exit chat")
     console.print(Panel(table, title="Help", border_style="blue", expand=True))
@@ -291,6 +298,29 @@ def render_tool_table(console: Console, tools: list[str]) -> None:
         table.add_row(tool)
 
     console.print(table)
+
+
+def render_agents_list(console: Console, agents: dict[str, Any]) -> None:
+    if not agents:
+        console.print(Panel("[dim]No agents configured[/dim]", title="Agents", border_style="yellow", expand=True))
+        return
+
+    table = Table(title="Agents")
+    table.add_column("Name", style="bold cyan")
+    table.add_column("Description")
+
+    for name, definition in agents.items():
+        if isinstance(definition, dict):
+            desc = str(definition.get("description") or definition.get("prompt") or definition.get("system_prompt") or "")
+        else:
+            desc = str(definition)
+        table.add_row(name, desc)
+
+    console.print(table)
+
+
+def render_team_info(console: Console, team_info: object) -> None:
+    render_state(console, "Team", team_info)
 
 
 def render_state(console: Console, title: str, data: object) -> None:
