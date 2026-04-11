@@ -1,7 +1,6 @@
 from cock_code.cli import build_parser
 
 
-import builtins
 import importlib
 import signal
 import sys
@@ -10,6 +9,18 @@ from typing import Callable, Coroutine, cast
 import cock_code.cli as cli
 from cock_code.config import RuntimeConfig
 from open_agent_sdk import SDKMessage, SDKMessageType
+from prompt_toolkit import PromptSession
+
+
+def _fake_prompt_iter(prompts_iter):
+    async def mock_prompt_async(*args, **kwargs):
+        return next(prompts_iter)
+    return mock_prompt_async
+
+def _fake_prompt_keyboard_interrupt():
+    async def mock_prompt_async(*args, **kwargs):
+        raise KeyboardInterrupt()
+    return mock_prompt_async
 
 
 class SilentConsole:
@@ -296,8 +307,7 @@ def test_run_chat_renders_tool_table_for_tools_command(monkeypatch) -> None:
 
     prompts = iter(["/tools", "/exit"])
 
-    import builtins
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "list_tool_names", lambda: ["Read", "Write"])
@@ -325,6 +335,7 @@ def test_main_returns_130_on_keyboard_interrupt(monkeypatch) -> None:
 
 
 def test_importing_cli_does_not_eagerly_import_sdk(monkeypatch) -> None:
+    import builtins
     real_import = builtins.__import__
 
     def fake_import(name, globals=None, locals=None, fromlist=(), level=0):

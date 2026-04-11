@@ -1,5 +1,5 @@
 import asyncio
-import builtins
+from prompt_toolkit import PromptSession
 
 import cock_code.cli as cli
 from cock_code.config import RuntimeConfig
@@ -7,6 +7,17 @@ from open_agent_sdk import SDKMessage, SDKMessageType
 from rich.console import Console
 
 from cock_code.chat import parse_chat_command
+
+
+def _fake_prompt_iter(prompts_iter):
+    async def mock_prompt_async(*args, **kwargs):
+        return next(prompts_iter)
+    return mock_prompt_async
+
+def _fake_prompt_keyboard_interrupt():
+    async def mock_prompt_async(*args, **kwargs):
+        raise KeyboardInterrupt()
+    return mock_prompt_async
 
 
 class SilentConsole:
@@ -30,7 +41,7 @@ def test_run_chat_exits_cleanly(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: "/exit")
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(iter(["/exit"])))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -62,7 +73,7 @@ def test_run_chat_streams_user_prompt(monkeypatch) -> None:
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "render_event_stream", fake_render_event_stream)
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -95,7 +106,7 @@ def test_run_chat_requests_duplicate_result_omission(monkeypatch) -> None:
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "render_event_stream", fake_render_event_stream)
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -116,7 +127,7 @@ def test_run_chat_routes_explicit_agent_request(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
     monkeypatch.setattr(cli, "find_requested_agent_name", lambda config, prompt: "reviewer")
 
     async def fake_stream_named_agent_events(config, agent_name: str, prompt: str):
@@ -161,7 +172,7 @@ def test_run_chat_clears_agent_history(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -193,7 +204,7 @@ def test_run_chat_compacts_agent_history(monkeypatch) -> None:
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "compact_current_session", fake_compact_current_session, raising=False)
     monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -222,7 +233,7 @@ def test_run_chat_shows_compact_error_when_compaction_fails(monkeypatch) -> None
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "compact_current_session", fake_compact_current_session, raising=False)
     monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -244,7 +255,7 @@ def test_run_chat_updates_model(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -266,7 +277,7 @@ def test_run_chat_updates_permission_mode(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     config = RuntimeConfig(model="m2")
     exit_code = cli.asyncio.run(cli.run_chat(config))
@@ -289,7 +300,7 @@ def test_run_chat_shows_tool_list(monkeypatch) -> None:
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "list_tool_names", lambda: ["Read", "Write"])
     monkeypatch.setattr(cli, "render_tool_table", lambda console, tools: captured.setdefault("tools", tools))
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -310,7 +321,7 @@ def test_run_chat_shows_task_list(monkeypatch) -> None:
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "get_state_snapshot", lambda name, agent_name=None: {"task_1": {"status": "completed"}} if name == "tasks" else {})
     monkeypatch.setattr(cli, "render_state", lambda console, title, data: captured.setdefault("state", (title, data)))
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -334,7 +345,7 @@ def test_run_chat_shows_task_output(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "get_task_output", fake_get_task_output)
     monkeypatch.setattr(cli, "render_state", lambda console, title, data: captured.setdefault("state", (title, data)))
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -359,7 +370,7 @@ def test_run_chat_stops_task(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "stop_task", fake_stop_task)
     monkeypatch.setattr(cli, "render_state", lambda console, title, data: captured.setdefault("state", (title, data)))
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -398,7 +409,7 @@ def test_run_chat_shows_background_completion_notifications(monkeypatch) -> None
         ],
     )
     monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -429,7 +440,7 @@ def test_run_chat_shows_background_completion_before_prompt(monkeypatch) -> None
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "read_background_notifications", lambda: next(notification_calls, []))
     monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -454,7 +465,7 @@ def test_run_chat_starts_background_agent_task(monkeypatch) -> None:
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "start_background_agent_task", fake_start_background_agent_task)
     monkeypatch.setattr(cli, "render_state", lambda console, title, data: captured.setdefault("state", (title, data)))
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -482,7 +493,7 @@ def test_run_chat_starts_background_agent_task_with_bg_alias(monkeypatch) -> Non
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "start_background_agent_task", fake_start_background_agent_task)
     monkeypatch.setattr(cli, "render_state", lambda console, title, data: captured.setdefault("state", (title, data)))
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -509,7 +520,7 @@ def test_run_chat_waits_for_task_when_requested(monkeypatch) -> None:
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "wait_for_task", fake_wait_for_task)
     monkeypatch.setattr(cli, "render_state", lambda console, title, data: captured.setdefault("state", (title, data)))
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -538,7 +549,7 @@ def test_run_chat_wait_injects_completed_task_output_into_context(monkeypatch) -
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "wait_for_task", fake_wait_for_task)
     monkeypatch.setattr(cli, "render_state", lambda console, title, data: None)
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -573,7 +584,7 @@ def test_run_chat_deduplicates_task_injection(monkeypatch) -> None:
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "wait_for_task", fake_wait_for_task)
     monkeypatch.setattr(cli, "render_state", lambda console, title, data: None)
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -595,7 +606,7 @@ def test_run_chat_deduplicates_task_injection(monkeypatch) -> None:
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "start_background_agent_task", fake_start_background_agent_task)
     monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -616,7 +627,7 @@ def test_run_chat_shows_skill_list(monkeypatch) -> None:
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "list_skill_names", lambda: ["commit", "explain"])
     monkeypatch.setattr(cli, "render_state", lambda console, title, state: captured.setdefault("state", (title, state)))
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -652,7 +663,7 @@ def test_run_chat_routes_skill_command(monkeypatch) -> None:
     monkeypatch.setattr(cli, "stream_skill_events", fake_stream_skill_events, raising=False)
     monkeypatch.setattr(cli, "render_event_stream", fake_render_event_stream)
     monkeypatch.setattr(cli, "render_agent_panel", lambda console, title, text, style: panels.append((title, text)))
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -680,7 +691,7 @@ def test_run_chat_shows_unknown_skill_error(monkeypatch) -> None:
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "list_skill_names", lambda: ["plan", "commit"])
     monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -704,7 +715,7 @@ def test_run_chat_shows_sessions(monkeypatch) -> None:
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "list_sessions", fake_list_sessions)
     monkeypatch.setattr(cli, "render_session_table", lambda console, sessions: captured.setdefault("count", len(sessions)))
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -731,7 +742,7 @@ def test_run_chat_resumes_a_different_session(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "create_runtime_agent", fake_create_runtime_agent)
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     config = RuntimeConfig(model="m2", resume="start")
     exit_code = cli.asyncio.run(cli.run_chat(config))
@@ -752,7 +763,7 @@ def test_run_chat_help_renders_available_commands(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: console)
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -786,7 +797,7 @@ def test_run_chat_status_renders_current_runtime_context(monkeypatch) -> None:
         "render_state",
         lambda console, title, data: captured.update({"title": title, "data": data}),
     )
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     config = RuntimeConfig(model="m2", resume="sess-9", permission_mode="acceptEdits")
     exit_code = cli.asyncio.run(cli.run_chat(config))
@@ -811,7 +822,7 @@ def test_run_chat_installs_and_clears_question_handler(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
     monkeypatch.setattr(cli, "set_question_handler", lambda handler: captured.append("set" if callable(handler) else "bad"))
     monkeypatch.setattr(cli, "clear_question_handler", lambda: captured.append("clear"))
 
@@ -831,7 +842,7 @@ def test_run_chat_unknown_command_shows_feedback(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: console)
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -848,7 +859,7 @@ def test_run_chat_returns_interrupt_exit_code(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_keyboard_interrupt())
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -863,7 +874,7 @@ def test_run_chat_interrupt_does_not_hang_on_slow_close(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_keyboard_interrupt())
 
     exit_code = cli.asyncio.run(cli.asyncio.wait_for(cli.run_chat(RuntimeConfig(model="m2")), timeout=0.2))
 
@@ -889,7 +900,7 @@ def test_run_chat_query_cancelled_by_interrupt_recovers(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -924,7 +935,7 @@ def test_run_chat_sigint_cancels_active_query_task(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     async def _run_and_sigint():
         task = cli.asyncio.ensure_future(cli.run_chat(RuntimeConfig(model="m2")))
@@ -964,7 +975,7 @@ def test_run_chat_interrupt_does_not_cancel_background_tasks(monkeypatch) -> Non
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "start_background_agent_task", fake_start_bg)
     monkeypatch.setattr(cli, "render_state", lambda console, title, data: None)
-    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 

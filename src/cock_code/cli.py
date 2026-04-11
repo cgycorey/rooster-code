@@ -9,6 +9,10 @@ import sys
 import threading
 from urllib.parse import urlencode
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.history import History
+
 import httpx
 
 from rich.prompt import Prompt
@@ -215,10 +219,7 @@ def _render_task_notification(console, agent, note: dict[str, object]) -> None:
     if output:
         lines.append(output)
     with _console_lock:
-        sys.stdout.write("\n")
         render_notice(console, "Background Task", "\n".join(lines), style)
-        sys.stdout.write(_prompt_label)
-        sys.stdout.flush()
         append_task_result_to_context(agent, task_id, {"status": status, "output": output})
 
 
@@ -407,6 +408,16 @@ async def run_ask(prompt: str, config) -> int:
     return 0
 
 
+def _trim_history(history: History, max_size: int) -> None:
+    if not isinstance(history, InMemoryHistory):
+        return
+    strings = history.get_strings()
+    overflow = len(strings) - max_size
+    for _ in range(max(0, overflow)):
+        if history._loaded_strings:
+            history._loaded_strings.pop(0)
+
+
 async def run_chat(config) -> int:
     console = build_console()
     render_banner(console, "chat", config)
@@ -415,6 +426,8 @@ async def run_chat(config) -> int:
     agent = create_runtime_agent(config)
     interrupted = False
     abort_signal = asyncio.Event()
+    prompt_session: PromptSession[str] = PromptSession(history=InMemoryHistory())
+    _MAX_HISTORY = 50
 
     def _cancel_query_on_sigint(signum: int, frame: object) -> None:
         nonlocal interrupted
@@ -456,12 +469,11 @@ async def run_chat(config) -> int:
             set_abort_signal(None)
             signal.signal(signal.SIGINT, previous)
 
-    def prompt_once() -> str | None:
+    async def prompt_once(session: PromptSession[str]) -> str | None:
         try:
-            with _console_lock:
-                sys.stdout.write(_prompt_label)
-                sys.stdout.flush()
-            return input()
+            user_input = await session.prompt_async(_prompt_label)
+            _trim_history(session.history, _MAX_HISTORY)
+            return user_input
         except (KeyboardInterrupt, EOFError):
             return None
 
@@ -485,7 +497,7 @@ async def run_chat(config) -> int:
                 break
             _poll_and_render_notifications()
             try:
-                user_input = prompt_once()
+                user_input = await prompt_once(prompt_session)
                 if user_input is None:
                     interrupted = True
                     render_notice(console, "Interrupted", "Exiting chat.", "yellow")
