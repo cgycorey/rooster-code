@@ -15,12 +15,12 @@ from prompt_toolkit.history import History
 
 import httpx
 
-from rich.prompt import Prompt
-
 from cock_code.chat import parse_chat_command
 from cock_code.config import config_from_namespace
+from cock_code.team import TeamManager
 from cock_code.rendering import (
     build_console,
+    render_agents_list,
     render_banner,
     render_event_stream,
     render_help,
@@ -209,6 +209,41 @@ _prompt_label = "cock-code> "
 _injected_task_ids: set[str] = set()
 
 
+def _create_question_handler(
+    session: PromptSession[str],
+    abort_signal: asyncio.Event | None = None,
+):
+    async def question_handler(question: str) -> str:
+        if abort_signal is not None and abort_signal.is_set():
+            raise asyncio.CancelledError()
+        prompt_task = asyncio.create_task(session.prompt_async(f"{question} "))
+        abort_task: asyncio.Task[bool] | None = None
+        if abort_signal is not None:
+            abort_task = asyncio.create_task(abort_signal.wait())
+        try:
+            if abort_task is None:
+                return await prompt_task
+            done, _ = await asyncio.wait(
+                {prompt_task, abort_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if abort_task in done:
+                prompt_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await prompt_task
+                raise asyncio.CancelledError()
+            return prompt_task.result()
+        except (KeyboardInterrupt, EOFError) as exc:
+            raise asyncio.CancelledError() from exc
+        finally:
+            if abort_task is not None:
+                abort_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await abort_task
+
+    return question_handler
+
+
 def _render_task_notification(console, agent, note: dict[str, object]) -> None:
     status = str(note.get("status", "completed"))
     style = "green" if status == "completed" else "yellow"
@@ -244,7 +279,7 @@ def append_task_result_to_context(agent, task_id: str, task_result: dict[str, ob
         history.append(
             {
                 "role": "assistant",
-                "content": [{"type": "text", "text": f"Received background task {task_id} result. Ready to continue."}],
+                "content": [{"type": "text", "text": f"Received background task {task_id} result. Ready to continue from that result without redoing the same delegated work."}],
             }
         )
 
@@ -367,37 +402,66 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def run_ask(prompt: str, config) -> int:
+    from cock_code.runtime import set_abort_signal
+
     console = build_console()
     render_banner(console, "ask", config)
     _injected_task_ids.clear()
     install_search_backend(config)
+    abort_signal = asyncio.Event()
+    question_session: PromptSession[str] = PromptSession()
+    set_question_handler(_create_question_handler(question_session, abort_signal))
+    interrupted = False
+    active_task: asyncio.Task[object] | None = None
 
-    async def question_handler(question: str) -> str:
-        with _console_lock:
-            return Prompt.ask(question)
+    def _cancel_ask_on_sigint(signum: int, frame: object) -> None:
+        nonlocal interrupted
+        interrupted = True
+        abort_signal.set()
+        if active_task is not None and not active_task.done():
+            active_task.cancel()
 
-    set_question_handler(question_handler)
+    previous = signal.signal(signal.SIGINT, _cancel_ask_on_sigint)
+    set_abort_signal(abort_signal)
     requested_agent = find_requested_agent_name(config, prompt)
     if requested_agent:
         try:
             render_agent_panel(console, "Agent Started", requested_agent, "blue")
-            text = await run_named_agent_prompt(config, requested_agent, prompt)
+            active_task = asyncio.create_task(run_named_agent_prompt(config, requested_agent, prompt))
+            text = await active_task
             render_agent_panel(console, "Agent Result", text, "blue")
             return 0
+        except asyncio.CancelledError:
+            render_notice(console, "Interrupted", "Query cancelled.", "yellow")
+            return 130
         except Exception as exc:
             render_notice(console, "Error", str(exc), "red")
             return 1
         finally:
+            active_task = None
+            abort_signal.clear()
+            set_abort_signal(None)
+            signal.signal(signal.SIGINT, previous)
             clear_question_handler()
 
     agent = create_runtime_agent(config)
 
     try:
-        await render_event_stream(console, agent.query(prompt), omit_duplicate_result=True, show_activity_trace=False)
+        active_task = asyncio.create_task(
+            render_event_stream(console, agent.query(prompt), omit_duplicate_result=True, show_activity_trace=False, abort_signal=abort_signal)
+        )
+        await active_task
+    except asyncio.CancelledError:
+        render_notice(console, "Interrupted", "Query cancelled.", "yellow")
+        return 130
     except Exception as exc:
         render_notice(console, "Error", str(exc), "red")
         return 1
     finally:
+        active_task = None
+        abort_signal.clear()
+        set_abort_signal(None)
+        signal.signal(signal.SIGINT, previous)
         clear_question_handler()
         await cancel_background_subagent_tasks()
         await agent.close()
@@ -418,6 +482,89 @@ def _trim_history(history: History, max_size: int) -> None:
             history._loaded_strings.pop(0)
 
 
+def _handle_agents_command(console, command, config, team_manager):
+    """Handle /agents slash commands."""
+    if not command.args:
+        agents = config.agents or {}
+        render_agents_list(console, agents)
+        return
+
+    subcmd = command.args[0]
+
+    if subcmd == "list":
+        agents = config.agents or {}
+        render_agents_list(console, agents)
+        return
+
+    if subcmd == "add" and len(command.args) >= 3:
+        name = command.args[1]
+        description = " ".join(command.args[2:])
+        if config.agents is None:
+            config.agents = {}
+        if name in config.agents:
+            render_notice(console, "Error", f"Agent '{name}' already exists. Use /agents remove {name} first.", "red")
+            return
+        config.agents[name] = {"description": description, "prompt": description}
+        render_notice(console, "Agent Added", f"Agent '{name}' added.", "green")
+        return
+
+    if subcmd == "remove" and len(command.args) >= 2:
+        name = command.args[1]
+        if config.agents and name in config.agents:
+            if team_manager.is_active() and name in (team_manager.info().get("members", {}) or {}):
+                render_notice(console, "Error", f"Agent '{name}' is in an active team. Use /team stop first.", "red")
+                return
+            del config.agents[name]
+            render_notice(console, "Agent Removed", f"Agent '{name}' removed.", "green")
+        else:
+            render_notice(console, "Error", f"Agent '{name}' not found.", "red")
+        return
+
+    if subcmd == "show" and len(command.args) >= 2:
+        name = command.args[1]
+        agents = config.agents or {}
+        if name in agents:
+            render_state(console, f"Agent: {name}", agents[name])
+        else:
+            render_notice(console, "Error", f"Agent '{name}' not found.", "red")
+        return
+
+    render_notice(console, "Error", f"Unknown /agents subcommand: {subcmd}", "red")
+
+
+async def _handle_team_command(console, command, config, team_manager, agent, abort_signal):
+    """Handle /team slash commands. Returns a new agent if resume requires restart."""
+    subcmd = command.args[0] if command.args else ""
+
+    if subcmd == "create" and len(command.args) >= 3:
+        team_name = command.args[1]
+        members = command.args[2:]
+        try:
+            await team_manager.create_team(team_name, members, config, agent, abort_signal)
+            render_notice(console, "Team Created", f"Team '{team_name}' with members: {', '.join(members)}", "green")
+        except RuntimeError as exc:
+            render_notice(console, "Error", str(exc), "red")
+        except Exception as exc:
+            render_notice(console, "Error", f"Failed to create team: {exc}", "red")
+        return None
+
+    if subcmd == "info":
+        info = team_manager.info()
+        render_state(console, "Team", info)
+        return None
+
+    if subcmd == "stop":
+        try:
+            await team_manager.close_team(agent)
+            render_notice(console, "Team Stopped", "Team disbanded.", "green")
+        except Exception as exc:
+            render_notice(console, "Error", f"Failed to stop team: {exc}", "red")
+        return None
+
+    render_notice(console, "Error", f"Unknown /team subcommand: {subcmd}", "red")
+    return None
+
+
 async def run_chat(config) -> int:
     console = build_console()
     render_banner(console, "chat", config)
@@ -426,7 +573,9 @@ async def run_chat(config) -> int:
     agent = create_runtime_agent(config)
     interrupted = False
     abort_signal = asyncio.Event()
+    team_manager = TeamManager()
     prompt_session: PromptSession[str] = PromptSession(history=InMemoryHistory())
+    question_session: PromptSession[str] = PromptSession()
     _MAX_HISTORY = 50
 
     def _cancel_query_on_sigint(signum: int, frame: object) -> None:
@@ -459,6 +608,8 @@ async def run_chat(config) -> int:
             if hasattr(agent, "_engine"):
                 agent._engine = None
             agent._initialized = False
+            if team_manager.is_active():
+                await team_manager.ensure_orchestrator_team_state(agent)
             render_notice(console, "Interrupted", "Query cancelled.", "yellow")
             interrupted = False
         except Exception as exc:
@@ -469,20 +620,6 @@ async def run_chat(config) -> int:
             set_abort_signal(None)
             signal.signal(signal.SIGINT, previous)
 
-    async def prompt_once(session: PromptSession[str]) -> str | None:
-        try:
-            user_input = await session.prompt_async(_prompt_label)
-            _trim_history(session.history, _MAX_HISTORY)
-            return user_input
-        except (KeyboardInterrupt, EOFError):
-            return None
-
-    async def question_handler(question: str) -> str:
-        with _console_lock:
-            return Prompt.ask(question)
-
-    set_question_handler(question_handler)
-
     def _poll_and_render_notifications() -> bool:
         rendered = False
         for note in read_background_notifications():
@@ -490,6 +627,33 @@ async def run_chat(config) -> int:
                 _render_task_notification(console, agent, note)
                 rendered = True
         return rendered
+
+    async def _prompt_input(session: PromptSession[str]) -> str | None:
+        try:
+            return await session.prompt_async(_prompt_label)
+        except (KeyboardInterrupt, EOFError):
+            return None
+
+    async def prompt_once(session: PromptSession[str]) -> str | None:
+        prompt_task = asyncio.create_task(_prompt_input(session))
+        try:
+            while True:
+                try:
+                    user_input = await asyncio.wait_for(asyncio.shield(prompt_task), timeout=0.1)
+                    if user_input is None:
+                        return None
+                    _trim_history(session.history, _MAX_HISTORY)
+                    return user_input
+                except TimeoutError:
+                    _poll_and_render_notifications()
+                    continue
+        finally:
+            if not prompt_task.done():
+                prompt_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await prompt_task
+
+    set_question_handler(_create_question_handler(question_session, abort_signal))
 
     try:
         while True:
@@ -512,6 +676,8 @@ async def run_chat(config) -> int:
                 break
             if command.name == "clear":
                 agent.clear()
+                if team_manager.is_active():
+                    await team_manager.clear()
                 render_notice(console, "Cleared", "Agent history cleared.", "green")
                 continue
             if command.name == "compact":
@@ -594,6 +760,12 @@ async def run_chat(config) -> int:
                 agent = create_runtime_agent(config)
                 render_notice(console, "Session", f"Resumed {command.args[0]}", "green")
                 continue
+            if command.name == "agents":
+                _handle_agents_command(console, command, config, team_manager)
+                continue
+            if command.name == "team" and command.args:
+                await _handle_team_command(console, command, config, team_manager, agent, abort_signal)
+                continue
             available_skills = set(list_skill_names())
             if command.name in available_skills:
                 render_agent_panel(console, "Skill Started", command.name, "blue")
@@ -618,7 +790,10 @@ async def run_chat(config) -> int:
                 )
                 _poll_and_render_notifications()
                 continue
-            
+
+            if team_manager.is_active():
+                await team_manager.ensure_orchestrator_team_state(agent)
+
             await _run_query_with_interrupt(
                 agent.query(user_input),
                 omit_duplicate_result=True,
@@ -627,6 +802,9 @@ async def run_chat(config) -> int:
             _poll_and_render_notifications()
             continue
     finally:
+        if team_manager.is_active():
+            with contextlib.suppress(Exception):
+                await team_manager.close_team(agent)
         clear_question_handler()
         await cancel_background_subagent_tasks()
         if interrupted:

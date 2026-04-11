@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 from cock_code.cli import build_parser
 
 
@@ -194,6 +196,106 @@ def test_run_ask_installs_and_clears_question_handler(monkeypatch) -> None:
         pass
 
     assert captured == ["set", "clear"]
+
+
+def test_run_ask_question_handler_uses_prompt_session(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeAgent:
+        async def query(self, prompt: str):
+            if False:
+                yield None
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_prompt_async(self, prompt_text: str, *args, **kwargs):
+        captured["prompt_text"] = prompt_text
+        return "answer"
+
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "render_event_stream", lambda console, events, omit_duplicate_result=False, **_kwargs: (_ for _ in ()).throw(StopAsyncIteration()))
+    monkeypatch.setattr(PromptSession, "prompt_async", fake_prompt_async)
+    monkeypatch.setattr(cli, "clear_question_handler", lambda: None)
+    monkeypatch.setattr(cli, "set_question_handler", lambda handler: captured.setdefault("handler", handler))
+
+    try:
+        cli.asyncio.run(cli.run_ask("hello", RuntimeConfig(model="m1")))
+    except RuntimeError:
+        pass
+
+    handler = cast(Callable[[str], Coroutine[object, object, str]], captured["handler"])
+    answer = cli.asyncio.run(handler("Need input?"))
+    assert answer == "answer"
+    assert captured["prompt_text"] == "Need input? "
+
+
+def test_run_ask_uses_runtime_abort_signal_and_sigint(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeAgent:
+        async def query(self, prompt: str):
+            if False:
+                yield None
+
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_render_event_stream(console, events, omit_duplicate_result=False, show_activity_trace=False, abort_signal=None):
+        captured["abort_signal"] = abort_signal
+        await asyncio.sleep(0)
+        handler = cast(Callable[[object, object], None], captured["sigint_handler"])
+        handler(signal.SIGINT, None)
+        await asyncio.Future()
+
+    signal_calls: list[tuple[object, object]] = []
+
+    def fake_signal(sig, handler):
+        signal_calls.append((sig, handler))
+        if callable(handler):
+            captured["sigint_handler"] = handler
+        return "previous-handler"
+
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "render_event_stream", fake_render_event_stream)
+    monkeypatch.setattr(cli, "set_question_handler", lambda handler: None)
+    monkeypatch.setattr(cli, "clear_question_handler", lambda: None)
+    monkeypatch.setattr(cli, "cancel_background_subagent_tasks", lambda: asyncio.sleep(0))
+
+    import cock_code.runtime as runtime
+    abort_values: list[object] = []
+    monkeypatch.setattr(runtime, "set_abort_signal", lambda value: abort_values.append(value))
+    monkeypatch.setattr(cli.signal, "signal", fake_signal)
+
+    exit_code = cli.asyncio.run(cli.run_ask("hello", RuntimeConfig(model="m1")))
+
+    assert exit_code == 130
+    assert isinstance(captured["abort_signal"], asyncio.Event)
+    assert abort_values[0] is captured["abort_signal"]
+    assert abort_values[-1] is None
+    assert signal_calls[0][0] == signal.SIGINT
+    assert signal_calls[-1] == (signal.SIGINT, "previous-handler")
+    assert captured["closed"] is True
+
+
+def test_create_question_handler_cancels_when_abort_signal_is_set(monkeypatch) -> None:
+    async def fake_prompt_async(self, prompt_text: str, *args, **kwargs):
+        await asyncio.Future()
+
+    monkeypatch.setattr(PromptSession, "prompt_async", fake_prompt_async)
+    abort_signal = asyncio.Event()
+    handler = cli._create_question_handler(PromptSession(), abort_signal)
+
+    async def _run() -> None:
+        task = asyncio.create_task(handler("Need input?"))
+        await asyncio.sleep(0)
+        abort_signal.set()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    cli.asyncio.run(_run())
 
 
 def test_run_ask_installs_default_search_backend(monkeypatch) -> None:

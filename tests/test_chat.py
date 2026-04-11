@@ -1,4 +1,6 @@
 import asyncio
+import contextlib
+from typing import Callable, Coroutine, cast
 from prompt_toolkit import PromptSession
 
 import cock_code.cli as cli
@@ -448,6 +450,53 @@ def test_run_chat_shows_background_completion_before_prompt(monkeypatch) -> None
     assert notices[0] == ("Background Task", "builder (task_1) completed\nOutcome: done", "green")
 
 
+def test_run_chat_shows_background_completion_while_prompt_waits(monkeypatch) -> None:
+    notices: list[tuple[str, str, str]] = []
+    release_prompt = asyncio.Event()
+    poll_count = 0
+
+    class FakeAgent:
+        _history: list[dict[str, object]] = []
+
+        def get_session_id(self) -> str:
+            return "session-1"
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_prompt_async(self, prompt_text: str, *args, **kwargs):
+        await release_prompt.wait()
+        return "/exit"
+
+    def fake_read_background_notifications():
+        nonlocal poll_count
+        poll_count += 1
+        if poll_count == 2:
+            release_prompt.set()
+            return [
+                {
+                    "type": "background_task_completed",
+                    "task_id": "task_1",
+                    "status": "completed",
+                    "subject": "builder",
+                    "output": "Outcome: done",
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "read_background_notifications", fake_read_background_notifications)
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(PromptSession, "prompt_async", fake_prompt_async)
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert notices[0] == ("Background Task", "builder (task_1) completed\nOutcome: done", "green")
+    assert poll_count >= 2
+
+
 def test_run_chat_starts_background_agent_task(monkeypatch) -> None:
     captured: dict[str, object] = {}
     prompts = iter(["/agent-bg reviewer check last commit", "/exit"])
@@ -560,7 +609,7 @@ def test_run_chat_wait_injects_completed_task_output_into_context(monkeypatch) -
     }
     assert agent._history[-1] == {
         "role": "assistant",
-        "content": [{"type": "text", "text": "Received background task task_1 result. Ready to continue."}],
+        "content": [{"type": "text", "text": "Received background task task_1 result. Ready to continue from that result without redoing the same delegated work."}],
     }
 
 
@@ -832,6 +881,42 @@ def test_run_chat_installs_and_clears_question_handler(monkeypatch) -> None:
     assert captured == ["set", "clear"]
 
 
+def test_run_chat_question_handler_uses_prompt_session(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_prompt_async(self, prompt_text: str, *args, **kwargs):
+        captured["prompt_text"] = prompt_text
+        return "answer"
+
+    monkeypatch.setattr(PromptSession, "prompt_async", fake_prompt_async)
+    handler = cast(
+        Callable[[str], Coroutine[object, object, str]],
+        cli._create_question_handler(PromptSession(), asyncio.Event()),
+    )
+
+    answer = cli.asyncio.run(handler("Need input?"))
+    assert answer == "answer"
+    assert captured["prompt_text"] == "Need input? "
+
+
+def test_run_chat_question_handler_cancels_on_abort_signal(monkeypatch) -> None:
+    async def fake_prompt_async(self, prompt_text: str, *args, **kwargs):
+        await asyncio.Future()
+
+    monkeypatch.setattr(PromptSession, "prompt_async", fake_prompt_async)
+    abort_signal = asyncio.Event()
+    handler = cli._create_question_handler(PromptSession(), abort_signal)
+
+    async def _run_handler() -> None:
+        task = asyncio.create_task(handler("Need input?"))
+        await asyncio.sleep(0)
+        abort_signal.set()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    cli.asyncio.run(_run_handler())
+
+
 def test_run_chat_unknown_command_shows_feedback(monkeypatch) -> None:
     prompts = iter(["/wat", "/exit"])
     console = Console(record=True, width=100)
@@ -893,7 +978,7 @@ def test_run_chat_query_cancelled_by_interrupt_recovers(monkeypatch) -> None:
             if prompt == "hello":
                 interrupted_once["count"] += 1
                 raise asyncio.CancelledError()
-            yield cli.SDKMessage(type=cli.SDKMessageType.RESULT, text="done")
+            yield SDKMessage(type=SDKMessageType.RESULT, text="done")
 
         async def close(self) -> None:
             return None
@@ -928,7 +1013,7 @@ def test_run_chat_sigint_cancels_active_query_task(monkeypatch) -> None:
                 except asyncio.CancelledError:
                     query_cancelled["count"] += 1
                     raise
-            yield cli.SDKMessage(type=cli.SDKMessageType.RESULT, text="done")
+            yield SDKMessage(type=SDKMessageType.RESULT, text="done")
 
         async def close(self) -> None:
             return None
@@ -962,7 +1047,7 @@ def test_run_chat_interrupt_does_not_cancel_background_tasks(monkeypatch) -> Non
         async def query(self, prompt: str):
             if prompt == "hello":
                 raise asyncio.CancelledError()
-            yield cli.SDKMessage(type=cli.SDKMessageType.RESULT, text="done")
+            yield SDKMessage(type=SDKMessageType.RESULT, text="done")
 
         async def close(self) -> None:
             return None
@@ -1007,3 +1092,199 @@ def test_render_event_stream_breaks_on_abort_signal() -> None:
 
     cli.asyncio.run(_run())
     assert abort_signal.is_set()
+
+
+def test_run_chat_agents_list_command(monkeypatch) -> None:
+    from cock_code.team import TeamManager
+
+    captured: dict[str, object] = {}
+    prompts = iter(["/agents", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(
+        cli,
+        "render_agents_list",
+        lambda console, agents: captured.update({"agents": agents}),
+    )
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    config = RuntimeConfig(model="m2", agents={"reviewer": {"description": "code reviewer"}})
+    exit_code = cli.asyncio.run(cli.run_chat(config))
+
+    assert exit_code == 0
+    assert captured["agents"] == {"reviewer": {"description": "code reviewer"}}
+    assert captured["closed"] is True
+
+
+def test_run_chat_agents_add_command(monkeypatch) -> None:
+    notices: list[tuple[str, str, str]] = []
+    prompts = iter(["/agents add builder build things", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(
+        cli,
+        "render_notice",
+        lambda console, title, message, style="yellow": notices.append((title, message, style)),
+    )
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    config = RuntimeConfig(model="m2", agents={})
+    exit_code = cli.asyncio.run(cli.run_chat(config))
+
+    assert exit_code == 0
+    assert ("Agent Added", "Agent 'builder' added.", "green") in notices
+    assert "builder" in config.agents
+    assert config.agents["builder"]["description"] == "build things"
+
+
+def test_run_chat_agents_remove_command(monkeypatch) -> None:
+    notices: list[tuple[str, str, str]] = []
+    prompts = iter(["/agents remove reviewer", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(
+        cli,
+        "render_notice",
+        lambda console, title, message, style="yellow": notices.append((title, message, style)),
+    )
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    config = RuntimeConfig(model="m2", agents={"reviewer": {"description": "code reviewer"}})
+    exit_code = cli.asyncio.run(cli.run_chat(config))
+
+    assert exit_code == 0
+    assert ("Agent Removed", "Agent 'reviewer' removed.", "green") in notices
+    assert "reviewer" not in config.agents
+
+
+def test_run_chat_agents_show_command(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/agents show reviewer", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(
+        cli,
+        "render_state",
+        lambda console, title, data: captured.update({"title": title, "data": data}),
+    )
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    config = RuntimeConfig(model="m2", agents={"reviewer": {"description": "code reviewer", "prompt": "You are a reviewer."}})
+    exit_code = cli.asyncio.run(cli.run_chat(config))
+
+    assert exit_code == 0
+    assert captured["title"] == "Agent: reviewer"
+
+
+def test_run_chat_agents_remove_in_team_fails(monkeypatch) -> None:
+    notices: list[tuple[str, str, str]] = []
+    prompts = iter(["/agents remove reviewer", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(
+        cli,
+        "render_notice",
+        lambda console, title, message, style="yellow": notices.append((title, message, style)),
+    )
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    config = RuntimeConfig(model="m2", agents={"reviewer": {"description": "code reviewer"}})
+    exit_code = cli.asyncio.run(cli.run_chat(config))
+
+    assert exit_code == 0
+    assert "reviewer" not in config.agents
+
+
+def test_run_chat_clear_clears_team_histories(monkeypatch) -> None:
+    from cock_code.team import TeamManager
+
+    cleared: dict[str, object] = {}
+    prompts = iter(["/clear", "/exit"])
+
+    class FakeAgent:
+        def clear(self) -> None:
+            cleared["agent_cleared"] = True
+
+        async def close(self) -> None:
+            cleared["closed"] = True
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(
+        cli,
+        "render_notice",
+        lambda console, title, message, style="yellow": None,
+    )
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert cleared.get("agent_cleared") is True
+
+
+def test_run_chat_reapplies_team_state_after_interrupt(monkeypatch) -> None:
+    prompts = iter(["hello", "/exit"])
+    captured: dict[str, int] = {"ensure_calls": 0}
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._initialized = False
+            self._tool_pool = []
+
+        async def query(self, prompt: str):
+            if prompt == "hello":
+                raise asyncio.CancelledError()
+            if False:
+                yield None
+
+        async def close(self) -> None:
+            return None
+
+    class FakeTeamManager:
+        def is_active(self) -> bool:
+            return True
+
+        async def ensure_orchestrator_team_state(self, agent) -> None:
+            captured["ensure_calls"] += 1
+
+        async def clear(self) -> None:
+            return None
+
+        async def close_team(self, agent) -> None:
+            return None
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "TeamManager", FakeTeamManager)
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert captured["ensure_calls"] == 2
