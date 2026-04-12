@@ -5,6 +5,7 @@ from dataclasses import replace
 import contextlib
 import json
 from pathlib import Path
+import re
 import threading
 from typing import Any, cast
 from open_agent_sdk import (
@@ -48,7 +49,7 @@ from open_agent_sdk.tools.skill_tool import SkillTool
 
 from cock_code.config import RuntimeConfig
 from cock_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeReadTool, RuntimeTraceTool, TurnTracker
-from cock_code.team import patch_tool_pool as _patch_tool_pool
+from cock_code.team import SDKTeamCreateBridgeTool, SDKTeamDeleteBridgeTool, patch_tool_pool as _patch_tool_pool
 
 
 _loaded_local_skill_names: set[str] = set()
@@ -56,6 +57,7 @@ _background_subagent_tasks: set[asyncio.Task[None]] = set()
 _notified_task_ids: set[str] = set()
 _notified_task_ids_lock = threading.Lock()
 _abort_signal: asyncio.Event | None = None
+_ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
 patch_tool_pool = _patch_tool_pool
 
@@ -357,6 +359,57 @@ def _looks_like_planning_text(text: str) -> bool:
     return normalized.startswith(planning_prefixes)
 
 
+def _clean_summary_candidate(text: str) -> str:
+    cleaned = " ".join(text.strip().split())
+    if not cleaned:
+        return ""
+    if re.match(r"^(now i have|after reviewing)\b", cleaned, re.IGNORECASE):
+        return ""
+    segments = re.split(r"(?<=[.!?])\s+", cleaned)
+    kept: list[str] = []
+    for segment in segments:
+        piece = segment.strip()
+        if not piece:
+            continue
+        if _looks_like_planning_text(piece):
+            break
+        if kept and re.match(r"^(let me|i'll|i will|first|next|to start|starting with)\b", piece, re.IGNORECASE):
+            break
+        if kept and re.match(r"^(here(?:'s| is)|after reviewing|now i have)\b", piece, re.IGNORECASE):
+            break
+        kept.append(piece)
+    if kept:
+        return " ".join(kept).strip()
+    if _looks_like_planning_text(cleaned):
+        return ""
+    inline_markers = [
+        " here's ",
+        " here is ",
+        " after reviewing ",
+        " now i have ",
+        " let me ",
+        " i'll ",
+        " i will ",
+        " first, ",
+        " first ",
+        " next, ",
+        " next ",
+        " to start ",
+        " starting with ",
+    ]
+    lowered = f" {cleaned.lower()} "
+    cut_positions = [lowered.find(marker) for marker in inline_markers if lowered.find(marker) != -1]
+    if cut_positions:
+        cutoff = min(cut_positions)
+        candidate = cleaned[: max(cutoff - 1, 0)].strip(" :;-.,")
+        return candidate if candidate and not _looks_like_planning_text(candidate) else ""
+    return cleaned
+
+
+def sanitize_task_output(output: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", output)
+
+
 def _format_subagent_summary(result_text: str, messages: list[dict[str, Any]]) -> str:
     outcomes: list[str] = []
     files: list[str] = []
@@ -364,37 +417,42 @@ def _format_subagent_summary(result_text: str, messages: list[dict[str, Any]]) -
     open_issues: list[str] = []
     next_steps: list[str] = []
     findings: list[str] = []
-    last_assistant_text: str = ""
+    summary_candidates: list[str] = []
 
     for message in messages:
         if str(message.get("role", "")) != "assistant":
             continue
         for text in _extract_text_blocks(message):
-            if text.strip():
-                last_assistant_text = text.strip()
+            cleaned_block = _clean_summary_candidate(text)
+            if cleaned_block:
+                summary_candidates.append(cleaned_block)
             for raw_line in text.splitlines():
                 line = raw_line.strip()
                 if not line:
                     continue
                 lower = line.lower()
                 if lower.startswith("outcome:"):
-                    outcomes.append(line.partition(":")[2].strip())
+                    cleaned_outcome = _clean_summary_candidate(line.partition(":")[2].strip())
+                    if cleaned_outcome:
+                        outcomes.append(cleaned_outcome)
                 elif lower.startswith("files:"):
                     files.append(line.partition(":")[2].strip())
                 elif lower.startswith("commands:"):
                     commands.append(line.partition(":")[2].strip())
                 elif lower.startswith("findings:"):
-                    findings.append(line.partition(":")[2].strip())
+                    cleaned_finding = _clean_summary_candidate(line.partition(":")[2].strip())
+                    if cleaned_finding:
+                        findings.append(cleaned_finding)
                 elif lower.startswith("open issues:"):
                     open_issues.append(line.partition(":")[2].strip())
                 elif lower.startswith("next step:"):
                     next_steps.append(line.partition(":")[2].strip())
 
     fallback = "No useful output returned"
-    for candidate in (result_text.strip(), last_assistant_text):
+    fallback_candidates = [_clean_summary_candidate(result_text.strip())]
+    fallback_candidates.extend(reversed(summary_candidates))
+    for candidate in fallback_candidates:
         if not candidate:
-            continue
-        if _looks_like_planning_text(candidate):
             continue
         fallback = candidate
         break
@@ -444,7 +502,7 @@ async def _update_background_subagent_task(task_id: str, *, status: str | None =
     if status is not None:
         payload["status"] = status
     if output is not None:
-        payload["output"] = output
+        payload["output"] = sanitize_task_output(output)
     await TaskUpdateTool().call(payload, ToolContext(cwd=cwd, env=env or {}))
 
 
@@ -551,11 +609,11 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
                 )
                 child_agent = _create_sdk_agent(child_config, include_runtime_agent_tool=False)
                 try:
-                    query_result = await child_agent.prompt(prompt_text)
+                    query_result = await _prompt_agent_with_abort(child_agent, prompt_text)
                 finally:
                     await child_agent.close()
             else:
-                query_result = await working_agent.prompt(prompt_text, overrides or None)
+                query_result = await _prompt_agent_with_abort(working_agent, prompt_text, overrides or None)
 
             text = query_result.text.strip() if query_result.text else ""
             summary = _format_subagent_summary(text, query_result.messages)
@@ -569,13 +627,46 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
     system_prompt = str(definition.get("prompt") or definition.get("system_prompt") or definition.get("description") or "")
     child_agent = _create_sdk_agent(child_config, include_runtime_agent_tool=False, system_prompt=system_prompt)
     try:
-        result = await child_agent.prompt(prompt)
+        result = await _prompt_agent_with_abort(child_agent, prompt)
     finally:
         await child_agent.close()
 
     text = result.text.strip() if result.text else ""
     summary = _format_subagent_summary(text, result.messages)
     return ToolResult(tool_use_id="", content=summary or f"Agent {agent_name} completed with no text output.")
+
+
+async def _prompt_agent_with_abort(agent, prompt: str, overrides: dict[str, Any] | None = None):
+    if overrides is None:
+        prompt_task = asyncio.create_task(agent.prompt(prompt))
+    else:
+        prompt_task = asyncio.create_task(agent.prompt(prompt, overrides))
+    abort_task: asyncio.Task[bool] | None = None
+    if _abort_signal is not None:
+        abort_task = asyncio.create_task(_abort_signal.wait())
+    try:
+        if abort_task is None:
+            return await prompt_task
+        done, _pending = await asyncio.wait({prompt_task, abort_task}, return_when=asyncio.FIRST_COMPLETED)
+        if abort_task in done:
+            prompt_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await prompt_task
+            raise asyncio.CancelledError()
+        return prompt_task.result()
+    except asyncio.CancelledError:
+        if not prompt_task.done():
+            prompt_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await prompt_task
+        if prompt_task.done() and not prompt_task.cancelled():
+            return prompt_task.result()
+        raise
+    finally:
+        if abort_task is not None:
+            abort_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await abort_task
 
 
 async def _stream_subagent(config: RuntimeConfig, input: dict[str, Any], context: ToolContext):
@@ -767,6 +858,7 @@ def _create_sdk_agent(
     )
 
     tracker = TurnTracker()
+    setattr(agent, "_cock_code_config", config)
 
     if hasattr(agent, "query"):
         original_query = agent.query
@@ -844,6 +936,10 @@ def _create_sdk_agent(
                 if getattr(tool, "name", "") == "Agent" and not replaced:
                     new_pool.append(RuntimeAgentTool(lambda input, context: _run_subagent(config, input, context), tracker))
                     replaced = True
+                elif getattr(tool, "name", "") == "TeamCreate":
+                    new_pool.append(RuntimeTraceTool(SDKTeamCreateBridgeTool(), tracker))
+                elif getattr(tool, "name", "") == "TeamDelete":
+                    new_pool.append(RuntimeTraceTool(SDKTeamDeleteBridgeTool(), tracker))
                 elif getattr(tool, "name", "") == "Read":
                     new_pool.append(RuntimeReadTool(tool, tracker))
                 elif getattr(tool, "name", "") == "Edit":
@@ -862,7 +958,11 @@ def _create_sdk_agent(
             await original_initialize()
             new_pool = []
             for tool in getattr(agent, "_tool_pool", []):
-                if getattr(tool, "name", "") == "Read":
+                if getattr(tool, "name", "") == "TeamCreate":
+                    new_pool.append(RuntimeTraceTool(SDKTeamCreateBridgeTool(), tracker))
+                elif getattr(tool, "name", "") == "TeamDelete":
+                    new_pool.append(RuntimeTraceTool(SDKTeamDeleteBridgeTool(), tracker))
+                elif getattr(tool, "name", "") == "Read":
                     new_pool.append(RuntimeReadTool(tool, tracker))
                 elif getattr(tool, "name", "") == "Edit":
                     new_pool.append(RuntimeEditTool(tool, tracker))

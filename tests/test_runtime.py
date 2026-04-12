@@ -600,6 +600,66 @@ def test_run_subagent_background_surfaces_completion_via_task_store(monkeypatch)
     assert "Outcome: background done" in str(note["output"])
 
 
+def test_update_background_subagent_task_strips_ansi_output() -> None:
+    async def run_case():
+        task_id = await runtime._create_background_subagent_task("builder", "do work", "/tmp/project", {})
+        await runtime._update_background_subagent_task(
+            task_id,
+            status="completed",
+            output="\x1b[32mOutcome: done\x1b[0m",
+            cwd="/tmp/project",
+            env={},
+        )
+        task = get_all_tasks()[task_id]
+        assert task["status"] == "completed"
+        assert task["output"] == "Outcome: done"
+
+    asyncio.run(run_case())
+
+
+def test_run_subagent_background_strips_ansi_before_notifications(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="\x1b[32mbackground done\x1b[0m",
+                messages=[],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    runtime._notified_task_ids.clear()
+
+    async def run_case():
+        result = await runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"builder": {"description": "build agent"}}),
+            {
+                "name": "builder",
+                "prompt": "do work",
+                "description": "builder",
+                "run_in_background": True,
+            },
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+        assert result.is_error is False
+        tasks = get_all_tasks()
+        task_id = next(iter(tasks))
+        for _ in range(50):
+            if tasks[task_id]["status"] == "completed":
+                break
+            await asyncio.sleep(0)
+
+    asyncio.run(run_case())
+
+    notifications = runtime.read_background_notifications()
+    assert len(notifications) == 1
+    note = notifications[0]
+    assert note["output"] == "Outcome: background done"
+
+
 def test_run_subagent_background_does_not_create_task_for_unknown_agent() -> None:
     async def run_case():
         result = await runtime._run_subagent(
@@ -610,6 +670,73 @@ def test_run_subagent_background_does_not_create_task_for_unknown_agent() -> Non
         assert result.is_error is True
         assert "unknown agent 'task1'" in str(result.content)
         assert get_all_tasks() == {}
+
+    asyncio.run(run_case())
+
+
+def test_run_subagent_foreground_cancels_when_abort_signal_is_set(monkeypatch) -> None:
+    cancelled = {"value": False}
+
+    class FakeChildAgent:
+        async def prompt(self, prompt: str, overrides=None):
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                cancelled["value"] = True
+                raise
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+
+    async def run_case():
+        abort_signal = asyncio.Event()
+        runtime.set_abort_signal(abort_signal)
+
+        async def trigger_abort():
+            await asyncio.sleep(0)
+            abort_signal.set()
+
+        trigger_task = asyncio.create_task(trigger_abort())
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await runtime._run_subagent(
+                    RuntimeConfig(model="m1", agents={"builder": {"description": "build agent"}}),
+                    {"name": "builder", "prompt": "do work", "description": "builder"},
+                    ToolContext(cwd="/tmp/project", env={}),
+                )
+        finally:
+            runtime.set_abort_signal(None)
+            await trigger_task
+
+        assert cancelled["value"] is True
+
+    asyncio.run(run_case())
+
+
+def test_prompt_agent_with_abort_returns_result_if_cancel_arrives_after_completion(monkeypatch) -> None:
+    class FakeAgent:
+        async def prompt(self, prompt: str):
+            return "done"
+
+    original_wait = runtime.asyncio.wait
+
+    async def fake_wait(tasks, return_when=None):
+        prompt_task = next(task for task in tasks if task.get_coro().__name__ == "prompt")
+        await prompt_task
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(runtime.asyncio, "wait", fake_wait)
+
+    async def run_case():
+        runtime.set_abort_signal(asyncio.Event())
+        try:
+            result = await runtime._prompt_agent_with_abort(FakeAgent(), "hello")
+        finally:
+            runtime.set_abort_signal(None)
+            monkeypatch.setattr(runtime.asyncio, "wait", original_wait)
+        assert result == "done"
 
     asyncio.run(run_case())
 
@@ -890,6 +1017,91 @@ def test_run_subagent_summary_uses_last_non_planning_text_when_result_text_is_pl
     assert "Outcome: reviewed the rendering module and team module and found the root cause" in text
 
 
+def test_run_subagent_summary_trims_planning_tail_from_outcome(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str, overrides=None):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="",
+                messages=[
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Outcome: I found a critical issue! Let me check the actual module structure:",
+                            }
+                        ],
+                    }
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+
+    result = asyncio.run(
+        runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"task": {"description": "review agent"}}),
+            {"name": "task", "prompt": "review modules", "description": "task"},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+    )
+
+    text = str(result.content)
+    assert "Let me check the actual module structure" not in text
+    assert "Outcome: I found a critical issue!" in text
+
+
+def test_run_subagent_summary_prefers_earlier_useful_text_over_later_planning(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str, overrides=None):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="",
+                messages=[
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "I reviewed the transport tests and found no critical issues.",
+                            }
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Let me also inspect the remaining modules before wrapping up.",
+                            }
+                        ],
+                    },
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+
+    result = asyncio.run(
+        runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"task": {"description": "review agent"}}),
+            {"name": "task", "prompt": "review tests", "description": "task"},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+    )
+
+    text = str(result.content)
+    assert "Let me also inspect the remaining modules" not in text
+    assert "Outcome: I reviewed the transport tests and found no critical issues." in text
+
+
 def test_create_runtime_agent_replaces_placeholder_agent_tool_after_initialize(monkeypatch) -> None:
     class PlaceholderAgentTool:
         name = "Agent"
@@ -949,6 +1161,35 @@ def test_create_runtime_agent_replaces_read_and_edit_tools_after_initialize(monk
     assert [tool.name for tool in agent._tool_pool] == ["Read", "Edit", "Bash", "Agent"]
     assert agent._tool_pool[0].__class__.__name__ == "RuntimeReadTool"
     assert agent._tool_pool[1].__class__.__name__ == "RuntimeEditTool"
+
+
+def test_create_runtime_agent_bridges_sdk_team_tools_after_initialize(monkeypatch) -> None:
+    class TeamCreateTool:
+        name = "TeamCreate"
+
+    class TeamDeleteTool:
+        name = "TeamDelete"
+
+    class OtherTool:
+        name = "Bash"
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = []
+
+        async def _initialize(self) -> None:
+            self._tool_pool = [TeamCreateTool(), TeamDeleteTool(), OtherTool()]
+
+    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+
+    agent = create_runtime_agent(RuntimeConfig(api_key="test", base_url="https://nano-gpt.com/api/v1", model="m1"))
+
+    asyncio.run(agent._initialize())
+
+    assert [tool.name for tool in agent._tool_pool] == ["TeamCreate", "TeamDelete", "Bash", "Agent"]
+    assert agent._tool_pool[0].__class__.__name__ == "RuntimeTraceTool"
+    assert agent._tool_pool[1].__class__.__name__ == "RuntimeTraceTool"
 
 
 def test_create_runtime_agent_adds_default_task_agent_without_agents(monkeypatch) -> None:
