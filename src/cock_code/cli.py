@@ -4,20 +4,24 @@ import argparse
 import asyncio
 import contextlib
 import os
+import re
 import signal
 import sys
 import threading
 from urllib.parse import urlencode
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.formatted_text import FormattedText
+from prompt_toolkit.shortcuts import print_formatted_text
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.history import History
+from prompt_toolkit.patch_stdout import patch_stdout
 
 import httpx
 
 from cock_code.chat import parse_chat_command
 from cock_code.config import config_from_namespace
-from cock_code.team import TeamManager
+from cock_code.team import TeamManager, set_runtime_team_bridge
 from cock_code.rendering import (
     build_console,
     render_agents_list,
@@ -244,22 +248,141 @@ def _create_question_handler(
     return question_handler
 
 
-def _render_task_notification(console, agent, note: dict[str, object]) -> None:
+def _render_task_notification(console, agent, note: dict[str, object], prompt_session: PromptSession[str] | None = None) -> None:
+    from cock_code.runtime import sanitize_task_output
+
     status = str(note.get("status", "completed"))
     style = "green" if status == "completed" else "yellow"
-    output = str(note.get("output", ""))
+    output = sanitize_task_output(str(note.get("output", "")))
     subject = str(note.get("subject", "task"))
     task_id = str(note.get("task_id", ""))
     lines = [f"{subject} ({task_id}) {status}"]
     if output:
-        lines.append(output)
+        lines.append(f"Summary: {_compact_task_output(output)}")
+        lines.append(f"Full output: /task-output {task_id}")
+    app = getattr(prompt_session, "app", None) if prompt_session is not None else None
+    notification_text = "\n".join(lines)
     with _console_lock:
-        render_notice(console, "Background Task", "\n".join(lines), style)
+        if app is not None:
+            print_formatted_text(_prompt_box("Background Task", lines, style))
+        else:
+            render_notice(console, "Background Task", notification_text, style)
         append_task_result_to_context(agent, task_id, {"status": status, "output": output})
+    if app is not None:
+        app.invalidate()
+
+
+def _prompt_box(title: str, lines: list[str], style: str) -> FormattedText:
+    border_style = {
+        "green": "ansigreen",
+        "yellow": "ansiyellow",
+        "red": "ansired",
+        "blue": "ansiblue",
+    }.get(style, "")
+    content_lines = [line.rstrip() for line in lines] or [""]
+    width = max(len(title), *(len(line) for line in content_lines))
+    width = min(max(width, 20), 100)
+
+    def pad(text: str) -> str:
+        return text[:width].ljust(width)
+
+    top = f"╭─ {title} {'─' * max(width - len(title) - 1, 0)}╮"
+    bottom = f"╰{'─' * (width + 3)}╯"
+
+    fragments: list[tuple[str, str]] = []
+    if border_style:
+        fragments.append((border_style, top))
+    else:
+        fragments.append(("", top))
+    fragments.append(("", "\n"))
+
+    for line in content_lines:
+        if border_style:
+            fragments.append((border_style, "│ "))
+            fragments.append(("", pad(line)))
+            fragments.append((border_style, " │"))
+        else:
+            fragments.append(("", f"│ {pad(line)} │"))
+        fragments.append(("", "\n"))
+
+    if border_style:
+        fragments.append((border_style, bottom))
+    else:
+        fragments.append(("", bottom))
+    fragments.append(("", "\n"))
+    return FormattedText(fragments)
+
+
+def _compact_task_output(output: str, max_chars: int = 240) -> str:
+    from cock_code.runtime import _clean_summary_candidate, sanitize_task_output
+
+    output = sanitize_task_output(output)
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if not lines:
+        return "No useful output returned"
+
+    def _split_chunks(text: str) -> list[str]:
+        chunks = re.split(r"\s+#{2,}\s+|\s+---\s+|\s+\*\*\*\s+", text)
+        return [chunk.strip() for chunk in chunks if chunk.strip()]
+
+    def _is_heading_like(text: str) -> bool:
+        normalized = text.strip().lower().strip(":- ")
+        if not normalized:
+            return True
+        patterns = (
+            r"[a-z ]*(review|report|summary)",
+            r"(critical|moderate|minor) issues",
+            r"changes overview",
+            r"executive summary",
+            r"questions",
+            r"recommendations?",
+        )
+        return any(re.fullmatch(pattern, normalized, re.IGNORECASE) for pattern in patterns)
+
+    def _extract_review_sentence(text: str) -> str:
+        sentence = text.strip()
+        sentence = re.sub(r"^#+\s*", "", sentence)
+        sentence = re.sub(r"^(?:[A-Za-z]+(?:\s+[A-Za-z]+){0,4}\s+(?:review|report|summary))(?:\s+|[:.-]\s*)", "", sentence, flags=re.IGNORECASE)
+        sentence = re.sub(r"^(after reviewing\b[^,.:;]*[,.:;]?\s*)", "", sentence, flags=re.IGNORECASE)
+        sentence = re.sub(r"^(now\b[^.]*[.:]?\s*)", "", sentence, flags=re.IGNORECASE)
+        sentence = re.sub(r"^(here(?:'s| is)\s+(?:my|the)\s+review:?\s*)", "", sentence, flags=re.IGNORECASE)
+        sentence = sentence.strip()
+        if not sentence or sentence.lower() in {"now", "summary"}:
+            return ""
+        return sentence
+
+    candidates: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped in {"---", "***"}:
+            continue
+        if re.fullmatch(r"#+", stripped):
+            continue
+        stripped = re.sub(r"^[>*#\-\s]+", "", stripped)
+        for chunk in _split_chunks(stripped):
+            chunk = re.sub(r"^[>*#\-\s]+", "", chunk).strip()
+            if not chunk:
+                continue
+            if chunk.lower().startswith("outcome:"):
+                normalized = _clean_summary_candidate(chunk.partition(":")[2].strip())
+            else:
+                normalized = _clean_summary_candidate(chunk)
+            normalized = _extract_review_sentence(normalized)
+            if normalized and not normalized.lower().startswith(("files:", "commands:", "open issues:", "next step:", "findings:")):
+                if _is_heading_like(normalized):
+                    continue
+                candidates.append(normalized)
+
+    for candidate in candidates:
+        if candidate:
+            return candidate if len(candidate) <= max_chars else f"{candidate[:max_chars].rstrip()}..."
+    return "No useful output returned"
 
 
 def append_task_result_to_context(agent, task_id: str, task_result: dict[str, object]) -> None:
-    output = str(task_result.get("output", "")).strip()
+    from cock_code.runtime import sanitize_task_output
+
+    output = sanitize_task_output(str(task_result.get("output", "")).strip())
     status = str(task_result.get("status", "")).strip()
     if status not in {"completed", "cancelled"} or not output:
         return
@@ -574,6 +697,7 @@ async def run_chat(config) -> int:
     interrupted = False
     abort_signal = asyncio.Event()
     team_manager = TeamManager()
+    set_runtime_team_bridge(team_manager, agent)
     prompt_session: PromptSession[str] = PromptSession(history=InMemoryHistory())
     question_session: PromptSession[str] = PromptSession()
     _MAX_HISTORY = 50
@@ -624,13 +748,14 @@ async def run_chat(config) -> int:
         rendered = False
         for note in read_background_notifications():
             if note.get("type") == "background_task_completed":
-                _render_task_notification(console, agent, note)
+                _render_task_notification(console, agent, note, prompt_session)
                 rendered = True
         return rendered
 
     async def _prompt_input(session: PromptSession[str]) -> str | None:
         try:
-            return await session.prompt_async(_prompt_label)
+            with patch_stdout():
+                return await session.prompt_async(_prompt_label)
         except (KeyboardInterrupt, EOFError):
             return None
 
@@ -802,6 +927,7 @@ async def run_chat(config) -> int:
             _poll_and_render_notifications()
             continue
     finally:
+        set_runtime_team_bridge(None, None)
         if team_manager.is_active():
             with contextlib.suppress(Exception):
                 await team_manager.close_team(agent)

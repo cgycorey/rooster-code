@@ -384,10 +384,11 @@ def test_run_chat_stops_task(monkeypatch) -> None:
 
 def test_run_chat_shows_background_completion_notifications(monkeypatch) -> None:
     prompts = iter(["/exit"])
-    notices: list[tuple[str, str, str]] = []
+    rendered: list[str] = []
 
     class FakeAgent:
-        _history: list[dict[str, object]] = []
+        def __init__(self) -> None:
+            self._history: list[dict[str, object]] = []
 
         def get_session_id(self) -> str:
             return "session-1"
@@ -395,7 +396,8 @@ def test_run_chat_shows_background_completion_notifications(monkeypatch) -> None
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    agent = FakeAgent()
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: agent)
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(
         cli,
@@ -410,20 +412,141 @@ def test_run_chat_shows_background_completion_notifications(monkeypatch) -> None
             }
         ],
     )
-    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(cli, "print_formatted_text", lambda text: rendered.append("".join(fragment[1] for fragment in text)))
     monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
     assert exit_code == 0
-    assert notices[0] == ("Background Task", "builder (task_1) completed\nOutcome: done", "green")
+    assert "Background Task" in rendered[0]
+    assert "╭─" in rendered[0]
+    assert "builder (task_1) completed" in rendered[0]
+    assert "Summary: done" in rendered[0]
+    assert agent._history[-2] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "[Background task task_1 completed]\n\nOutcome: done"}],
+    }
+    assert agent._history[-1] == {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Received background task task_1 result. Ready to continue from that result without redoing the same delegated work."}],
+    }
 
 
-def test_run_chat_shows_background_completion_before_prompt(monkeypatch) -> None:
+def test_render_task_notification_invalidates_prompt_session(monkeypatch) -> None:
+    captured: dict[str, bool] = {"invalidated": False}
+    rendered: list[str] = []
+
+    class FakePromptApp:
+        def invalidate(self) -> None:
+            captured["invalidated"] = True
+
+    class FakePromptSession:
+        app = FakePromptApp()
+
+    class FakeAgent:
+        _history: list[dict[str, object]] = []
+
+    monkeypatch.setattr(cli, "print_formatted_text", lambda text: rendered.append("".join(fragment[1] for fragment in text)))
+
+    cli._render_task_notification(
+        SilentConsole(),
+        FakeAgent(),
+        {
+            "type": "background_task_completed",
+            "task_id": "task_1",
+            "status": "completed",
+            "subject": "builder",
+            "output": "Outcome: done",
+        },
+        cast(PromptSession[str], FakePromptSession()),
+    )
+
+    assert "Background Task" in rendered[0]
+    assert "╭─" in rendered[0]
+    assert "builder (task_1) completed" in rendered[0]
+    assert "Summary: done" in rendered[0]
+    assert captured["invalidated"] is True
+
+
+def test_render_task_notification_uses_rich_notice_without_prompt_session(monkeypatch) -> None:
     notices: list[tuple[str, str, str]] = []
 
     class FakeAgent:
         _history: list[dict[str, object]] = []
+
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+
+    cli._render_task_notification(
+        SilentConsole(),
+        FakeAgent(),
+        {
+            "type": "background_task_completed",
+            "task_id": "task_1",
+            "status": "completed",
+            "subject": "builder",
+            "output": "Outcome: done",
+        },
+        None,
+    )
+
+    assert notices[0] == (
+        "Background Task",
+        "builder (task_1) completed\nSummary: done\nFull output: /task-output task_1",
+        "green",
+    )
+
+
+def test_compact_task_output_trims_noisy_reviewer_report() -> None:
+    output = (
+        "Outcome: All tests pass. Here's my review:\n\n"
+        "---\n\n"
+        "## Code Review\n"
+        "Lots of detailed follow-up analysis here"
+    )
+
+    summary = cli._compact_task_output(output)
+
+    assert summary == "All tests pass."
+
+
+def test_compact_task_output_skips_headings_and_planning_text() -> None:
+    output = (
+        "Outcome: Now I have a complete view of all the modified files.\n"
+        "\n"
+        "## Correctness Review\n"
+        "Found no critical issues in the modified files."
+    )
+
+    summary = cli._compact_task_output(output)
+
+    assert summary == "Found no critical issues in the modified files."
+
+
+def test_compact_task_output_handles_collapsed_markdown_review_report() -> None:
+    output = (
+        "Outcome: # Performance Review Report After reviewing all five files, I've identified several performance issues. "
+        "Here's the detailed report: --- ## Critical Issues ### 1. runtime.py Line 479-486: Inefficient History Trimming"
+    )
+
+    summary = cli._compact_task_output(output)
+
+    assert summary == "I've identified several performance issues."
+
+
+def test_compact_task_output_drops_now_prefix_fragments() -> None:
+    output = "Outcome: Now I'll provide a detailed security analysis of the modified files."
+
+    summary = cli._compact_task_output(output)
+
+    assert summary == "No useful output returned"
+
+
+def test_run_chat_shows_background_completion_before_prompt(monkeypatch) -> None:
+    rendered: list[str] = []
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history: list[dict[str, object]] = []
 
         def get_session_id(self) -> str:
             return "session-1"
@@ -438,25 +561,35 @@ def test_run_chat_shows_background_completion_before_prompt(monkeypatch) -> None
         [],
     ])
 
-    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    agent = FakeAgent()
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: agent)
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "read_background_notifications", lambda: next(notification_calls, []))
-    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(cli, "print_formatted_text", lambda text: rendered.append("".join(fragment[1] for fragment in text)))
     monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
     assert exit_code == 0
-    assert notices[0] == ("Background Task", "builder (task_1) completed\nOutcome: done", "green")
+    assert "Background Task" in rendered[0]
+    assert "╭─" in rendered[0]
+    assert "builder (task_1) completed" in rendered[0]
+    assert "Summary: done" in rendered[0]
+    assert agent._history[-2] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "[Background task task_1 completed]\n\nOutcome: done"}],
+    }
+    assert agent._history[-1]["role"] == "assistant"
 
 
 def test_run_chat_shows_background_completion_while_prompt_waits(monkeypatch) -> None:
-    notices: list[tuple[str, str, str]] = []
+    rendered: list[str] = []
     release_prompt = asyncio.Event()
     poll_count = 0
 
     class FakeAgent:
-        _history: list[dict[str, object]] = []
+        def __init__(self) -> None:
+            self._history: list[dict[str, object]] = []
 
         def get_session_id(self) -> str:
             return "session-1"
@@ -484,17 +617,26 @@ def test_run_chat_shows_background_completion_while_prompt_waits(monkeypatch) ->
             ]
         return []
 
-    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    agent = FakeAgent()
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: agent)
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(cli, "read_background_notifications", fake_read_background_notifications)
-    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(cli, "print_formatted_text", lambda text: rendered.append("".join(fragment[1] for fragment in text)))
     monkeypatch.setattr(PromptSession, "prompt_async", fake_prompt_async)
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
     assert exit_code == 0
-    assert notices[0] == ("Background Task", "builder (task_1) completed\nOutcome: done", "green")
+    assert "Background Task" in rendered[0]
+    assert "╭─" in rendered[0]
+    assert "builder (task_1) completed" in rendered[0]
+    assert "Summary: done" in rendered[0]
     assert poll_count >= 2
+    assert agent._history[-2] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "[Background task task_1 completed]\n\nOutcome: done"}],
+    }
+    assert agent._history[-1]["role"] == "assistant"
 
 
 def test_run_chat_starts_background_agent_task(monkeypatch) -> None:
