@@ -11,10 +11,14 @@ from cock_code.config import RuntimeConfig
 from cock_code.team import (
     AgentPool,
     MAX_TEAM_MEMBERS,
+    SDKTeamCreateBridgeTool,
+    SDKTeamDeleteBridgeTool,
     TeamDispatchTool,
     TeamManager,
     TeamSendMessageTool,
+    TeamStatusTool,
     patch_tool_pool,
+    set_runtime_team_bridge,
 )
 
 
@@ -253,9 +257,17 @@ def test_dispatch_tool_missing_member():
     manager._pool = AgentPool()
 
     tool = TeamDispatchTool(manager)
-    result = asyncio.run(tool.call({"member": "unknown", "task": "do thing"}, ToolContext(cwd=".", env={})))
-    assert "Error" in result.content
-    assert "unknown" in result.content
+
+    async def _run():
+        import unittest.mock
+        with unittest.mock.patch("cock_code.runtime._create_background_subagent_task", new_callable=unittest.mock.AsyncMock) as mock_create_task:
+            mock_create_task.return_value = "test-task-err"
+            result = await tool.call({"member": "unknown", "task": "do thing"}, ToolContext(cwd=".", env={}))
+
+        assert result.is_error
+        assert "unknown" in str(result.content)
+
+    asyncio.run(_run())
 
 
 def test_dispatch_tool_missing_task():
@@ -266,22 +278,32 @@ def test_dispatch_tool_missing_task():
     assert "task" in str(result.content).lower()
 
 
-def test_dispatch_tool_marks_member_as_owner_of_work():
-    manager = TeamManager()
-    manager._active = True
-    pool = AgentPool()
-    fake_agent = FakeAgent(responses=["LGTM"])
-    pool._members["reviewer"] = fake_agent
-    pool._mailboxes["reviewer"] = asyncio.Queue()
-    pool._locks["reviewer"] = asyncio.Lock()
-    manager._pool = pool
+def test_dispatch_tool_async_dispatch():
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        pool = AgentPool()
+        fake_agent = FakeAgent(responses=["LGTM"])
+        pool._members["reviewer"] = fake_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+        manager._pool = pool
 
-    tool = TeamDispatchTool(manager)
-    result = asyncio.run(tool.call({"member": "reviewer", "task": "review this change"}, ToolContext(cwd=".", env={})))
+        tool = TeamDispatchTool(manager)
 
-    assert not result.is_error
-    assert "Assigned task to team member 'reviewer'" in str(result.content)
-    assert "Do not also perform the same task yourself" in str(result.content)
+        import unittest.mock
+        with unittest.mock.patch("cock_code.runtime._create_background_subagent_task", new_callable=unittest.mock.AsyncMock) as mock_create_task:
+            mock_create_task.return_value = "test-task-123"
+            result = await tool.call({"member": "reviewer", "task": "review this change"}, ToolContext(cwd=".", env={}))
+
+        assert not result.is_error
+        content = str(result.content)
+        assert "Dispatched task to team member 'reviewer'" in content
+        assert "test-task-123" in content
+        assert "background" in content.lower()
+        assert "Do not also perform the same task" in content
+
+    asyncio.run(_run())
 
 
 def test_send_message_tool_missing_to():
@@ -358,6 +380,118 @@ def test_send_message_tool_errors_for_unknown_member():
 
     assert result.is_error
     assert "Unknown team member 'reviewer'" in str(result.content)
+
+
+def test_sdk_team_create_bridge_tool_creates_persistent_team():
+    async def _run():
+        manager = TeamManager()
+        config = _make_config({"reviewer": {"description": "code reviewer", "prompt": "You are a reviewer."}})
+        fake_agent = FakeAgent()
+        abort_signal = asyncio.Event()
+
+        orchestrator = MagicMock()
+        orchestrator._options.abort_signal = abort_signal
+        orchestrator._options.append_system_prompt = "original prompt"
+        orchestrator._tool_pool = []
+        orchestrator._cock_code_config = config
+
+        async def fake_create_member(self, name, definition, config, abort_signal=None):
+            self._members[name] = fake_agent
+            self._mailboxes[name] = asyncio.Queue()
+            self._locks[name] = asyncio.Lock()
+
+        import unittest.mock
+        with unittest.mock.patch.object(AgentPool, "create_member", fake_create_member):
+            set_runtime_team_bridge(manager, orchestrator)
+            try:
+                tool = SDKTeamCreateBridgeTool()
+                result = await tool.call({"name": "dev-team", "members": ["reviewer"]}, ToolContext(cwd=".", env={}))
+            finally:
+                set_runtime_team_bridge(None, None)
+
+        assert not result.is_error
+        assert str(result.content).startswith("Created team ")
+        assert manager.is_active()
+        assert manager.active_team_id()
+        assert manager.info()["team_name"] == "dev-team"
+        assert abort_signal.is_set() is True
+
+    asyncio.run(_run())
+
+
+def test_sdk_team_create_bridge_tool_materializes_missing_agent_definitions():
+    async def _run():
+        manager = TeamManager()
+        config = RuntimeConfig(model="test-model", api_key="test", base_url="https://example.test", agents={})
+        fake_agent = FakeAgent()
+        abort_signal = asyncio.Event()
+
+        orchestrator = MagicMock()
+        orchestrator._options.abort_signal = abort_signal
+        orchestrator._options.append_system_prompt = "original prompt"
+        orchestrator._tool_pool = []
+        orchestrator._cock_code_config = config
+
+        async def fake_create_member(self, name, definition, config, abort_signal=None):
+            self._members[name] = fake_agent
+            self._mailboxes[name] = asyncio.Queue()
+            self._locks[name] = asyncio.Lock()
+
+        import unittest.mock
+        with unittest.mock.patch.object(AgentPool, "create_member", fake_create_member):
+            set_runtime_team_bridge(manager, orchestrator)
+            try:
+                tool = SDKTeamCreateBridgeTool()
+                result = await tool.call(
+                    {"name": "review-team", "description": "Review changed files", "members": ["reviewer-1", "reviewer-2"]},
+                    ToolContext(cwd=".", env={}),
+                )
+            finally:
+                set_runtime_team_bridge(None, None)
+
+        assert not result.is_error
+        assert manager.is_active()
+        assert sorted(config.agents.keys()) == ["reviewer-1", "reviewer-2"]
+        assert "Review changed files" in str(config.agents["reviewer-1"]["prompt"])
+        assert abort_signal.is_set() is True
+
+    asyncio.run(_run())
+
+
+def test_sdk_team_delete_bridge_tool_deletes_persistent_team():
+    async def _run():
+        manager = TeamManager()
+        config = _make_config({"reviewer": {"description": "code reviewer", "prompt": "You are a reviewer."}})
+        fake_agent = FakeAgent()
+
+        orchestrator = MagicMock()
+        orchestrator._options.abort_signal = None
+        orchestrator._options.append_system_prompt = "original prompt"
+        orchestrator._tool_pool = []
+        orchestrator._cock_code_config = config
+
+        async def fake_create_member(self, name, definition, config, abort_signal=None):
+            self._members[name] = fake_agent
+            self._mailboxes[name] = asyncio.Queue()
+            self._locks[name] = asyncio.Lock()
+
+        import unittest.mock
+        with unittest.mock.patch.object(AgentPool, "create_member", fake_create_member):
+            await manager.create_team("dev-team", ["reviewer"], config, orchestrator)
+
+        team_id = manager.active_team_id()
+        set_runtime_team_bridge(manager, orchestrator)
+        try:
+            tool = SDKTeamDeleteBridgeTool()
+            result = await tool.call({"team_id": team_id}, ToolContext(cwd=".", env={}))
+        finally:
+            set_runtime_team_bridge(None, None)
+
+        assert not result.is_error
+        assert str(result.content) == f"Deleted team {team_id}"
+        assert not manager.is_active()
+
+    asyncio.run(_run())
 
 
 def test_team_manager_initial_state():
@@ -449,7 +583,8 @@ def test_team_manager_info_active():
     assert info["active"] is True
     assert info["team_name"] == "team1"
     assert "reviewer" in info["members"]
-    assert info["members"]["reviewer"] == "active"
+    assert info["members"]["reviewer"] == "idle"
+    assert "note" in info
 
 
 def test_team_manager_dispatch_delegates_to_pool():
@@ -532,11 +667,12 @@ def test_team_manager_create_and_close_team():
         tool_names = [t.name for t in orchestrator._tool_pool]
         assert "TeamDispatch" in tool_names
         assert "SendMessage" in tool_names
+        assert "TeamStatus" in tool_names
         assert "Agent" not in tool_names
         assert "Read" not in tool_names
         assert tool_names.count("SendMessage") == 1
         assert "Team: dev-team" in orchestrator._options.append_system_prompt
-        assert "Do not also do the same work yourself" in orchestrator._options.append_system_prompt
+        assert "Do not also perform" in orchestrator._options.append_system_prompt
         member_tool_names = [t.name for t in fake_agent._tool_pool]
         assert "SendMessage" in member_tool_names, f"Member should have SendMessage, got: {member_tool_names}"
         assert "TeamCreate" not in member_tool_names, f"Member should not have TeamCreate, got: {member_tool_names}"
@@ -598,6 +734,7 @@ def test_team_manager_ensure_orchestrator_team_state_reapplies_after_reset():
         tool_names = [t.name for t in orchestrator._tool_pool]
         assert tool_names.count("SendMessage") == 1
         assert "TeamDispatch" in tool_names
+        assert "TeamStatus" in tool_names
         assert "Agent" not in tool_names
         assert "Read" not in tool_names
         assert "Team: dev-team" in orchestrator._options.append_system_prompt
@@ -630,5 +767,138 @@ def test_team_manager_clear_cleared():
         assert len(fake_agent._history) == 0
 
         await manager.close_team(orchestrator)
+
+    asyncio.run(_run())
+
+
+def test_agent_pool_dispatch_async_marks_busy():
+    async def _run():
+        import unittest.mock
+        pool = AgentPool()
+        fake_agent = FakeAgent(responses=["done"])
+        pool._members["reviewer"] = fake_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+
+        with unittest.mock.patch("cock_code.runtime._track_background_task"):
+            with unittest.mock.patch("cock_code.runtime._update_background_subagent_task", new_callable=unittest.mock.AsyncMock):
+                result = await pool.dispatch_async("reviewer", "review code", "task-1", ".", {})
+
+        assert result == "task-1"
+        assert pool.is_busy("reviewer")
+
+    asyncio.run(_run())
+
+
+def test_agent_pool_dispatch_async_rejects_busy_member():
+    pool = AgentPool()
+    fake_agent = FakeAgent()
+    pool._members["reviewer"] = fake_agent
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._locks["reviewer"] = asyncio.Lock()
+    pool._busy.add("reviewer")
+
+    result = asyncio.run(pool.dispatch_async("reviewer", "review code", "task-1", ".", {}))
+    assert "Error" in result
+    assert "busy" in result.lower()
+
+
+def test_agent_pool_dispatch_async_rejects_unhealthy():
+    pool = AgentPool()
+    fake_agent = FakeAgent()
+    pool._members["reviewer"] = fake_agent
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._locks["reviewer"] = asyncio.Lock()
+    pool._unhealthy.add("reviewer")
+
+    result = asyncio.run(pool.dispatch_async("reviewer", "review code", "task-1", ".", {}))
+    assert "Error" in result
+    assert "unavailable" in result.lower()
+
+
+def test_agent_pool_dispatch_async_rejects_unknown():
+    pool = AgentPool()
+    result = asyncio.run(pool.dispatch_async("unknown", "do thing", "task-1", ".", {}))
+    assert "Error" in result
+    assert "unknown" in result.lower()
+
+
+def test_agent_pool_close_clears_busy():
+    pool = AgentPool()
+    fake_agent = FakeAgent()
+    pool._members["a"] = fake_agent
+    pool._mailboxes["a"] = asyncio.Queue()
+    pool._locks["a"] = asyncio.Lock()
+    pool._busy.add("a")
+
+    asyncio.run(pool.close_all())
+    assert len(pool._busy) == 0
+
+
+def test_team_manager_info_shows_busy():
+    manager = TeamManager()
+    manager._active = True
+    manager._team_name = "team1"
+    pool = AgentPool()
+    pool._members["reviewer"] = FakeAgent()
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._locks["reviewer"] = asyncio.Lock()
+    pool._busy.add("reviewer")
+    manager._pool = pool
+
+    info = manager.info()
+    assert info["members"]["reviewer"] == "busy"
+
+
+def test_team_status_tool_active_team():
+    manager = TeamManager()
+    manager._active = True
+    manager._team_id = "abc123"
+    manager._team_name = "dev-team"
+    pool = AgentPool()
+    pool._members["reviewer"] = FakeAgent()
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._locks["reviewer"] = asyncio.Lock()
+    manager._pool = pool
+
+    tool = TeamStatusTool(manager)
+    result = asyncio.run(tool.call({}, ToolContext(cwd=".", env={})))
+
+    assert not result.is_error
+    content = str(result.content)
+    assert "dev-team" in content
+    assert "reviewer" in content
+    assert "idle" in content
+
+
+def test_team_status_tool_no_active_team():
+    manager = TeamManager()
+    tool = TeamStatusTool(manager)
+    result = asyncio.run(tool.call({}, ToolContext(cwd=".", env={})))
+    assert "No team is active" in str(result.content)
+
+
+def test_dispatch_tool_busy_member_returns_error():
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        pool = AgentPool()
+        fake_agent = FakeAgent(responses=["done"])
+        pool._members["reviewer"] = fake_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+        pool._busy.add("reviewer")
+        manager._pool = pool
+
+        tool = TeamDispatchTool(manager)
+
+        import unittest.mock
+        with unittest.mock.patch("cock_code.runtime._create_background_subagent_task", new_callable=unittest.mock.AsyncMock) as mock_create_task:
+            mock_create_task.return_value = "test-task-err"
+            with unittest.mock.patch("cock_code.runtime._update_background_subagent_task", new_callable=unittest.mock.AsyncMock):
+                result = await tool.call({"member": "reviewer", "task": "review this"}, ToolContext(cwd=".", env={}))
+
+        assert result.is_error
+        assert "busy" in str(result.content).lower()
 
     asyncio.run(_run())

@@ -4,12 +4,26 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import uuid
 from typing import Any
 
 from open_agent_sdk.types import BaseTool, ToolContext, ToolInputSchema, ToolResult
 
 
 MAX_TEAM_MEMBERS = 5
+
+_runtime_team_manager: "TeamManager | None" = None
+_runtime_orchestrator: Any = None
+
+
+def set_runtime_team_bridge(team_manager: "TeamManager | None", orchestrator: Any | None) -> None:
+    global _runtime_team_manager, _runtime_orchestrator
+    _runtime_team_manager = team_manager
+    _runtime_orchestrator = orchestrator
+
+
+def get_runtime_team_bridge() -> tuple["TeamManager | None", Any | None]:
+    return _runtime_team_manager, _runtime_orchestrator
 
 
 class AgentPool:
@@ -20,6 +34,7 @@ class AgentPool:
         self._mailboxes: dict[str, asyncio.Queue[dict[str, str]]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._unhealthy: set[str] = set()
+        self._busy: set[str] = set()
 
     @property
     def member_names(self) -> list[str]:
@@ -27,6 +42,9 @@ class AgentPool:
 
     def has_member(self, name: str) -> bool:
         return name in self._members
+
+    def is_busy(self, name: str) -> bool:
+        return name in self._busy
 
     async def create_member(
         self,
@@ -67,6 +85,65 @@ class AgentPool:
                 self._unhealthy.add(member)
                 return f"Error: member '{member}' failed: {exc}"
 
+    async def dispatch_async(
+        self,
+        member: str,
+        task: str,
+        task_id: str,
+        cwd: str,
+        env: dict[str, str],
+    ) -> str:
+        """Fire-and-forget dispatch. Creates SDK task, spawns asyncio.Task, returns task_id immediately."""
+        from cock_code.runtime import (
+            _track_background_task,
+            _update_background_subagent_task,
+            sanitize_task_output,
+        )
+
+        if member not in self._members:
+            return f"Error: unknown team member '{member}'"
+        if member in self._unhealthy:
+            return f"Error: team member '{member}' is unavailable due to a previous error"
+        if member in self._busy:
+            return f"Error: team member '{member}' is busy with a previous dispatch. Wait for it to complete before dispatching again."
+
+        self._busy.add(member)
+
+        async def _run_member() -> None:
+            try:
+                result = await self.dispatch(member, task)
+                await _update_background_subagent_task(
+                    task_id,
+                    status="completed",
+                    output=sanitize_task_output(result),
+                    cwd=cwd,
+                    env=env,
+                )
+            except asyncio.CancelledError:
+                await _update_background_subagent_task(
+                    task_id,
+                    status="cancelled",
+                    output="Cancelled",
+                    cwd=cwd,
+                    env=env,
+                )
+                raise
+            except Exception as exc:
+                self._unhealthy.add(member)
+                await _update_background_subagent_task(
+                    task_id,
+                    status="cancelled",
+                    output=f"Error: {exc}",
+                    cwd=cwd,
+                    env=env,
+                )
+            finally:
+                self._busy.discard(member)
+
+        task_handle = asyncio.create_task(_run_member())
+        _track_background_task(task_handle)
+        return task_id
+
     def send_message(self, to: str, message: dict[str, str]) -> None:
         if to in self._mailboxes:
             self._mailboxes[to].put_nowait(message)
@@ -94,6 +171,7 @@ class AgentPool:
         self._mailboxes.clear()
         self._locks.clear()
         self._unhealthy.clear()
+        self._busy.clear()
 
     async def clear_histories(self) -> None:
         for agent in self._members.values():
@@ -106,6 +184,7 @@ class TeamManager:
 
     def __init__(self) -> None:
         self._pool: AgentPool | None = None
+        self._team_id: str = ""
         self._team_name: str = ""
         self._member_definitions: dict[str, dict[str, Any]] = {}
         self._original_append_prompt: str = ""
@@ -122,9 +201,13 @@ class TeamManager:
             f"# Team: {self._team_name}",
             f"You are the orchestrator for team '{self._team_name}'. Members: {', '.join(self._member_definitions.keys())}.",
             "Use TeamDispatch to assign tasks to members. Use SendMessage to communicate with members.",
-            "When you assign work with TeamDispatch, treat that task as owned by that member. Do not also do the same work yourself unless they fail, stop, or you are explicitly taking over after reviewing their output.",
+            "When you assign work with TeamDispatch, the member processes it in the background. The result will appear when complete.",
+            "Do not also perform the same work yourself unless the member fails, stops, or you are explicitly taking over.",
         ]
         return "\n".join(lines)
+
+    def active_team_id(self) -> str:
+        return self._team_id
 
     async def ensure_orchestrator_team_state(self, orchestrator: Any) -> None:
         if not self._active:
@@ -133,7 +216,7 @@ class TeamManager:
             await orchestrator._initialize()
         patch_tool_pool(
             orchestrator,
-            add_tools=[TeamDispatchTool(self), TeamSendMessageTool(self, sender_name="orchestrator")],
+            add_tools=[TeamDispatchTool(self), TeamSendMessageTool(self, sender_name="orchestrator"), TeamStatusTool(self)],
             remove_names=["TeamCreate", "TeamDelete", "Agent", "SendMessage", "TeamDispatch", "Read"],
         )
         if hasattr(orchestrator, "_options"):
@@ -183,9 +266,10 @@ class TeamManager:
 
         dispatch_tool = TeamDispatchTool(self)
         send_tool = TeamSendMessageTool(self, sender_name="orchestrator")
+        status_tool = TeamStatusTool(self)
         patch_tool_pool(
             orchestrator,
-            add_tools=[dispatch_tool, send_tool],
+            add_tools=[dispatch_tool, send_tool, status_tool],
             remove_names=["TeamCreate", "TeamDelete", "Agent", "SendMessage", "Read"],
         )
 
@@ -207,6 +291,7 @@ class TeamManager:
             member_agent._options.append_system_prompt = f"{existing_prompt}\n\n{member_prompt}" if existing_prompt else member_prompt
 
         self._pool = pool
+        self._team_id = str(uuid.uuid4())[:8]
         self._team_name = name
         self._member_definitions = {m: dict(agents_def[m]) for m in members}
         self._active = True
@@ -216,6 +301,13 @@ class TeamManager:
         if not self._active or self._pool is None:
             return "No team is active. Use /team create to start a team."
         return await self._pool.dispatch(member, task)
+
+    async def dispatch_async(self, member: str, task: str, task_id: str, cwd: str, env: dict[str, str]) -> str:
+        """Non-blocking dispatch. Returns task_id immediately; member processes in background."""
+        if not self._active or self._pool is None:
+            return "No team is active. Use /team create to start a team."
+        result = await self._pool.dispatch_async(member, task, task_id, cwd, env)
+        return result
 
     async def send_message(self, to: str, content: str, sender: str = "orchestrator") -> None:
         if not self._active or self._pool is None:
@@ -241,12 +333,13 @@ class TeamManager:
             patch_tool_pool(
                 orchestrator,
                 add_tools=[],
-                remove_names=["TeamDispatch", "SendMessage"],
+                remove_names=["TeamDispatch", "SendMessage", "TeamStatus"],
             )
 
         orchestrator._options.append_system_prompt = self._original_append_prompt
 
         self._pool = None
+        self._team_id = ""
         self._team_name = ""
         self._member_definitions = {}
         self._original_tool_pool = None
@@ -260,12 +353,16 @@ class TeamManager:
             for name in self._pool.member_names:
                 if name in self._pool._unhealthy:
                     members[name] = "unhealthy"
+                elif name in self._pool._busy:
+                    members[name] = "busy"
                 else:
-                    members[name] = "active"
+                    members[name] = "idle"
         return {
             "active": True,
+            "team_id": self._team_id,
             "team_name": self._team_name,
             "members": members,
+            "note": "Members are idle until you dispatch tasks via TeamDispatch. Dispatched members run in the background.",
         }
 
 
@@ -285,7 +382,7 @@ def patch_tool_pool(
 
 class TeamDispatchTool(BaseTool):
     _name = "TeamDispatch"
-    _description = "Dispatch a task to a team member. The member processes it with full accumulated context. Use this to assign work to specific team members."
+    _description = "Dispatch a task to a team member for background processing. Returns immediately. The member processes the task asynchronously and the result appears when complete."
     _input_schema = ToolInputSchema(
         properties={
             "member": {"type": "string", "description": "Name of the team member to dispatch to"},
@@ -304,6 +401,8 @@ class TeamDispatchTool(BaseTool):
         return False
 
     async def call(self, input: dict[str, Any], context: ToolContext) -> ToolResult:
+        from cock_code.runtime import _create_background_subagent_task
+
         member = input.get("member", "")
         task = input.get("task", "")
         if not member:
@@ -311,17 +410,64 @@ class TeamDispatchTool(BaseTool):
         if not task:
             return ToolResult(tool_use_id="", content="Error: 'task' is required", is_error=True)
         try:
-            result = await self._team_manager.dispatch(member, task)
-            return ToolResult(
-                tool_use_id="",
-                content=(
-                    f"Assigned task to team member '{member}'. They now own that work. "
-                    "Do not also perform the same task yourself unless they fail, stop, or you explicitly take over after reviewing their output.\n\n"
-                    f"Member result:\n{result}"
-                ),
+            task_id = await _create_background_subagent_task(
+                f"team-{member}",
+                task,
+                context.cwd,
+                context.env,
             )
         except Exception as exc:
-            return ToolResult(tool_use_id="", content=f"Error: {exc}", is_error=True)
+            return ToolResult(tool_use_id="", content=f"Error: could not create background task: {exc}", is_error=True)
+
+        result = await self._team_manager.dispatch_async(member, task, task_id, context.cwd, context.env)
+
+        if result.startswith("Error:"):
+            from cock_code.runtime import _update_background_subagent_task
+            await _update_background_subagent_task(
+                task_id,
+                status="cancelled",
+                output=result,
+                cwd=context.cwd,
+                env=context.env,
+            )
+            return ToolResult(tool_use_id="", content=result, is_error=True)
+
+        return ToolResult(
+            tool_use_id="",
+            content=(
+                f"Dispatched task to team member '{member}' (task_id: {task_id}). "
+                "They are processing it in the background. The result will appear when complete. "
+                "Do not also perform the same task yourself unless they fail, stop, or you explicitly take over."
+            ),
+        )
+
+
+class TeamStatusTool(BaseTool):
+    _name = "TeamStatus"
+    _description = "Check the status of team members — whether they are idle, busy, or unhealthy."
+    _input_schema = ToolInputSchema(
+        properties={},
+        required=[],
+    )
+
+    def __init__(self, team_manager: TeamManager):
+        self._team_manager = team_manager
+
+    def is_read_only(self, input: dict[str, Any] | None = None) -> bool:
+        return True
+
+    def is_concurrency_safe(self, input: dict[str, Any] | None = None) -> bool:
+        return True
+
+    async def call(self, input: dict[str, Any], context: ToolContext) -> ToolResult:
+        info = self._team_manager.info()
+        if not info.get("active"):
+            return ToolResult(tool_use_id="", content="No team is active.")
+        members = info.get("members", {})
+        lines = [f"Team '{info.get('team_name', '')}' (id: {info.get('team_id', '')}):"]
+        for name, status in members.items():
+            lines.append(f"  {name}: {status}")
+        return ToolResult(tool_use_id="", content="\n".join(lines))
 
 
 class TeamSendMessageTool(BaseTool):
@@ -357,3 +503,93 @@ class TeamSendMessageTool(BaseTool):
             return ToolResult(tool_use_id="", content=f"Message sent to {to}.")
         except Exception as exc:
             return ToolResult(tool_use_id="", content=f"Error: {exc}", is_error=True)
+
+
+class SDKTeamCreateBridgeTool(BaseTool):
+    _name = "TeamCreate"
+    _description = "Create a team for multi-agent coordination."
+    _input_schema = ToolInputSchema(
+        properties={
+            "name": {"type": "string", "description": "Team name"},
+            "description": {"type": "string", "description": "Team purpose"},
+            "members": {"type": "array", "description": "List of agent names"},
+        },
+        required=["name"],
+    )
+
+    def is_read_only(self, input: dict[str, Any] | None = None) -> bool:
+        return False
+
+    def is_concurrency_safe(self, input: dict[str, Any] | None = None) -> bool:
+        return False
+
+    async def call(self, input: dict[str, Any], context: ToolContext) -> ToolResult:
+        team_manager, orchestrator = get_runtime_team_bridge()
+        if team_manager is None or orchestrator is None:
+            return ToolResult(tool_use_id="", content="Error: team lifecycle unavailable", is_error=True)
+        members = input.get("members", [])
+        if not isinstance(members, list) or not all(isinstance(member, str) for member in members):
+            return ToolResult(tool_use_id="", content="Error: members must be a list of agent names", is_error=True)
+        if not members:
+            return ToolResult(tool_use_id="", content="Error: members must not be empty", is_error=True)
+        member_names: list[str] = [str(member) for member in members]
+        config = getattr(orchestrator, "_cock_code_config", None)
+        abort_signal = getattr(getattr(orchestrator, "_options", None), "abort_signal", None)
+        if config is None:
+            return ToolResult(tool_use_id="", content="Error: missing runtime config", is_error=True)
+        team_name = str(input.get("name", "")).strip()
+        team_description = str(input.get("description", "")).strip()
+        if not isinstance(getattr(config, "agents", None), dict):
+            config.agents = {}
+        for member_name in member_names:
+            if member_name in config.agents:
+                continue
+            description = team_description or f"{member_name} team member"
+            config.agents[member_name] = {
+                "description": description,
+                "prompt": (
+                    f"You are {member_name}, a persistent member of team '{team_name or 'team'}'. "
+                    f"Team purpose: {team_description or 'Collaborate with the orchestrator on assigned tasks.'}"
+                ),
+            }
+        try:
+            await team_manager.create_team(team_name, member_names, config, orchestrator, abort_signal)
+        except Exception as exc:
+            return ToolResult(tool_use_id="", content=f"Error: {exc}", is_error=True)
+        if abort_signal is not None:
+            abort_signal.set()
+        return ToolResult(
+            tool_use_id="",
+            content=(
+                f"Created team {team_manager.active_team_id()}: {team_name}. "
+                "Members are idle until you dispatch tasks via TeamDispatch."
+            ),
+        )
+
+
+class SDKTeamDeleteBridgeTool(BaseTool):
+    _name = "TeamDelete"
+    _description = "Delete a team and cleanup resources."
+    _input_schema = ToolInputSchema(
+        properties={"team_id": {"type": "string", "description": "Team ID to delete"}},
+        required=["team_id"],
+    )
+
+    def is_read_only(self, input: dict[str, Any] | None = None) -> bool:
+        return False
+
+    def is_concurrency_safe(self, input: dict[str, Any] | None = None) -> bool:
+        return False
+
+    async def call(self, input: dict[str, Any], context: ToolContext) -> ToolResult:
+        team_manager, orchestrator = get_runtime_team_bridge()
+        if team_manager is None or orchestrator is None:
+            return ToolResult(tool_use_id="", content="Error: team lifecycle unavailable", is_error=True)
+        team_id = str(input.get("team_id", ""))
+        if not team_manager.is_active() or team_manager.active_team_id() != team_id:
+            return ToolResult(tool_use_id="", content=f"Error: team {team_id} not found", is_error=True)
+        try:
+            await team_manager.close_team(orchestrator)
+        except Exception as exc:
+            return ToolResult(tool_use_id="", content=f"Error: {exc}", is_error=True)
+        return ToolResult(tool_use_id="", content=f"Deleted team {team_id}")
