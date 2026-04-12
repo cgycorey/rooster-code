@@ -195,15 +195,23 @@ class TeamManager:
         return self._active
 
     def _team_prompt(self) -> str:
+        original = self._original_append_prompt
         lines = [
-            self._original_append_prompt,
-            "",
             f"# Team: {self._team_name}",
             f"You are the orchestrator for team '{self._team_name}'. Members: {', '.join(self._member_definitions.keys())}.",
             "Use TeamDispatch to assign tasks to members. Use SendMessage to communicate with members.",
+            "Do NOT use the Agent tool for team members — use TeamDispatch instead. The Agent tool is not available while a team is active.",
             "When you assign work with TeamDispatch, the member processes it in the background. The result will appear when complete.",
             "Do not also perform the same work yourself unless the member fails, stops, or you are explicitly taking over.",
         ]
+        if original:
+            sanitized = "\n".join(
+                line for line in original.splitlines()
+                if "Use the Agent tool" not in line and "Agent tool or a background task" not in line
+            ).strip()
+            if sanitized:
+                lines.insert(0, sanitized)
+                lines.insert(1, "")
         return "\n".join(lines)
 
     def active_team_id(self) -> str:
