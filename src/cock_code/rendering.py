@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 
 from collections.abc import Mapping
 from collections.abc import AsyncIterator
@@ -26,6 +27,54 @@ def summarize_tool_result(text: str, max_chars: int = 160) -> str:
         return text
 
     return f"{text[:max_chars]}..."
+
+
+def compact_tool_result(text: str, max_chars: int = 220) -> str:
+    from cock_code.runtime import sanitize_task_output
+
+    text = sanitize_task_output(text)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return "No useful output returned"
+
+    def normalize(line: str) -> str:
+        line = re.sub(r"^Outcome:\s*", "", line, flags=re.IGNORECASE).strip()
+        line = re.sub(r"^#+\s*", "", line)
+        line = re.sub(r"^[>*\-\s]+", "", line)
+        line = " ".join(line.split())
+        line = re.sub(r"^(here(?:'s| is)\s+(?:my|the)\s+review:?\s*)", "", line, flags=re.IGNORECASE)
+        line = re.sub(r"^(after reviewing\b[^,.:;]*[,.:;]?\s*)", "", line, flags=re.IGNORECASE)
+        line = re.sub(r"^(now\b[^.]*[.:]?\s*)", "", line, flags=re.IGNORECASE)
+        match = re.search(r"\b(let me\b|i'll\b|i will\b)", line, re.IGNORECASE)
+        if match:
+            line = line[: match.start()].rstrip(" :;-.,")
+        return line.strip()
+
+    for line in lines:
+        candidate = normalize(line)
+        if not candidate:
+            continue
+        lowered = candidate.lower().strip(":- ")
+        if lowered in {
+            "review",
+            "report",
+            "summary",
+            "code review",
+            "review report",
+            "code review summary",
+            "performance review report",
+            "security review report",
+            "correctness review",
+            "critical issues",
+            "changes summary",
+            "executive summary",
+            "questions",
+            "suggestions",
+        }:
+            continue
+        return candidate if len(candidate) <= max_chars else f"{candidate[:max_chars].rstrip()}..."
+
+    return "No useful output returned"
 
 
 def build_console() -> Console:
@@ -217,7 +266,10 @@ async def render_event_stream(
                 render_notice(console, event.tool_name or "Tool Error", event.result_content, "red")
                 continue
             if event.tool_name == "Agent" and event.result_content:
-                render_agent_panel(console, "Agent Result", event.result_content, "blue")
+                render_agent_panel(console, "Agent Result", compact_tool_result(event.result_content), "blue")
+                continue
+            if event.tool_name in {"TeamCreate", "TeamDelete", "TeamDispatch", "SendMessage"} and event.result_content:
+                render_notice(console, event.tool_name, compact_tool_result(event.result_content), "blue")
                 continue
             if event.tool_name == "Edit":
                 diff_text = extract_unified_diff(event.result_content)

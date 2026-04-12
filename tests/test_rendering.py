@@ -5,6 +5,7 @@ from rich.console import Console
 
 from cock_code.config import RuntimeConfig
 from cock_code.rendering import (
+    compact_tool_result,
     render_agents_list,
     render_banner,
     render_event_stream,
@@ -144,6 +145,50 @@ def test_render_event_stream_shows_agent_result_panel() -> None:
 
     assert "Agent Result" in output
     assert "AGENT_PATH=used" in output
+
+
+def test_render_event_stream_compacts_verbose_agent_result() -> None:
+    console = Console(record=True, width=100)
+
+    async def events():
+        yield SDKMessage(
+            type=SDKMessageType.TOOL_RESULT,
+            tool_name="Agent",
+            result_content="Outcome: All tests pass. Now let me analyze the code changes in detail: --- ## Code Review Summary",
+        )
+
+    asyncio.run(render_event_stream(console, events()))
+
+    output = console.export_text()
+
+    assert "Agent Result" in output
+    assert "All tests pass." in output
+    assert "Code Review Summary" not in output
+
+
+def test_render_event_stream_compacts_team_tool_result() -> None:
+    console = Console(record=True, width=100)
+
+    async def events():
+        yield SDKMessage(
+            type=SDKMessageType.TOOL_RESULT,
+            tool_name="TeamDispatch",
+            result_content="Outcome: Here is the full team dispatch report. Let me now continue with more analysis.",
+        )
+
+    asyncio.run(render_event_stream(console, events()))
+
+    output = console.export_text()
+
+    assert "TeamDispatch" in output
+    assert "full team dispatch report" in output
+    assert "continue with more analysis" not in output
+
+
+def test_compact_tool_result_strips_ansi_sequences() -> None:
+    result = compact_tool_result("\x1b[32mOutcome: done\x1b[0m")
+
+    assert result == "done"
 
 
 def test_render_event_stream_shows_activity_trace_for_tool_result() -> None:
