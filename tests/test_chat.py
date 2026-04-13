@@ -1078,15 +1078,19 @@ def test_run_chat_unknown_command_shows_feedback(monkeypatch) -> None:
 
 
 def test_run_chat_returns_interrupt_exit_code(monkeypatch) -> None:
+    """EOFError at the prompt exits chat with code 130."""
     captured: dict[str, object] = {}
 
     class FakeAgent:
         async def close(self) -> None:
             captured["closed"] = True
 
+    async def fake_prompt_eof(*args, **kwargs):
+        raise EOFError()
+
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
-    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_keyboard_interrupt())
+    monkeypatch.setattr(PromptSession, "prompt_async", fake_prompt_eof)
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
@@ -1095,15 +1099,19 @@ def test_run_chat_returns_interrupt_exit_code(monkeypatch) -> None:
 
 
 def test_run_chat_interrupt_does_not_hang_on_slow_close(monkeypatch) -> None:
+    """When interrupted (EOFError) with a slow agent.close(), the timeout prevents hanging."""
     class FakeAgent:
         async def close(self) -> None:
             await asyncio.Future()
 
+    async def fake_prompt_eof(*args, **kwargs):
+        raise EOFError()
+
     monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
-    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_keyboard_interrupt())
+    monkeypatch.setattr(PromptSession, "prompt_async", fake_prompt_eof)
 
-    exit_code = cli.asyncio.run(cli.asyncio.wait_for(cli.run_chat(RuntimeConfig(model="m2")), timeout=0.2))
+    exit_code = cli.asyncio.run(cli.asyncio.wait_for(cli.run_chat(RuntimeConfig(model="m2")), timeout=5))
 
     assert exit_code == 130
 

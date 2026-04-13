@@ -487,3 +487,146 @@ def test_run_async_with_sigint_exit_installs_and_restores_handler(monkeypatch) -
     assert captured[0][0] == signal.SIGINT
     assert callable(captured[0][1])
     assert captured[1] == (signal.SIGINT, "previous-handler")
+
+
+# --- Bug fix tests: cancellation issues ---
+
+
+def test_run_ask_named_agent_closes_agent_on_cancel(monkeypatch) -> None:
+    """Bug 2: named-agent path in run_ask must cancel background tasks on CancelledError.
+
+    The non-named-agent finally block calls cancel_background_subagent_tasks(),
+    but the named-agent finally block does not. Background tasks spawned by the
+    named agent would be orphaned.
+    """
+    bg_cancelled = False
+
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "find_requested_agent_name", lambda config, prompt: "reviewer")
+
+    async def fake_run_named_agent_prompt(config, agent_name, prompt):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(cli, "run_named_agent_prompt", fake_run_named_agent_prompt)
+    monkeypatch.setattr(cli, "set_question_handler", lambda handler: None)
+    monkeypatch.setattr(cli, "clear_question_handler", lambda: None)
+
+    async def fake_cancel_bg():
+        nonlocal bg_cancelled
+        bg_cancelled = True
+
+    monkeypatch.setattr(cli, "cancel_background_subagent_tasks", fake_cancel_bg)
+
+    exit_code = cli.asyncio.run(
+        cli.run_ask("Use the reviewer agent.", RuntimeConfig(model="m1", agents={"reviewer": {"description": "reviewer"}}))
+    )
+
+    assert exit_code == 130
+    assert bg_cancelled is True
+
+
+def test_run_chat_double_ctrl_c_stays_in_chat(monkeypatch) -> None:
+    """Bug 1: SIGINT while at the prompt (no active query) should not exit chat.
+
+    The SIGINT handler sets interrupted=True. When there's no active query
+    task, nobody resets interrupted=False, so the main loop breaks and chat
+    exits with code 130. After the fix, a stray SIGINT at the prompt should
+    be treated as "cancel current input" not "exit chat", and the user stays.
+    """
+    captured: dict[str, object] = {}
+    prompt_count = 0
+    sigint_handler = None
+
+    class FakeAgent:
+        _initialized = True
+        _client = None
+        _provider = None
+        _engine = None
+
+        def clear(self) -> None:
+            return None
+
+        async def set_model(self, model: str) -> None:
+            return None
+
+        async def set_permission_mode(self, mode: str) -> None:
+            return None
+
+        async def query(self, prompt: str):
+            yield SDKMessage(type=SDKMessageType.ASSISTANT, text="ok")
+
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    # Capture the SIGINT handler so we can fire it manually
+    def fake_signal(sig, handler):
+        nonlocal sigint_handler
+        if callable(handler):
+            sigint_handler = handler
+        return lambda *a: None
+
+    monkeypatch.setattr(cli.signal, "signal", fake_signal)
+
+    async def fake_prompt_async(self, prompt_text: str, *args, **kwargs):
+        nonlocal prompt_count
+        prompt_count += 1
+        if prompt_count == 1:
+            return "hello"
+        if prompt_count == 2:
+            # SIGINT fires at idle prompt: handler sets interrupted=True
+            # In the real app, prompt_toolkit sees the signal and may
+            # raise KeyboardInterrupt, which prompt_once catches as None.
+            # We simulate by firing the handler and returning None.
+            assert sigint_handler is not None
+            sigint_handler(signal.SIGINT, None)
+            return None  # prompt_once returns None → sets interrupted=True again
+        if prompt_count == 3:
+            return "/exit"
+        raise EOFError()
+
+    monkeypatch.setattr(PromptSession, "prompt_async", fake_prompt_async)
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+
+    async def fake_render_event_stream(console, events, **kwargs):
+        async for e in events:
+            pass
+
+    monkeypatch.setattr(cli, "render_event_stream", fake_render_event_stream)
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m1")))
+
+    # BUG: exit_code is 130 because interrupted=True → loop breaks → "exiting chat"
+    # After fix, returning None from prompt at idle should not exit chat,
+    # it should just redisplay the prompt (chat continues to /exit on round 3)
+    assert exit_code == 0
+    assert prompt_count == 3  # user gets a 3rd prompt after accidental signal
+
+
+def test_run_ask_named_agent_non_cancel_path_closes_agent(monkeypatch) -> None:
+    """Bug 2 companion: even the non-named-agent path should close agent."""
+    captured: dict[str, object] = {}
+
+    class FakeAgent:
+        async def query(self, prompt: str):
+            yield SDKMessage(type=SDKMessageType.ASSISTANT, text="ok")
+
+        async def close(self) -> None:
+            captured["agent_closed"] = True
+
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "find_requested_agent_name", lambda config, prompt: None)
+
+    async def fake_render(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(cli, "render_event_stream", fake_render)
+    monkeypatch.setattr(cli, "set_question_handler", lambda handler: None)
+    monkeypatch.setattr(cli, "clear_question_handler", lambda: None)
+    monkeypatch.setattr(cli, "cancel_background_subagent_tasks", lambda: asyncio.sleep(0))
+
+    exit_code = cli.asyncio.run(cli.run_ask("hello", RuntimeConfig(model="m1")))
+
+    assert exit_code == 0
+    assert captured.get("agent_closed") is True

@@ -566,6 +566,7 @@ async def run_ask(prompt: str, config) -> int:
             set_abort_signal(None)
             signal.signal(signal.SIGINT, previous)
             clear_question_handler()
+            await cancel_background_subagent_tasks()
 
     agent = create_runtime_agent(config)
 
@@ -756,8 +757,10 @@ async def run_chat(config) -> int:
         try:
             with patch_stdout():
                 return await session.prompt_async(_prompt_label)
-        except (KeyboardInterrupt, EOFError):
+        except KeyboardInterrupt:
             return None
+        except EOFError:
+            raise
 
     async def prompt_once(session: PromptSession[str]) -> str | None:
         prompt_task = asyncio.create_task(_prompt_input(session))
@@ -783,17 +786,18 @@ async def run_chat(config) -> int:
     try:
         while True:
             if interrupted:
-                break
+                if _active_query_task is not None and not _active_query_task.done():
+                    break
+                interrupted = False
             _poll_and_render_notifications()
             try:
                 user_input = await prompt_once(prompt_session)
                 if user_input is None:
-                    interrupted = True
-                    render_notice(console, "Interrupted", "Exiting chat.", "yellow")
-                    break
-            except (KeyboardInterrupt, EOFError):
+                    continue
+            except KeyboardInterrupt:
+                continue
+            except EOFError:
                 interrupted = True
-                render_notice(console, "Interrupted", "Exiting chat.", "yellow")
                 break
             _poll_and_render_notifications()
             command = parse_chat_command(user_input)
@@ -935,7 +939,7 @@ async def run_chat(config) -> int:
         await cancel_background_subagent_tasks()
         if interrupted:
             try:
-                await asyncio.wait_for(agent.close(), timeout=0.05)
+                await asyncio.wait_for(agent.close(), timeout=1.0)
             except TimeoutError:
                 pass
         else:
