@@ -2,7 +2,29 @@
 
 <!-- A CLI coding agent powered by Rich and Open Agent SDK -->
 
-Cock Code is a Rich-powered coding agent CLI built on the local Open Agent SDK at `../open-agent-sdk-python`.
+Cock Code is a Rich-powered coding agent CLI built on Open Agent SDK.
+
+## Implemented agentic features
+
+Cock Code currently includes:
+
+- **ask** and **interactive chat** agent workflows for one-shot queries and persistent terminal sessions
+- **session management** for listing, resuming, forking, renaming, tagging, and inspecting saved conversations
+- **background agents and tasks** with notifications, task output inspection, waiting, and context injection on completion
+- **multi-agent team orchestration** with team creation, non-blocking dispatch, team status, and inter-member messaging
+- **named/custom agents** loaded from JSON agent definitions
+- **tool-gated execution** with allowed/disallowed tool controls and permission-mode support
+- **MCP server integration** through SDK-backed MCP configuration
+- **hooks-file passthrough** into the SDK runtime configuration
+- **state inspection commands** for tasks, teams, mailboxes, config, cron, plans, and todos
+- **manual session compaction** for trimming conversation history while preserving working context
+
+> [!IMPORTANT]
+> `open-agent-sdk` is **not published yet**. Right now the supported source is
+> **cgycorey's fork**: `https://github.com/cgycorey/open-agent-sdk-python`.
+>
+> This repository currently expects the SDK as a **local sibling checkout** at
+> `../open-agent-sdk-python` via `tool.uv.sources` in `pyproject.toml`.
 
 ## Environment
 
@@ -13,6 +35,68 @@ Cock Code reads these env vars and passes them into the SDK explicitly:
 - `COCK_CODE_MODEL`
 
 ## Install and run
+
+### One-command bootstrap (recommended)
+
+After cloning `cock-code`, run:
+
+```bash
+./scripts/bootstrap.sh
+```
+
+What it does:
+
+- clones **cgycorey's** `open-agent-sdk-python` into the required sibling path
+  (`../open-agent-sdk-python`) if it is missing
+- reuses the existing sibling SDK checkout if you already have one
+- runs `uv sync` for this repo
+
+This gives you the layout `pyproject.toml` already expects.
+
+### Fresh setup from scratch
+
+If you have not cloned `cock-code` yet, this is the simplest flow:
+
+```bash
+git clone https://github.com/cgycorey/cock-code
+cd cock-code
+./scripts/bootstrap.sh
+```
+
+### Supported setup (manual)
+
+Clone `cock-code` and `open-agent-sdk-python` side by side so the existing
+`uv` source override works without any edits:
+
+```bash
+git clone https://github.com/cgycorey/open-agent-sdk-python
+git clone https://github.com/cgycorey/cock-code
+
+cd cock-code
+uv sync
+```
+
+Your directory layout should look like this:
+
+```text
+parent-dir/
+├── cock-code/
+└── open-agent-sdk-python/
+```
+
+### If you already cloned `cock-code` somewhere else
+
+You still need the SDK checkout from cgycorey's repository:
+
+```bash
+git clone https://github.com/cgycorey/open-agent-sdk-python ../open-agent-sdk-python
+uv sync
+```
+
+If you do not want the sibling layout, update `tool.uv.sources.open-agent-sdk`
+in `pyproject.toml` to point at your local checkout before running `uv sync`.
+
+### Run
 
 ```bash
 uv run cock-code --help
