@@ -74,7 +74,8 @@ class RuntimeAgentTool(BaseTool):
     _name = "Agent"
     _description = (
         "Launch a new agent to handle complex, multi-step tasks autonomously. "
-        "Subagents can run in the background or foreground. Once you delegate work to another agent, do not also perform that same work yourself unless the delegated task fails, is cancelled, or you are explicitly asked to compare or verify it."
+        "Subagents can run in the background or foreground. Not available when a team is active — use TeamDispatch instead. "
+        "Once you delegate work to another agent, do not also perform that same work yourself unless the delegated task fails, is cancelled, or you are explicitly asked to compare or verify it."
     )
     _input_schema = ToolInputSchema(
         properties={
@@ -105,6 +106,20 @@ class RuntimeAgentTool(BaseTool):
         return True
 
     async def call(self, input: dict[str, Any], context: ToolContext) -> ToolResult:
+        from cock_code.team import get_runtime_team_bridge
+        team_manager, _orchestrator = get_runtime_team_bridge()
+        if team_manager is not None and team_manager.is_active():
+            member_name = str(input.get("name") or input.get("subagent_type") or input.get("description") or "")
+            prompt_text = str(input.get("prompt", "")).strip()
+            if team_manager._pool is not None and team_manager._pool.has_member(member_name):
+                from cock_code.team import TeamDispatchTool
+                dispatch_tool = TeamDispatchTool(team_manager)
+                return await dispatch_tool.call({"member": member_name, "task": prompt_text}, context)
+            return ToolResult(
+                tool_use_id="",
+                content=f"Error: Agent tool is not available while team is active. Use TeamDispatch to assign work to team members instead.",
+                is_error=True,
+            )
         target = str(input.get("name") or input.get("subagent_type") or input.get("description") or "agent")
         self._tracker.record_activity("Using agent", self.name, target)
         return await self._runner(input, context)

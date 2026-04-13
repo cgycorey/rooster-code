@@ -1891,3 +1891,82 @@ def test_agent_context_prompt_with_inactive_team_info_is_unchanged() -> None:
     result = runtime._agent_context_prompt(config, team_info=team_info)
 
     assert "Team:" not in result
+
+
+def test_runtime_agent_tool_rejects_when_team_active():
+    from cock_code.runtime_tools import RuntimeAgentTool, TurnTracker
+    from cock_code.team import set_runtime_team_bridge, TeamManager
+
+    tracker = TurnTracker()
+
+    async def fake_runner(input, context):
+        return ToolResult(tool_use_id="", content="should not be called")
+
+    tool = RuntimeAgentTool(fake_runner, tracker)
+
+    team_manager = TeamManager()
+    team_manager._active = True
+
+    set_runtime_team_bridge(team_manager, None)
+    try:
+        result = asyncio.run(tool.call({"prompt": "test", "description": "test"}, ToolContext(cwd=".", env={})))
+        assert result.is_error
+        assert "not available while team is active" in str(result.content)
+        assert "TeamDispatch" in str(result.content)
+    finally:
+        set_runtime_team_bridge(None, None)
+
+
+def test_runtime_agent_tool_redirects_to_team_dispatch_for_member():
+    from cock_code.runtime_tools import RuntimeAgentTool, TurnTracker
+    from cock_code.team import set_runtime_team_bridge, TeamManager, AgentPool
+    from unittest.mock import AsyncMock
+
+    tracker = TurnTracker()
+
+    async def fake_runner(input, context):
+        return ToolResult(tool_use_id="", content="should not be called")
+
+    tool = RuntimeAgentTool(fake_runner, tracker)
+
+    team_manager = TeamManager()
+    team_manager._active = True
+    team_manager._team_id = "test"
+    team_manager._team_name = "test-team"
+    pool = AgentPool()
+    pool._members["reviewer"] = AsyncMock()
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._locks["reviewer"] = asyncio.Lock()
+    team_manager._pool = pool
+
+    set_runtime_team_bridge(team_manager, None)
+    try:
+        import unittest.mock
+        with unittest.mock.patch("cock_code.runtime._create_background_subagent_task", new_callable=AsyncMock) as mock_create:
+            mock_create.return_value = "task-redirect-1"
+            result = asyncio.run(tool.call(
+                {"prompt": "review the code", "description": "review", "name": "reviewer"},
+                ToolContext(cwd=".", env={}),
+            ))
+        assert not result.is_error
+        content = str(result.content)
+        assert "Dispatched task to team member 'reviewer'" in content
+    finally:
+        set_runtime_team_bridge(None, None)
+
+
+def test_runtime_agent_tool_allows_when_no_team():
+    from cock_code.runtime_tools import RuntimeAgentTool, TurnTracker
+    from cock_code.team import set_runtime_team_bridge
+
+    tracker = TurnTracker()
+
+    async def fake_runner(input, context):
+        return ToolResult(tool_use_id="", content="agent ran fine")
+
+    tool = RuntimeAgentTool(fake_runner, tracker)
+
+    set_runtime_team_bridge(None, None)
+    result = asyncio.run(tool.call({"prompt": "test", "description": "test"}, ToolContext(cwd=".", env={})))
+    assert not result.is_error
+    assert result.content == "agent ran fine"
