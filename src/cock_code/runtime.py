@@ -537,35 +537,45 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
             context.env,
         )
 
+        agent_name_bg, definition_bg = _resolve_agent_definition(config, input)
+
         async def run_background() -> None:
             try:
-                result = await _run_subagent(config, {**input, "run_in_background": False}, context)
-                output = str(result.content)
-                if result.is_error:
-                    output = f"Error: {output}"
+                if definition_bg is None:
+                    await _update_background_subagent_task(
+                        task_id, status="cancelled", output="Error: no agent definition resolved",
+                        cwd=context.cwd, env=context.env,
+                    )
+                    return
+                child_config = _build_subagent_config(config, definition_bg, input, context)
+                system_prompt = str(definition_bg.get("prompt") or definition_bg.get("system_prompt") or definition_bg.get("description") or "")
+                child_agent = _create_sdk_agent(child_config, include_runtime_agent_tool=False, system_prompt=system_prompt)
+                try:
+                    query_result = await _prompt_agent_with_abort(child_agent, prompt)
+                finally:
+                    await child_agent.close()
+                raw_text = query_result.text.strip() if query_result.text else ""
+                summary = _format_subagent_summary(raw_text, query_result.messages)
+                if "No useful output returned" in summary and raw_text:
+                    output = raw_text
+                elif summary:
+                    output = summary
+                else:
+                    output = raw_text or "Agent completed with no text output."
                 await _update_background_subagent_task(
-                    task_id,
-                    status="completed",
-                    output=output,
-                    cwd=context.cwd,
-                    env=context.env,
+                    task_id, status="completed", output=output,
+                    cwd=context.cwd, env=context.env,
                 )
             except asyncio.CancelledError:
                 await _update_background_subagent_task(
-                    task_id,
-                    status="cancelled",
-                    output="Error: Cancelled by shutdown",
-                    cwd=context.cwd,
-                    env=context.env,
+                    task_id, status="cancelled", output="Error: Cancelled by shutdown",
+                    cwd=context.cwd, env=context.env,
                 )
                 raise
             except Exception as exc:
                 await _update_background_subagent_task(
-                    task_id,
-                    status="cancelled",
-                    output=f"Error: {exc}",
-                    cwd=context.cwd,
-                    env=context.env,
+                    task_id, status="cancelled", output=f"Error: {exc}",
+                    cwd=context.cwd, env=context.env,
                 )
 
         task = asyncio.create_task(run_background())
