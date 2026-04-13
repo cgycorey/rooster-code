@@ -884,7 +884,8 @@ async def run_chat(config) -> int:
                 )
                 continue
             if command.name == "resume" and command.args:
-                await agent.close()
+                with contextlib.suppress(Exception):
+                    await agent.close()
                 config.resume = command.args[0]
                 agent = create_runtime_agent(config)
                 render_notice(console, "Session", f"Resumed {command.args[0]}", "green")

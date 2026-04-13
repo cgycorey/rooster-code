@@ -100,7 +100,7 @@ class RuntimeAgentTool(BaseTool):
         self._tracker = tracker
 
     def is_read_only(self, input: dict[str, Any] | None = None) -> bool:
-        return True
+        return False
 
     def is_concurrency_safe(self, input: dict[str, Any] | None = None) -> bool:
         return True
@@ -115,9 +115,10 @@ class RuntimeAgentTool(BaseTool):
                 from cock_code.team import TeamDispatchTool
                 dispatch_tool = TeamDispatchTool(team_manager)
                 return await dispatch_tool.call({"member": member_name, "task": prompt_text}, context)
+            available = ", ".join(team_manager._pool.member_names) if team_manager._pool else "none"
             return ToolResult(
                 tool_use_id="",
-                content=f"Error: Agent tool is not available while team is active. Use TeamDispatch to assign work to team members instead.",
+                content=f"Error: Agent tool is not available while team is active. Use TeamDispatch with 'member' and 'task' fields instead. Available members: {available}.",
                 is_error=True,
             )
         target = str(input.get("name") or input.get("subagent_type") or input.get("description") or "agent")

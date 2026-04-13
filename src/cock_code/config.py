@@ -41,7 +41,8 @@ class RuntimeConfig:
     extra_args: dict[str, Any] = field(default_factory=dict)
 
 
-def load_dotenv_env(path: str = ".env") -> dict[str, str]:
+def load_dotenv_env(cwd: str | None = None) -> dict[str, str]:
+    path = os.path.join(cwd, ".env") if cwd else ".env"
     if not os.path.exists(path):
         return {}
 
@@ -61,8 +62,8 @@ def load_dotenv_env(path: str = ".env") -> dict[str, str]:
     return values
 
 
-def resolve_runtime_env(env: Mapping[str, str]) -> RuntimeConfig:
-    merged_env = {**load_dotenv_env(), **env}
+def resolve_runtime_env(env: Mapping[str, str], cwd: str | None = None) -> RuntimeConfig:
+    merged_env = {**load_dotenv_env(cwd), **env}
     return RuntimeConfig(
         api_key=merged_env.get("COCK_CODE_API_KEY"),
         base_url=merged_env.get("COCK_CODE_BASE_URL"),
@@ -89,7 +90,7 @@ def load_json_file(path: str | None) -> Any:
 
 
 def config_from_namespace(args: argparse.Namespace, env: Mapping[str, str]) -> RuntimeConfig:
-    resolved = resolve_runtime_env(env)
+    resolved = resolve_runtime_env(env, cwd=getattr(args, "cwd", None))
     return RuntimeConfig(
         api_key=resolved.api_key,
         base_url=resolved.base_url,

@@ -250,14 +250,16 @@ async def render_event_stream(
         if abort_signal is not None and abort_signal.is_set():
             break
         if show_activity_trace:
-            activity_trace = event.system_data.get("activity_trace", [])
+            activity_trace = getattr(event, "system_data", None) or {}
+            if isinstance(activity_trace, dict):
+                activity_trace = activity_trace.get("activity_trace", [])
             if isinstance(activity_trace, list):
                 trace_entries = [entry for entry in activity_trace if isinstance(entry, Mapping)]
                 if trace_entries:
                     render_activity_trace(console, trace_entries)
                 elif event.type.value == "tool_result" and event.tool_name:
                     render_activity_trace(console, [{"action": "Running tool", "tool": event.tool_name}])
-        thinking_text = summarize_thinking(extract_thinking(event.message))
+        thinking_text = summarize_thinking(extract_thinking(getattr(event, "message", None)))
         if thinking_text:
             render_text_panel(console, "Thinking", thinking_text, "magenta")
 
@@ -268,13 +270,15 @@ async def render_event_stream(
             if event.tool_name == "Agent" and event.result_content:
                 render_agent_panel(console, "Agent Result", compact_tool_result(event.result_content), "blue")
                 continue
-            if event.tool_name in {"TeamCreate", "TeamDelete", "TeamDispatch", "SendMessage"} and event.result_content:
+            if event.tool_name in {"TeamCreate", "TeamDelete", "TeamDispatch", "TeamStatus", "SendMessage"} and event.result_content:
                 render_notice(console, event.tool_name, compact_tool_result(event.result_content), "blue")
                 continue
             if event.tool_name == "Edit":
                 diff_text = extract_unified_diff(event.result_content)
                 if diff_text:
                     render_diff_panel(console, "Edit Diff", diff_text)
+                elif event.result_content:
+                    render_notice(console, "Edit", event.result_content, "green")
                 continue
 
         text = extract_text(event.text).strip()

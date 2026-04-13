@@ -53,6 +53,7 @@ from cock_code.team import SDKTeamCreateBridgeTool, SDKTeamDeleteBridgeTool, pat
 
 
 _loaded_local_skill_names: set[str] = set()
+_loaded_skills_dir: str | None = None
 _background_subagent_tasks: set[asyncio.Task[None]] = set()
 _notified_task_ids: set[str] = set()
 _notified_task_ids_lock = threading.Lock()
@@ -139,14 +140,19 @@ def _resolve_skills_dir(config: RuntimeConfig) -> Path | None:
 
 
 def _ensure_skills_loaded(config: RuntimeConfig) -> None:
-    global _loaded_local_skill_names
+    global _loaded_local_skill_names, _loaded_skills_dir
     init_bundled_skills()
+
+    skills_dir = _resolve_skills_dir(config)
+    skills_dir_str = str(skills_dir) if skills_dir else None
+    if skills_dir_str == _loaded_skills_dir:
+        return
 
     for name in list(_loaded_local_skill_names):
         unregister_skill(name)
     _loaded_local_skill_names.clear()
+    _loaded_skills_dir = skills_dir_str
 
-    skills_dir = _resolve_skills_dir(config)
     if not skills_dir or not skills_dir.exists():
         return
 
@@ -719,7 +725,8 @@ async def _stream_subagent(config: RuntimeConfig, input: dict[str, Any], context
             yield event
     finally:
         await child_agent.close()
-    yield _activity_status_event("Completed subagent", "Agent", agent_name)
+    if _abort_signal is None or not _abort_signal.is_set():
+        yield _activity_status_event("Completed subagent", "Agent", agent_name)
 
 
 def find_requested_agent_name(config: RuntimeConfig, prompt: str) -> str | None:
@@ -790,7 +797,8 @@ async def _stream_skill(config: RuntimeConfig, agent, skill_name: str, args: str
                 yield event
         finally:
             await child_agent.close()
-        yield _activity_status_event("Completed subagent", "Skill", command_name)
+        if _abort_signal is None or not _abort_signal.is_set():
+            yield _activity_status_event("Completed subagent", "Skill", command_name)
         return
 
     query_overrides = overrides or None
@@ -798,7 +806,8 @@ async def _stream_skill(config: RuntimeConfig, agent, skill_name: str, args: str
         if _abort_signal is not None and _abort_signal.is_set():
             break
         yield event
-    yield _activity_status_event("Completed subagent", "Skill", command_name)
+    if _abort_signal is None or not _abort_signal.is_set():
+        yield _activity_status_event("Completed subagent", "Skill", command_name)
 
 
 async def stream_skill_events(config: RuntimeConfig, agent, skill_name: str, args: str):
@@ -1128,7 +1137,7 @@ async def compact_current_session(agent) -> dict[str, object]:
     agent._history = compacted_history
     after_tokens = estimate_messages_tokens(compacted_history)
 
-    compacted = compacted_history != compactable_history
+    compacted = after_tokens < before_tokens
     return {
         "compacted": compacted,
         "summary": summary,

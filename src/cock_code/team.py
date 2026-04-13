@@ -199,8 +199,9 @@ class TeamManager:
         lines = [
             f"# Team: {self._team_name}",
             f"You are the orchestrator for team '{self._team_name}'. Members: {', '.join(self._member_definitions.keys())}.",
-            "Use TeamDispatch to assign tasks to members. Use SendMessage to communicate with members.",
-            "Do NOT use the Agent tool for team members — use TeamDispatch instead. The Agent tool is not available while a team is active.",
+            "Use TeamDispatch to assign tasks to members. TeamDispatch runs the task on the member and returns the result.",
+            "Use SendMessage only for informational messages between members — it does NOT trigger work or processing.",
+            "Do NOT use the Agent tool — it is not available while a team is active. Always use TeamDispatch instead.",
             "When you assign work with TeamDispatch, the member processes it in the background. The result will appear when complete.",
             "Do not also perform the same work yourself unless the member fails, stops, or you are explicitly taking over.",
         ]
@@ -390,7 +391,7 @@ def patch_tool_pool(
 
 class TeamDispatchTool(BaseTool):
     _name = "TeamDispatch"
-    _description = "Dispatch a task to a team member for background processing. Returns immediately. The member processes the task asynchronously and the result appears when complete."
+    _description = "Assign a task to a team member. This is the primary way to delegate work in a team — always use TeamDispatch instead of SendMessage or Agent to assign work. Returns immediately; the member processes the task in the background and the result appears when complete."
     _input_schema = ToolInputSchema(
         properties={
             "member": {"type": "string", "description": "Name of the team member to dispatch to"},
@@ -480,7 +481,7 @@ class TeamStatusTool(BaseTool):
 
 class TeamSendMessageTool(BaseTool):
     _name = "SendMessage"
-    _description = "Send a message to a team member. Messages are delivered before the member's next task."
+    _description = "Send a brief informational message to a team member. This does NOT assign work — use TeamDispatch for that. Messages are only delivered when the member next receives a TeamDispatch task."
     _input_schema = ToolInputSchema(
         properties={
             "to": {"type": "string", "description": "Team member name to send to"},

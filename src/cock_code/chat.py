@@ -14,5 +14,8 @@ def parse_chat_command(text: str) -> ChatCommand:
     if not parts:
         return ChatCommand(name="", args=[])
 
+    if not parts[0].startswith("/"):
+        return ChatCommand(name="", args=[])
+
     name = parts[0].removeprefix("/")
     return ChatCommand(name=name, args=parts[1:])
