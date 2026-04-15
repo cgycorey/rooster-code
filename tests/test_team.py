@@ -200,6 +200,72 @@ def test_agent_pool_wake_for_messages_dispatches_mailbox_task():
     asyncio.run(_run())
 
 
+def test_wake_for_messages_returns_false_on_empty_mailbox():
+    pool = AgentPool()
+    pool._members["reviewer"] = FakeAgent()
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._locks["reviewer"] = asyncio.Lock()
+    # No messages queued
+    result = pool.wake_for_messages("reviewer")
+    assert result is False
+
+
+def test_wake_for_messages_returns_false_when_unhealthy():
+    pool = AgentPool()
+    pool._members["reviewer"] = FakeAgent()
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._locks["reviewer"] = asyncio.Lock()
+    pool._unhealthy.add("reviewer")
+    pool.send_message("reviewer", {"from": "builder", "content": "hello"})
+    result = pool.wake_for_messages("reviewer")
+    assert result is False
+
+
+def test_wake_for_messages_returns_false_when_busy():
+    pool = AgentPool()
+    pool._members["reviewer"] = FakeAgent()
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._locks["reviewer"] = asyncio.Lock()
+    pool._busy.add("reviewer")
+    pool.send_message("reviewer", {"from": "builder", "content": "hello"})
+    result = pool.wake_for_messages("reviewer")
+    assert result is False
+
+
+def test_wake_for_messages_returns_false_unknown_member():
+    pool = AgentPool()
+    result = pool.wake_for_messages("unknown")
+    assert result is False
+
+
+def test_wake_for_messages_multiple_queued_messages():
+    async def _run():
+        pool = AgentPool()
+        fake_agent = FakeAgent(responses=["noted"])
+        pool._members["reviewer"] = fake_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+
+        pool.send_message("reviewer", {"from": "a", "content": "msg1"})
+        pool.send_message("reviewer", {"from": "b", "content": "msg2"})
+        pool.send_message("reviewer", {"from": "c", "content": "msg3"})
+
+        pool.wake_for_messages("reviewer")
+
+        for _ in range(20):
+            if fake_agent._call_count:
+                break
+            await asyncio.sleep(0)
+
+        assert "[Message from a]: msg1" in fake_agent._last_prompt
+        assert "[Message from b]: msg2" in fake_agent._last_prompt
+        assert "[Message from c]: msg3" in fake_agent._last_prompt
+
+        await pool.close_all()
+
+    asyncio.run(_run())
+
+
 def test_agent_pool_close_all():
     pool = AgentPool()
     fake1 = FakeAgent()
