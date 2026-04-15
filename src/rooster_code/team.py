@@ -189,6 +189,7 @@ class TeamManager:
         self._member_definitions: dict[str, dict[str, Any]] = {}
         self._config: Any | None = None
         self._abort_signal: asyncio.Event | None = None
+        self._recovery_locks: dict[str, asyncio.Lock] = {}
         self._original_append_prompt: str = ""
         self._original_tool_pool: list[Any] | None = None
         self._active = False
@@ -249,21 +250,28 @@ class TeamManager:
         if self._config is None or member_name not in self._member_definitions:
             raise RuntimeError(f"No recovery metadata is available for team member '{member_name}'.")
 
-        previous_agent = self._pool._members.get(member_name)
-        previous_mailbox = self._pool._mailboxes.get(member_name)
+        recovery_lock = self._recovery_locks.setdefault(member_name, asyncio.Lock())
+        async with recovery_lock:
+            if self._pool is None:
+                raise RuntimeError("No team pool is active.")
+            if member_name not in self._pool._unhealthy:
+                return
 
-        definition = self._member_definitions[member_name]
-        await self._pool.create_member(member_name, definition, self._config, self._abort_signal)
-        new_mailbox = self._pool._mailboxes.get(member_name)
-        if previous_mailbox is not None and new_mailbox is not None:
-            while not previous_mailbox.empty():
-                new_mailbox.put_nowait(previous_mailbox.get_nowait())
-        self._configure_member(member_name)
-        self._pool._busy.discard(member_name)
-        self._pool._unhealthy.discard(member_name)
-        if previous_agent is not None:
-            with contextlib.suppress(Exception):
-                await previous_agent.close()
+            previous_agent = self._pool._members.get(member_name)
+            previous_mailbox = self._pool._mailboxes.get(member_name)
+
+            definition = self._member_definitions[member_name]
+            await self._pool.create_member(member_name, definition, self._config, self._abort_signal)
+            new_mailbox = self._pool._mailboxes.get(member_name)
+            if previous_mailbox is not None and new_mailbox is not None:
+                while not previous_mailbox.empty():
+                    new_mailbox.put_nowait(previous_mailbox.get_nowait())
+            self._configure_member(member_name)
+            self._pool._busy.discard(member_name)
+            self._pool._unhealthy.discard(member_name)
+            if previous_agent is not None:
+                with contextlib.suppress(Exception):
+                    await previous_agent.close()
 
     async def ensure_orchestrator_team_state(self, orchestrator: Any) -> None:
         if not self._active:
@@ -397,6 +405,7 @@ class TeamManager:
         self._member_definitions = {}
         self._config = None
         self._abort_signal = None
+        self._recovery_locks = {}
         self._original_tool_pool = None
         self._active = False
 

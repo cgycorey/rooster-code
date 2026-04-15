@@ -748,6 +748,48 @@ def test_team_manager_dispatch_recovery_failure_keeps_member_recoverable():
     asyncio.run(_run())
 
 
+def test_team_manager_concurrent_dispatches_share_one_recovery():
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        manager._team_name = "dev-team"
+        manager._config = _make_config()
+        manager._member_definitions = {
+            "reviewer": {"description": "code reviewer", "prompt": "You are a reviewer."}
+        }
+        pool = AgentPool()
+        failed_agent = FakeAgent()
+        pool._members["reviewer"] = failed_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+        pool._unhealthy.add("reviewer")
+        manager._pool = pool
+
+        recovered_agent = FakeAgent(responses=["LGTM", "LGTM"])
+        create_calls = 0
+
+        async def fake_create_member(self, name, definition, config, abort_signal=None):
+            nonlocal create_calls
+            create_calls += 1
+            await asyncio.sleep(0)
+            self._members[name] = recovered_agent
+            self._mailboxes[name] = asyncio.Queue()
+            self._locks[name] = asyncio.Lock()
+
+        import unittest.mock
+        with unittest.mock.patch.object(AgentPool, "create_member", fake_create_member):
+            results = await asyncio.gather(
+                manager.dispatch("reviewer", "review code 1"),
+                manager.dispatch("reviewer", "review code 2"),
+            )
+
+        assert results == ["LGTM", "LGTM"]
+        assert create_calls == 1
+        assert recovered_agent._call_count == 2
+
+    asyncio.run(_run())
+
+
 def test_team_manager_send_message_delegates_to_pool():
     manager = TeamManager()
     manager._active = True
