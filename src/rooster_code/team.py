@@ -16,6 +16,12 @@ _runtime_team_manager: "TeamManager | None" = None
 _runtime_orchestrator: Any = None
 
 
+def _sdk_mailbox_message_snapshot(message: dict[str, Any]) -> dict[str, Any]:
+    snapshot = dict(message)
+    snapshot.setdefault("type", "text")
+    return snapshot
+
+
 def set_runtime_team_bridge(team_manager: "TeamManager | None", orchestrator: Any | None) -> None:
     global _runtime_team_manager, _runtime_orchestrator
     _runtime_team_manager = team_manager
@@ -148,6 +154,12 @@ class AgentPool:
         if to in self._mailboxes:
             self._mailboxes[to].put_nowait(message)
 
+    def snapshot_mailboxes(self) -> dict[str, list[dict[str, Any]]]:
+        return {
+            name: [_sdk_mailbox_message_snapshot(message) for message in list(mailbox._queue)]
+            for name, mailbox in self._mailboxes.items()
+        }
+
     def _inject_mailbox(self, member: str, task: str) -> str:
         messages: list[str] = []
         while not self._mailboxes[member].empty():
@@ -220,6 +232,31 @@ class TeamManager:
 
     def active_team_id(self) -> str:
         return self._team_id
+
+    def sdk_team_snapshot(self) -> dict[str, dict[str, Any]]:
+        if not self._active:
+            return {}
+        info = self.info()
+        info_members = info.get("members", {})
+        member_statuses = {
+            member_name: str(info_members.get(member_name, "idle"))
+            for member_name in self._member_definitions
+        }
+        return {
+            self._team_id: {
+                "id": self._team_id,
+                "name": self._team_name,
+                "description": "",
+                "members": list(self._member_definitions.keys()),
+                "member_statuses": member_statuses,
+                "runtime_managed": True,
+            }
+        }
+
+    def sdk_mailboxes_snapshot(self) -> dict[str, list[dict[str, Any]]]:
+        if not self._active or self._pool is None:
+            return {}
+        return self._pool.snapshot_mailboxes()
 
     def _member_prompt(self, member_name: str) -> str:
         others = ", ".join(m for m in self._member_definitions if m != member_name)
@@ -370,12 +407,22 @@ class TeamManager:
         result = await self._pool.dispatch_async(member, task, task_id, cwd, env)
         return result
 
-    async def send_message(self, to: str, content: str, sender: str = "orchestrator") -> None:
+    async def send_message(self, to: str, content: str, sender: str = "orchestrator", message_type: str = "text") -> None:
         if not self._active or self._pool is None:
             raise RuntimeError("No team is active. Use /team create to start a team.")
-        if not self._pool.has_member(to):
+        message = {"type": message_type, "from": sender, "content": content}
+        if to == "*":
+            member_names = list(dict.fromkeys([
+                *self._member_definitions.keys(),
+                *self._pool._mailboxes.keys(),
+                *self._pool._members.keys(),
+            ]))
+            for member_name in member_names:
+                self._pool.send_message(member_name, dict(message))
+            return
+        if not self._pool.has_member(to) and to not in self._member_definitions:
             raise RuntimeError(f"Unknown team member '{to}'")
-        self._pool.send_message(to, {"from": sender, "content": content})
+        self._pool.send_message(to, message)
 
     async def clear(self) -> None:
         if self._pool is not None:
@@ -421,6 +468,8 @@ class TeamManager:
                     members[name] = "busy"
                 else:
                     members[name] = "idle"
+            for name in self._member_definitions:
+                members.setdefault(name, "idle")
         return {
             "active": True,
             "team_id": self._team_id,
@@ -539,8 +588,13 @@ class TeamSendMessageTool(BaseTool):
     _description = "Send a brief informational message to a team member. This does NOT assign work — use TeamDispatch for that. Messages are only delivered when the member next receives a TeamDispatch task."
     _input_schema = ToolInputSchema(
         properties={
-            "to": {"type": "string", "description": "Team member name to send to"},
+            "to": {"type": "string", "description": "Team member name to send to, or '*' for broadcast"},
             "content": {"type": "string", "description": "Message content"},
+            "type": {
+                "type": "string",
+                "description": "Message type",
+                "enum": ["text", "shutdown_request", "shutdown_response", "plan_approval_response"],
+            },
         },
         required=["to", "content"],
     )
@@ -558,12 +612,15 @@ class TeamSendMessageTool(BaseTool):
     async def call(self, input: dict[str, Any], context: ToolContext) -> ToolResult:
         to = input.get("to", "")
         content = input.get("content", "")
+        message_type = str(input.get("type", "text") or "text")
         if not to:
             return ToolResult(tool_use_id="", content="Error: 'to' is required", is_error=True)
         if not content:
             return ToolResult(tool_use_id="", content="Error: 'content' is required", is_error=True)
         try:
-            await self._team_manager.send_message(to, content, sender=self._sender_name)
+            await self._team_manager.send_message(to, content, sender=self._sender_name, message_type=message_type)
+            if to == "*":
+                return ToolResult(tool_use_id="", content="Message broadcast to all agents.")
             return ToolResult(tool_use_id="", content=f"Message sent to {to}.")
         except Exception as exc:
             return ToolResult(tool_use_id="", content=f"Error: {exc}", is_error=True)

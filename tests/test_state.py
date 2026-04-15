@@ -1,13 +1,59 @@
+import asyncio
+
 import rooster_code.cli as cli
 import pytest
+from open_agent_sdk.tools import clear_mailboxes, clear_teams, write_to_mailbox
 
 from rooster_code.runtime import get_state_snapshot
+from rooster_code.team import AgentPool, TeamManager, set_runtime_team_bridge
 
 
 def test_get_state_snapshot_supports_todos() -> None:
     snapshot = get_state_snapshot("todos")
 
     assert isinstance(snapshot, list)
+
+
+def test_get_state_snapshot_merges_runtime_team_state() -> None:
+    manager = TeamManager()
+    manager._active = True
+    manager._team_id = "runtime123"
+    manager._team_name = "dev-team"
+    manager._member_definitions = {
+        "reviewer": {"description": "reviews"},
+        "builder": {"description": "builds"},
+    }
+    pool = AgentPool()
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._mailboxes["builder"] = asyncio.Queue()
+    pool.send_message("reviewer", {"from": "builder", "content": "check this first"})
+    manager._pool = pool
+
+    clear_teams()
+    clear_mailboxes()
+    write_to_mailbox("sdk-agent", {"type": "text", "from": "agent", "content": "sdk only"})
+    set_runtime_team_bridge(manager, object())
+    try:
+        teams = get_state_snapshot("teams")
+        mailboxes = get_state_snapshot("mailboxes")
+        reviewer_mailbox = get_state_snapshot("mailboxes", "reviewer")
+        builder_mailbox = get_state_snapshot("mailboxes", "builder")
+    finally:
+        set_runtime_team_bridge(None, None)
+        clear_teams()
+        clear_mailboxes()
+
+    assert teams["runtime123"] == {
+        "id": "runtime123",
+        "name": "dev-team",
+        "description": "",
+        "members": ["reviewer", "builder"],
+        "member_statuses": {"reviewer": "idle", "builder": "idle"},
+        "runtime_managed": True,
+    }
+    assert mailboxes["sdk-agent"] == [{"type": "text", "from": "agent", "content": "sdk only"}]
+    assert reviewer_mailbox == [{"type": "text", "from": "builder", "content": "check this first"}]
+    assert builder_mailbox == []
 
 
 def test_main_dispatches_state_todos(monkeypatch) -> None:

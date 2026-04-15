@@ -1186,17 +1186,28 @@ async def tag_session(session_id: str, tags: list[str]):
 
 
 def get_state_snapshot(name: str, agent_name: str | None = None):
+    from rooster_code.team import get_runtime_team_bridge
+
     if name == "todos":
         return get_todos()
     if name == "tasks":
         return get_all_tasks()
     if name == "teams":
-        return get_all_teams()
+        team_manager, _ = get_runtime_team_bridge()
+        snapshot = dict(get_all_teams())
+        if team_manager is not None:
+            snapshot.update(team_manager.sdk_team_snapshot())
+        return snapshot
     if name == "mailboxes":
         from open_agent_sdk.tools import _mailboxes as _sdk_mailboxes
+        team_manager, _ = get_runtime_team_bridge()
+        snapshot = {name: [dict(message) for message in messages] for name, messages in _sdk_mailboxes.items()}
+        if team_manager is not None:
+            for member_name, messages in team_manager.sdk_mailboxes_snapshot().items():
+                snapshot.setdefault(member_name, []).extend(messages)
         if agent_name is not None:
-            return _sdk_mailboxes.get(agent_name, [])
-        return dict(_sdk_mailboxes)
+            return snapshot.get(agent_name, [])
+        return snapshot
     if name == "config":
         return get_config()
     if name == "cron":

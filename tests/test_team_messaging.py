@@ -158,8 +158,50 @@ def test_send_message_tool_from_member():
         msg = pool._mailboxes["builder"].get_nowait()
         assert msg["from"] == "reviewer"
         assert msg["content"] == "hey builder"
+        assert msg["type"] == "text"
 
         print("PASS: TeamSendMessageTool delivers messages to member mailboxes")
+
+    asyncio.run(_run())
+
+
+def test_send_message_tool_broadcast_from_member():
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        pool = AgentPool()
+
+        builder = FakeMemberAgent("builder")
+        reviewer = FakeMemberAgent("reviewer")
+
+        pool._members["builder"] = builder
+        pool._mailboxes["builder"] = asyncio.Queue()
+        pool._locks["builder"] = asyncio.Lock()
+        pool._members["reviewer"] = reviewer
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+        manager._pool = pool
+
+        tool = TeamSendMessageTool(manager, sender_name="reviewer")
+
+        result = await tool.call(
+            {"to": "*", "content": "team update", "type": "plan_approval_response"},
+            ToolContext(cwd=".", env={}),
+        )
+        assert not result.is_error
+        assert str(result.content) == "Message broadcast to all agents."
+        assert pool._mailboxes["builder"].get_nowait() == {
+            "from": "reviewer",
+            "content": "team update",
+            "type": "plan_approval_response",
+        }
+        assert pool._mailboxes["reviewer"].get_nowait() == {
+            "from": "reviewer",
+            "content": "team update",
+            "type": "plan_approval_response",
+        }
+
+        print("PASS: TeamSendMessageTool broadcasts to all member mailboxes")
 
     asyncio.run(_run())
 
@@ -168,4 +210,5 @@ if __name__ == "__main__":
     test_member_tools_injected()
     test_member_to_member_messaging()
     test_send_message_tool_from_member()
+    test_send_message_tool_broadcast_from_member()
     print("\nALL INTER-MEMBER MESSAGING TESTS PASSED")

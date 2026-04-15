@@ -127,6 +127,22 @@ def test_agent_pool_send_and_inject_mailbox():
     assert "review code" in task
 
 
+def test_agent_pool_snapshot_mailboxes_preserves_messages_and_defaults_type():
+    pool = AgentPool()
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._locks["reviewer"] = asyncio.Lock()
+
+    pool.send_message("reviewer", {"from": "builder", "content": "check this"})
+
+    snapshot = pool.snapshot_mailboxes()
+
+    assert snapshot == {
+        "reviewer": [{"type": "text", "from": "builder", "content": "check this"}]
+    }
+    assert not pool._mailboxes["reviewer"].empty()
+    assert pool._mailboxes["reviewer"].get_nowait() == {"from": "builder", "content": "check this"}
+
+
 def test_agent_pool_inject_mailbox_no_messages():
     pool = AgentPool()
     pool._mailboxes["reviewer"] = asyncio.Queue()
@@ -339,6 +355,7 @@ def test_send_message_tool_success():
     msg = pool._mailboxes["reviewer"].get_nowait()
     assert msg["from"] == "orchestrator"
     assert msg["content"] == "check this"
+    assert msg["type"] == "text"
 
 
 def test_send_message_tool_uses_bound_sender_name():
@@ -357,6 +374,60 @@ def test_send_message_tool_uses_bound_sender_name():
     msg = pool._mailboxes["reviewer"].get_nowait()
     assert msg["from"] == "builder"
     assert msg["content"] == "check this"
+    assert msg["type"] == "text"
+
+
+def test_send_message_tool_supports_sdk_message_type():
+    manager = TeamManager()
+    manager._active = True
+    pool = AgentPool()
+    pool._members["reviewer"] = FakeAgent()
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._locks["reviewer"] = asyncio.Lock()
+    manager._pool = pool
+
+    tool = TeamSendMessageTool(manager, sender_name="builder")
+    result = asyncio.run(
+        tool.call(
+            {"to": "reviewer", "content": "please stop", "type": "shutdown_request"},
+            ToolContext(cwd=".", env={}),
+        )
+    )
+
+    assert not result.is_error
+    msg = pool._mailboxes["reviewer"].get_nowait()
+    assert msg == {"from": "builder", "content": "please stop", "type": "shutdown_request"}
+
+
+def test_send_message_tool_supports_broadcast():
+    manager = TeamManager()
+    manager._active = True
+    pool = AgentPool()
+    pool._members["builder"] = FakeAgent()
+    pool._members["reviewer"] = FakeAgent()
+    pool._mailboxes["builder"] = asyncio.Queue()
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._locks["builder"] = asyncio.Lock()
+    pool._locks["reviewer"] = asyncio.Lock()
+    manager._pool = pool
+
+    tool = TeamSendMessageTool(manager, sender_name="builder")
+    result = asyncio.run(
+        tool.call(
+            {"to": "*", "content": "heads up", "type": "plan_approval_response"},
+            ToolContext(cwd=".", env={}),
+        )
+    )
+
+    assert not result.is_error
+    assert str(result.content) == "Message broadcast to all agents."
+    builder_msg = pool._mailboxes["builder"].get_nowait()
+    reviewer_msg = pool._mailboxes["reviewer"].get_nowait()
+    assert builder_msg == reviewer_msg == {
+        "from": "builder",
+        "content": "heads up",
+        "type": "plan_approval_response",
+    }
 
 
 def test_send_message_tool_errors_when_team_inactive():
@@ -586,6 +657,39 @@ def test_team_manager_info_active():
     assert "note" in info
 
 
+def test_team_manager_sdk_team_snapshot_active():
+    manager = TeamManager()
+    manager._active = True
+    manager._team_id = "team123"
+    manager._team_name = "team1"
+    manager._member_definitions = {
+        "reviewer": {"description": "reviews"},
+        "builder": {"description": "builds"},
+    }
+    pool = AgentPool()
+    pool._members["reviewer"] = FakeAgent()
+    pool._members["builder"] = FakeAgent()
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._mailboxes["builder"] = asyncio.Queue()
+    pool._locks["reviewer"] = asyncio.Lock()
+    pool._locks["builder"] = asyncio.Lock()
+    pool._busy.add("builder")
+    manager._pool = pool
+
+    snapshot = manager.sdk_team_snapshot()
+
+    assert snapshot == {
+        "team123": {
+            "id": "team123",
+            "name": "team1",
+            "description": "",
+            "members": ["reviewer", "builder"],
+            "member_statuses": {"reviewer": "idle", "builder": "busy"},
+            "runtime_managed": True,
+        }
+    }
+
+
 def test_team_manager_dispatch_delegates_to_pool():
     manager = TeamManager()
     manager._active = True
@@ -805,6 +909,30 @@ def test_team_manager_send_message_delegates_to_pool():
     msg = pool._mailboxes["reviewer"].get_nowait()
     assert msg["from"] == "orchestrator"
     assert msg["content"] == "check this"
+    assert msg["type"] == "text"
+
+
+def test_team_manager_send_message_broadcasts_to_all_members():
+    manager = TeamManager()
+    manager._active = True
+    pool = AgentPool()
+    pool._members["builder"] = FakeAgent()
+    pool._members["reviewer"] = FakeAgent()
+    pool._mailboxes["builder"] = asyncio.Queue()
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._locks["builder"] = asyncio.Lock()
+    pool._locks["reviewer"] = asyncio.Lock()
+    manager._pool = pool
+
+    asyncio.run(manager.send_message("*", "announce", sender="builder", message_type="shutdown_response"))
+
+    builder_msg = pool._mailboxes["builder"].get_nowait()
+    reviewer_msg = pool._mailboxes["reviewer"].get_nowait()
+    assert builder_msg == reviewer_msg == {
+        "from": "builder",
+        "content": "announce",
+        "type": "shutdown_response",
+    }
 
 
 def test_team_manager_clear_delegates_to_pool():
