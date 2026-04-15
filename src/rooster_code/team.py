@@ -336,8 +336,10 @@ class TeamManager:
                 while not previous_mailbox.empty():
                     new_mailbox.put_nowait(previous_mailbox.get_nowait())
             self._configure_member(member_name)
-            self._pool._busy.discard(member_name)
+            # Agent is fully initialized and ready; now clear the unhealthy flag
+            # so dispatch can proceed without racing against an incompletely-recovered agent.
             self._pool._unhealthy.discard(member_name)
+            self._pool._busy.discard(member_name)
             if previous_agent is not None:
                 with contextlib.suppress(Exception):
                     await previous_agent.close()
