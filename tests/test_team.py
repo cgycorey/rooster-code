@@ -9,6 +9,7 @@ from open_agent_sdk.types import ToolContext
 
 from rooster_code.config import RuntimeConfig
 from rooster_code.team import (
+    MAILBOX_DISPATCH_TASK,
     AgentPool,
     SDKTeamCreateBridgeTool,
     SDKTeamDeleteBridgeTool,
@@ -38,10 +39,12 @@ class FakeAgent:
         self._call_count = 0
         self._closed = False
         self._prompt_error = None
+        self._last_prompt = ""
 
     async def prompt(self, text: str, overrides: dict[str, Any] | None = None):
         if self._prompt_error:
             raise self._prompt_error
+        self._last_prompt = text
         result_text = self._responses[self._call_count] if self._call_count < len(self._responses) else self._responses[-1]
         self._call_count += 1
         return FakeQueryResult(text=result_text)
@@ -170,6 +173,31 @@ def test_agent_pool_send_message_unknown_recipient():
     pool = AgentPool()
     pool.send_message("unknown", {"from": "builder", "content": "hello"})
     assert pool._mailboxes.get("unknown") is None
+
+
+def test_agent_pool_wake_for_messages_dispatches_mailbox_task():
+    async def _run():
+        pool = AgentPool()
+        fake_agent = FakeAgent(responses=["noted"])
+        pool._members["reviewer"] = fake_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+
+        pool.send_message("reviewer", {"from": "builder", "content": "hello"})
+        triggered = pool.wake_for_messages("reviewer")
+        assert triggered is True
+
+        for _ in range(20):
+            if fake_agent._call_count:
+                break
+            await asyncio.sleep(0)
+
+        assert fake_agent._call_count == 1
+        assert "[Message from builder]: hello" in fake_agent._last_prompt
+        assert MAILBOX_DISPATCH_TASK in fake_agent._last_prompt
+        await pool.close_all()
+
+    asyncio.run(_run())
 
 
 def test_agent_pool_close_all():
@@ -338,96 +366,113 @@ def test_send_message_tool_missing_content():
 
 
 def test_send_message_tool_success():
-    manager = TeamManager()
-    manager._active = True
-    pool = AgentPool()
-    pool._members["reviewer"] = FakeAgent()
-    pool._mailboxes["reviewer"] = asyncio.Queue()
-    pool._locks["reviewer"] = asyncio.Lock()
-    manager._pool = pool
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        pool = AgentPool()
+        reviewer = FakeAgent()
+        pool._members["reviewer"] = reviewer
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+        manager._pool = pool
 
-    tool = TeamSendMessageTool(manager)
-    result = asyncio.run(tool.call({"to": "reviewer", "content": "check this"}, ToolContext(cwd=".", env={})))
+        tool = TeamSendMessageTool(manager)
+        result = await tool.call({"to": "reviewer", "content": "check this"}, ToolContext(cwd=".", env={}))
 
-    assert not result.is_error
-    assert "reviewer" in result.content
-    assert not pool._mailboxes["reviewer"].empty()
-    msg = pool._mailboxes["reviewer"].get_nowait()
-    assert msg["from"] == "orchestrator"
-    assert msg["content"] == "check this"
-    assert msg["type"] == "text"
+        assert not result.is_error
+        assert "reviewer" in result.content
+        for _ in range(20):
+            if reviewer._last_prompt:
+                break
+            await asyncio.sleep(0)
+        assert "[Message from orchestrator]: check this" in reviewer._last_prompt
+        assert MAILBOX_DISPATCH_TASK in reviewer._last_prompt
+
+    asyncio.run(_run())
 
 
 def test_send_message_tool_uses_bound_sender_name():
-    manager = TeamManager()
-    manager._active = True
-    pool = AgentPool()
-    pool._members["reviewer"] = FakeAgent()
-    pool._mailboxes["reviewer"] = asyncio.Queue()
-    pool._locks["reviewer"] = asyncio.Lock()
-    manager._pool = pool
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        pool = AgentPool()
+        reviewer = FakeAgent()
+        pool._members["reviewer"] = reviewer
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+        manager._pool = pool
 
-    tool = TeamSendMessageTool(manager, sender_name="builder")
-    result = asyncio.run(tool.call({"to": "reviewer", "content": "check this"}, ToolContext(cwd=".", env={})))
+        tool = TeamSendMessageTool(manager, sender_name="builder")
+        result = await tool.call({"to": "reviewer", "content": "check this"}, ToolContext(cwd=".", env={}))
 
-    assert not result.is_error
-    msg = pool._mailboxes["reviewer"].get_nowait()
-    assert msg["from"] == "builder"
-    assert msg["content"] == "check this"
-    assert msg["type"] == "text"
+        assert not result.is_error
+        for _ in range(20):
+            if reviewer._last_prompt:
+                break
+            await asyncio.sleep(0)
+        assert "[Message from builder]: check this" in reviewer._last_prompt
+
+    asyncio.run(_run())
 
 
 def test_send_message_tool_supports_sdk_message_type():
-    manager = TeamManager()
-    manager._active = True
-    pool = AgentPool()
-    pool._members["reviewer"] = FakeAgent()
-    pool._mailboxes["reviewer"] = asyncio.Queue()
-    pool._locks["reviewer"] = asyncio.Lock()
-    manager._pool = pool
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        pool = AgentPool()
+        reviewer = FakeAgent()
+        pool._members["reviewer"] = reviewer
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+        manager._pool = pool
 
-    tool = TeamSendMessageTool(manager, sender_name="builder")
-    result = asyncio.run(
-        tool.call(
+        tool = TeamSendMessageTool(manager, sender_name="builder")
+        result = await tool.call(
             {"to": "reviewer", "content": "please stop", "type": "shutdown_request"},
             ToolContext(cwd=".", env={}),
         )
-    )
 
-    assert not result.is_error
-    msg = pool._mailboxes["reviewer"].get_nowait()
-    assert msg == {"from": "builder", "content": "please stop", "type": "shutdown_request"}
+        assert not result.is_error
+        for _ in range(20):
+            if reviewer._last_prompt:
+                break
+            await asyncio.sleep(0)
+        assert "[Message from builder]: please stop" in reviewer._last_prompt
+
+    asyncio.run(_run())
 
 
 def test_send_message_tool_supports_broadcast():
-    manager = TeamManager()
-    manager._active = True
-    pool = AgentPool()
-    pool._members["builder"] = FakeAgent()
-    pool._members["reviewer"] = FakeAgent()
-    pool._mailboxes["builder"] = asyncio.Queue()
-    pool._mailboxes["reviewer"] = asyncio.Queue()
-    pool._locks["builder"] = asyncio.Lock()
-    pool._locks["reviewer"] = asyncio.Lock()
-    manager._pool = pool
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        pool = AgentPool()
+        builder = FakeAgent()
+        reviewer = FakeAgent()
+        pool._members["builder"] = builder
+        pool._members["reviewer"] = reviewer
+        pool._mailboxes["builder"] = asyncio.Queue()
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["builder"] = asyncio.Lock()
+        pool._locks["reviewer"] = asyncio.Lock()
+        manager._pool = pool
 
-    tool = TeamSendMessageTool(manager, sender_name="builder")
-    result = asyncio.run(
-        tool.call(
+        tool = TeamSendMessageTool(manager, sender_name="builder")
+        result = await tool.call(
             {"to": "*", "content": "heads up", "type": "plan_approval_response"},
             ToolContext(cwd=".", env={}),
         )
-    )
 
-    assert not result.is_error
-    assert str(result.content) == "Message broadcast to all agents."
-    builder_msg = pool._mailboxes["builder"].get_nowait()
-    reviewer_msg = pool._mailboxes["reviewer"].get_nowait()
-    assert builder_msg == reviewer_msg == {
-        "from": "builder",
-        "content": "heads up",
-        "type": "plan_approval_response",
-    }
+        assert not result.is_error
+        assert str(result.content) == "Message broadcast to all agents."
+        for _ in range(20):
+            if builder._last_prompt and reviewer._last_prompt:
+                break
+            await asyncio.sleep(0)
+        assert "[Message from builder]: heads up" in builder._last_prompt
+        assert "[Message from builder]: heads up" in reviewer._last_prompt
+
+    asyncio.run(_run())
 
 
 def test_send_message_tool_errors_when_team_inactive():
@@ -484,7 +529,7 @@ def test_sdk_team_create_bridge_tool_creates_persistent_team():
         assert manager.is_active()
         assert manager.active_team_id()
         assert manager.info()["team_name"] == "dev-team"
-        assert abort_signal.is_set() is True
+        assert abort_signal.is_set() is False
 
     asyncio.run(_run())
 
@@ -523,7 +568,7 @@ def test_sdk_team_create_bridge_tool_materializes_missing_agent_definitions():
         assert manager.is_active()
         assert sorted(config.agents.keys()) == ["reviewer-1", "reviewer-2"]
         assert "Review changed files" in str(config.agents["reviewer-1"]["prompt"])
-        assert abort_signal.is_set() is True
+        assert abort_signal.is_set() is False
 
     asyncio.run(_run())
 
@@ -895,44 +940,50 @@ def test_team_manager_concurrent_dispatches_share_one_recovery():
 
 
 def test_team_manager_send_message_delegates_to_pool():
-    manager = TeamManager()
-    manager._active = True
-    pool = AgentPool()
-    fake_agent = FakeAgent()
-    pool._members["reviewer"] = fake_agent
-    pool._mailboxes["reviewer"] = asyncio.Queue()
-    pool._locks["reviewer"] = asyncio.Lock()
-    manager._pool = pool
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        pool = AgentPool()
+        fake_agent = FakeAgent()
+        pool._members["reviewer"] = fake_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+        manager._pool = pool
 
-    asyncio.run(manager.send_message("reviewer", "check this"))
+        await manager.send_message("reviewer", "check this")
+        for _ in range(20):
+            if fake_agent._last_prompt:
+                break
+            await asyncio.sleep(0)
+        assert "[Message from orchestrator]: check this" in fake_agent._last_prompt
 
-    msg = pool._mailboxes["reviewer"].get_nowait()
-    assert msg["from"] == "orchestrator"
-    assert msg["content"] == "check this"
-    assert msg["type"] == "text"
+    asyncio.run(_run())
 
 
 def test_team_manager_send_message_broadcasts_to_all_members():
-    manager = TeamManager()
-    manager._active = True
-    pool = AgentPool()
-    pool._members["builder"] = FakeAgent()
-    pool._members["reviewer"] = FakeAgent()
-    pool._mailboxes["builder"] = asyncio.Queue()
-    pool._mailboxes["reviewer"] = asyncio.Queue()
-    pool._locks["builder"] = asyncio.Lock()
-    pool._locks["reviewer"] = asyncio.Lock()
-    manager._pool = pool
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        pool = AgentPool()
+        builder = FakeAgent()
+        reviewer = FakeAgent()
+        pool._members["builder"] = builder
+        pool._members["reviewer"] = reviewer
+        pool._mailboxes["builder"] = asyncio.Queue()
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["builder"] = asyncio.Lock()
+        pool._locks["reviewer"] = asyncio.Lock()
+        manager._pool = pool
 
-    asyncio.run(manager.send_message("*", "announce", sender="builder", message_type="shutdown_response"))
+        await manager.send_message("*", "announce", sender="builder", message_type="shutdown_response")
+        for _ in range(20):
+            if builder._last_prompt and reviewer._last_prompt:
+                break
+            await asyncio.sleep(0)
+        assert "[Message from builder]: announce" in builder._last_prompt
+        assert "[Message from builder]: announce" in reviewer._last_prompt
 
-    builder_msg = pool._mailboxes["builder"].get_nowait()
-    reviewer_msg = pool._mailboxes["reviewer"].get_nowait()
-    assert builder_msg == reviewer_msg == {
-        "from": "builder",
-        "content": "announce",
-        "type": "shutdown_response",
-    }
+    asyncio.run(_run())
 
 
 def test_team_manager_clear_delegates_to_pool():
@@ -1005,6 +1056,40 @@ def test_team_manager_create_and_close_team():
         assert "SendMessage" not in tool_names
         assert tool_names == ["Read", "Agent", "TeamCreate"]
         assert orchestrator._options.append_system_prompt == "original prompt"
+
+    asyncio.run(_run())
+
+
+def test_team_manager_send_message_after_create_team_auto_dispatches():
+    async def _run():
+        manager = TeamManager()
+        config = _make_config()
+        fake_agent = FakeAgent(responses=["noted"])
+
+        orchestrator = MagicMock()
+        orchestrator._options.append_system_prompt = ""
+        orchestrator._tool_pool = []
+
+        async def fake_create_member(self, name, definition, config, abort_signal=None):
+            self._members[name] = fake_agent
+            self._mailboxes[name] = asyncio.Queue()
+            self._locks[name] = asyncio.Lock()
+
+        import unittest.mock
+        with unittest.mock.patch.object(AgentPool, "create_member", fake_create_member):
+            await manager.create_team("dev-team", ["reviewer"], config, orchestrator)
+
+        await manager.send_message("reviewer", "please review this")
+
+        for _ in range(20):
+            if fake_agent._last_prompt:
+                break
+            await asyncio.sleep(0)
+
+        assert "[Message from orchestrator]: please review this" in fake_agent._last_prompt
+        assert MAILBOX_DISPATCH_TASK in fake_agent._last_prompt
+
+        await manager.close_team(orchestrator)
 
     asyncio.run(_run())
 

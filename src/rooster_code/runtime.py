@@ -321,7 +321,7 @@ def _agent_context_prompt(config: RuntimeConfig, team_info: dict[str, Any] | Non
         lines.append("")
         lines.append(f"# Team: {team_name}")
         lines.append(f"You are the orchestrator for team '{team_name}'. Members: {', '.join(members.keys())}.")
-        lines.append("Use TeamDispatch to assign tasks to members. Use SendMessage to communicate with members.")
+        lines.append("Use TeamDispatch to assign tasks to members. Use SendMessage for teammate coordination; it may wake an idle member to process queued mail, but it does not replace TeamDispatch for explicit task assignment.")
         lines.append("If a team member is already assigned to a task, do not also do that same task yourself unless they fail, stop, or you are explicitly taking over after reviewing their output.")
 
     return "\n".join(lines)

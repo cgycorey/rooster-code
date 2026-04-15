@@ -11,6 +11,10 @@ from open_agent_sdk.types import BaseTool, ToolContext, ToolInputSchema, ToolRes
 
 
 MAX_TEAM_MEMBERS = 5
+MAILBOX_DISPATCH_TASK = (
+    "Check your queued team messages, respond if needed, then continue your current responsibilities "
+    "without duplicating already-assigned work."
+)
 
 _runtime_team_manager: "TeamManager | None" = None
 _runtime_orchestrator: Any = None
@@ -41,6 +45,7 @@ class AgentPool:
         self._locks: dict[str, asyncio.Lock] = {}
         self._unhealthy: set[str] = set()
         self._busy: set[str] = set()
+        self._message_dispatch_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def member_names(self) -> list[str]:
@@ -154,6 +159,28 @@ class AgentPool:
         if to in self._mailboxes:
             self._mailboxes[to].put_nowait(message)
 
+    def wake_for_messages(self, member: str, task: str = MAILBOX_DISPATCH_TASK) -> bool:
+        if member not in self._members:
+            return False
+        if member in self._unhealthy or member in self._busy:
+            return False
+        mailbox = self._mailboxes.get(member)
+        if mailbox is None or mailbox.empty():
+            return False
+
+        self._busy.add(member)
+
+        async def _run() -> None:
+            try:
+                await self.dispatch(member, task)
+            finally:
+                self._busy.discard(member)
+
+        task_handle = asyncio.create_task(_run())
+        self._message_dispatch_tasks.add(task_handle)
+        task_handle.add_done_callback(self._message_dispatch_tasks.discard)
+        return True
+
     def snapshot_mailboxes(self) -> dict[str, list[dict[str, Any]]]:
         return {
             name: [_sdk_mailbox_message_snapshot(message) for message in list(mailbox._queue)]
@@ -176,12 +203,17 @@ class AgentPool:
         return f"{header}\n\n{task}"
 
     async def close_all(self) -> None:
+        for task in list(self._message_dispatch_tasks):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         for agent in self._members.values():
             with contextlib.suppress(Exception):
                 await agent.close()
         self._members.clear()
         self._mailboxes.clear()
         self._locks.clear()
+        self._message_dispatch_tasks.clear()
         self._unhealthy.clear()
         self._busy.clear()
 
@@ -215,7 +247,7 @@ class TeamManager:
             f"# Team: {self._team_name}",
             f"You are the orchestrator for team '{self._team_name}'. Members: {', '.join(self._member_definitions.keys())}.",
             "Use TeamDispatch to assign tasks to members. TeamDispatch runs the task on the member and returns the result.",
-            "Use SendMessage only for informational messages between members — it does NOT trigger work or processing.",
+            "Use SendMessage for informational teammate coordination; it may wake an idle teammate to process queued mail, but it does NOT replace TeamDispatch for explicit task assignment.",
             "Do NOT use the Agent tool — it is not available while a team is active. Always use TeamDispatch instead.",
             "When you assign work with TeamDispatch, the member processes it in the background. The result will appear when complete.",
             "Do not also perform the same work yourself unless the member fails, stops, or you are explicitly taking over.",
@@ -419,10 +451,12 @@ class TeamManager:
             ]))
             for member_name in member_names:
                 self._pool.send_message(member_name, dict(message))
+                self._pool.wake_for_messages(member_name)
             return
         if not self._pool.has_member(to) and to not in self._member_definitions:
             raise RuntimeError(f"Unknown team member '{to}'")
         self._pool.send_message(to, message)
+        self._pool.wake_for_messages(to)
 
     async def clear(self) -> None:
         if self._pool is not None:
@@ -484,13 +518,28 @@ def patch_tool_pool(
     add_tools: list[BaseTool] | None = None,
     remove_names: list[str] | None = None,
 ) -> None:
-    """Dynamically add/remove tools from an agent's tool pool after initialization."""
+    """Dynamically add/remove tools from an agent's tool pool after initialization.
+
+    Mutates the list in-place so that an active QueryEngine holding a reference
+    to the same list object sees the changes on its next API call.
+    Also updates the engine's tool_map so newly added tools can be executed.
+    """
     if not hasattr(agent, "_tool_pool") or agent._tool_pool is None:
         return
     if remove_names:
-        agent._tool_pool = [t for t in agent._tool_pool if t.name not in remove_names]
+        agent._tool_pool[:] = [t for t in agent._tool_pool if t.name not in remove_names]
     if add_tools:
         agent._tool_pool.extend(add_tools)
+    # Keep the active QueryEngine's tool_map in sync so mid-turn tool
+    # additions/removals are both visible to the API and executable.
+    engine = getattr(agent, "_engine", None)
+    if engine is not None:
+        if remove_names:
+            for name in remove_names:
+                engine._tool_map.pop(name, None)
+        if add_tools:
+            for tool in add_tools:
+                engine._tool_map[tool.name] = tool
 
 
 class TeamDispatchTool(BaseTool):
@@ -585,7 +634,7 @@ class TeamStatusTool(BaseTool):
 
 class TeamSendMessageTool(BaseTool):
     _name = "SendMessage"
-    _description = "Send a brief informational message to a team member. This does NOT assign work — use TeamDispatch for that. Messages are only delivered when the member next receives a TeamDispatch task."
+    _description = "Send a brief informational message to a team member. This may wake an idle teammate to process queued mailbox messages, but explicit work assignment still belongs in TeamDispatch."
     _input_schema = ToolInputSchema(
         properties={
             "to": {"type": "string", "description": "Team member name to send to, or '*' for broadcast"},
@@ -677,8 +726,6 @@ class SDKTeamCreateBridgeTool(BaseTool):
             await team_manager.create_team(team_name, member_names, config, orchestrator, abort_signal)
         except Exception as exc:
             return ToolResult(tool_use_id="", content=f"Error: {exc}", is_error=True)
-        if abort_signal is not None:
-            abort_signal.set()
         return ToolResult(
             tool_use_id="",
             content=(

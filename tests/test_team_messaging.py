@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 from open_agent_sdk.types import ToolContext
 
-from rooster_code.team import AgentPool, TeamManager, TeamSendMessageTool, patch_tool_pool
+from rooster_code.team import MAILBOX_DISPATCH_TASK, AgentPool, TeamManager, TeamSendMessageTool, patch_tool_pool
 
 
 class FakeMemberAgent:
@@ -202,6 +202,39 @@ def test_send_message_tool_broadcast_from_member():
         }
 
         print("PASS: TeamSendMessageTool broadcasts to all member mailboxes")
+
+    asyncio.run(_run())
+
+
+def test_send_message_tool_auto_dispatches_idle_recipient():
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        pool = AgentPool()
+
+        builder = FakeMemberAgent("builder")
+        reviewer = FakeMemberAgent("reviewer")
+
+        pool._members["builder"] = builder
+        pool._mailboxes["builder"] = asyncio.Queue()
+        pool._locks["builder"] = asyncio.Lock()
+        pool._members["reviewer"] = reviewer
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+        manager._pool = pool
+
+        tool = TeamSendMessageTool(manager, sender_name="builder")
+
+        result = await tool.call({"to": "reviewer", "content": "please review this"}, ToolContext(cwd=".", env={}))
+        assert not result.is_error
+
+        for _ in range(20):
+            if reviewer._last_prompt:
+                break
+            await asyncio.sleep(0)
+
+        assert "[Message from builder]: please review this" in reviewer._last_prompt
+        assert MAILBOX_DISPATCH_TASK in reviewer._last_prompt
 
     asyncio.run(_run())
 
