@@ -13,6 +13,7 @@ Rooster Code currently includes:
 - **background agents and tasks** with notifications, task output inspection, waiting, and context injection on completion
 - **multi-agent team orchestration** with team creation, non-blocking dispatch, team status, and inter-member messaging
 - **named/custom agents** loaded from JSON agent definitions
+- **skill invocation** through `/skills` and `/skill-name ...` chat commands, plus repo-local skill bundles from `skills/`
 - **tool-gated execution** with allowed/disallowed tool controls and permission-mode support
 - **MCP server integration** through SDK-backed MCP configuration
 - **hooks-file passthrough** into the SDK runtime configuration
@@ -111,7 +112,148 @@ uv run rooster-code ask "Find the main entry point"
 uv run rooster-code chat --model claude-sonnet-4-5
 ```
 
-Interactive chat supports slash commands such as `/clear`, `/model <name>`, `/status`, and `/exit`.
+## Interactive chat commands
+
+Rooster Code chat has a richer slash-command surface than the basic CLI help
+suggests. The current interactive commands include:
+
+- `/help` — show the command list
+- `/clear` — clear the current agent history
+- `/compact` — summarize the current chat history
+- `/model <name>` — switch models
+- `/permission <mode>` — update permission mode
+- `/tools` — list available tools
+- `/skills` — list available skills
+- `/plan <args>` — invoke the local plan skill
+- `/tasks` — show background tasks
+- `/bg <name> <prompt>` / `/agent-bg <name> <prompt>` — start a background subagent task
+- `/task-output <id>` — inspect task output
+- `/task-stop <id>` — stop a background task
+- `/wait <id>` — wait for a background task and inject its result into context
+- `/sessions` — show saved sessions
+- `/resume <session-id>` — resume a different session
+- `/status` — show current runtime state
+- `/agents` — list configured agents
+- `/agents add <name> <desc>` — add an agent definition
+- `/agents remove <name>` — remove an agent definition
+- `/agents show <name>` — show an agent definition
+- `/team create <name> <members...>` — create a team of configured agents
+- `/team info` — show team status
+- `/team stop` — disband the active team
+- `/exit` — exit chat
+
+## Workflow map
+
+```mermaid
+flowchart TD
+    A["rooster-code CLI"] --> B["ask"]
+    A --> C["chat"]
+    A --> D["sessions"]
+    A --> E["state"]
+    A --> F["tools"]
+
+    C --> C1["/help"]
+    C --> C2["/model"]
+    C --> C3["/permission"]
+    C --> C4["/clear"]
+    C --> C5["/compact"]
+    C --> C6["/status"]
+    C --> C7["/exit"]
+
+    C --> S["/skills"]
+    S --> S1["/plan"]
+    S1 --> S2["skills/plan/SKILL.md"]
+
+    C --> BG["/bg or /agent-bg"]
+    BG --> BG2["background task store"]
+    BG2 --> BG3["/tasks"]
+    BG2 --> BG4["/task-output"]
+    BG2 --> BG5["/task-stop"]
+    BG2 --> BG6["/wait"]
+
+    C --> AG["/agents"]
+    AG --> AG1["/agents add"]
+    AG --> AG2["/agents show"]
+    AG --> AG3["/agents remove"]
+
+    C --> T["/team"]
+    T --> T1["/team create"]
+    T --> T2["TeamDispatch"]
+    T --> T3["SendMessage"]
+    T --> T4["TeamStatus"]
+    T --> T5["/team info"]
+    T --> T6["/team stop"]
+
+    E --> E1["state tasks"]
+    E --> E2["state teams"]
+    E --> E3["state mailboxes"]
+    E --> E4["state config"]
+    E --> E5["state cron"]
+    E --> E6["state plan"]
+    E --> E7["state todos"]
+```
+
+## Internal architecture
+
+```mermaid
+flowchart TD
+    U["User / terminal"] --> CLI["rooster-code CLI"]
+
+    CLI --> ASK["ask mode"]
+    CLI --> CHAT["chat mode"]
+    CLI --> SESS["session commands"]
+    CLI --> STATE["state commands"]
+
+    ASK --> CFG["RuntimeConfig + env resolution"]
+    CHAT --> CFG
+    SESS --> RUNTIME["runtime.py"]
+    STATE --> RUNTIME
+    CFG --> RUNTIME
+
+    RUNTIME --> AGENT["runtime agent creation"]
+    RUNTIME --> TOOLS["runtime tool wrappers"]
+    RUNTIME --> SKILLS["bundled + local skills"]
+    RUNTIME --> TASKS["background task store"]
+    RUNTIME --> SNAP["state snapshots"]
+
+    CHAT --> RENDER["rendering.py"]
+    RENDER --> PANELS["Rich panels / tables / event stream"]
+
+    TOOLS --> SUBAGENT["Agent tool / subagents"]
+    TOOLS --> TEAM["team.py team manager"]
+    TOOLS --> READWRITE["read/edit/trace wrappers"]
+
+    TEAM --> MEMBERS["persistent member agents"]
+    TEAM --> DISPATCH["TeamDispatch"]
+    TEAM --> MSG["SendMessage"]
+    TEAM --> STATUS["TeamStatus"]
+    TEAM --> MBOX["runtime mailboxes"]
+
+    DISPATCH --> TASKS
+    MSG --> MBOX
+    MBOX --> MEMBERS
+    MEMBERS --> TASKS
+
+    SNAP --> STATEOUT["tasks / teams / mailboxes / config / cron / plan / todos"]
+    TASKS --> NOTIFY["completion notifications + context injection"]
+    NOTIFY --> CHAT
+```
+
+## Skills
+
+Rooster Code supports user-invocable SDK skills and also loads repo-local skill
+bundles from `skills/` when present.
+
+Current repo-local skill bundle:
+
+- `plan` — defined in `skills/plan/SKILL.md`
+
+Interactive usage examples:
+
+```text
+/skills
+/plan add auth support
+```
 
 ## Session management
 
@@ -137,6 +279,43 @@ uv run rooster-code state config
 uv run rooster-code state cron
 uv run rooster-code state plan
 uv run rooster-code state todos
+```
+
+## Background tasks and agents
+
+Background delegation is a first-class workflow:
+
+```text
+/bg reviewer inspect the latest commit
+/agent-bg reviewer inspect the latest commit
+/wait task_1
+/task-output task_1
+/task-stop task_1
+```
+
+Completed background task results are surfaced in chat and can be injected back
+into the active conversation context when you wait on them.
+
+## Team workflows
+
+Rooster Code has an in-process team runtime built around configured agent
+definitions. Team workflows support:
+
+- team creation from configured agents
+- non-blocking `TeamDispatch`
+- `TeamStatus`
+- inter-member `SendMessage`
+- SDK-visible runtime team/mailbox snapshots through `state teams` and
+  `state mailboxes`
+
+Example interactive flow:
+
+```text
+/agents add reviewer reviews code carefully
+/agents add builder builds features
+/team create dev-team reviewer builder
+/team info
+/team stop
 ```
 
 ## Shared runtime flags for ask/chat
