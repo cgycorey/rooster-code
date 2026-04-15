@@ -187,6 +187,8 @@ class TeamManager:
         self._team_id: str = ""
         self._team_name: str = ""
         self._member_definitions: dict[str, dict[str, Any]] = {}
+        self._config: Any | None = None
+        self._abort_signal: asyncio.Event | None = None
         self._original_append_prompt: str = ""
         self._original_tool_pool: list[Any] | None = None
         self._active = False
@@ -217,6 +219,51 @@ class TeamManager:
 
     def active_team_id(self) -> str:
         return self._team_id
+
+    def _member_prompt(self, member_name: str) -> str:
+        others = ", ".join(m for m in self._member_definitions if m != member_name)
+        return (
+            f"You are '{member_name}', a member of team '{self._team_name}'. "
+            f"Other members: {others}. "
+            "Use SendMessage to communicate with other team members. "
+            "If another team member already owns a task, do not duplicate that same work unless they fail, stop, or explicitly hand it off to you."
+        )
+
+    def _configure_member(self, member_name: str) -> None:
+        if self._pool is None:
+            return
+        member_agent = self._pool._members[member_name]
+        member_send_tool = TeamSendMessageTool(self, sender_name=member_name)
+        patch_tool_pool(
+            member_agent,
+            add_tools=[member_send_tool],
+            remove_names=["TeamCreate", "TeamDelete", "Agent", "SendMessage"],
+        )
+        existing_prompt = getattr(member_agent._options, "append_system_prompt", "") or ""
+        member_prompt = self._member_prompt(member_name)
+        member_agent._options.append_system_prompt = f"{existing_prompt}\n\n{member_prompt}" if existing_prompt else member_prompt
+
+    async def _recover_member(self, member_name: str) -> None:
+        if self._pool is None:
+            raise RuntimeError("No team pool is active.")
+        if self._config is None or member_name not in self._member_definitions:
+            raise RuntimeError(f"No recovery metadata is available for team member '{member_name}'.")
+
+        previous_agent = self._pool._members.get(member_name)
+        previous_mailbox = self._pool._mailboxes.get(member_name)
+
+        definition = self._member_definitions[member_name]
+        await self._pool.create_member(member_name, definition, self._config, self._abort_signal)
+        new_mailbox = self._pool._mailboxes.get(member_name)
+        if previous_mailbox is not None and new_mailbox is not None:
+            while not previous_mailbox.empty():
+                new_mailbox.put_nowait(previous_mailbox.get_nowait())
+        self._configure_member(member_name)
+        self._pool._busy.discard(member_name)
+        self._pool._unhealthy.discard(member_name)
+        if previous_agent is not None:
+            with contextlib.suppress(Exception):
+                await previous_agent.close()
 
     async def ensure_orchestrator_team_state(self, orchestrator: Any) -> None:
         if not self._active:
@@ -282,39 +329,36 @@ class TeamManager:
             remove_names=["TeamCreate", "TeamDelete", "Agent", "SendMessage", "Read"],
         )
 
-        for member_name in members:
-            member_agent = pool._members[member_name]
-            member_send_tool = TeamSendMessageTool(self, sender_name=member_name)
-            patch_tool_pool(
-                member_agent,
-                add_tools=[member_send_tool],
-                remove_names=["TeamCreate", "TeamDelete", "Agent", "SendMessage"],
-            )
-            member_prompt = (
-                f"You are '{member_name}', a member of team '{name}'. "
-                f"Other members: {', '.join(m for m in members if m != member_name)}. "
-                "Use SendMessage to communicate with other team members. "
-                "If another team member already owns a task, do not duplicate that same work unless they fail, stop, or explicitly hand it off to you."
-            )
-            existing_prompt = getattr(member_agent._options, "append_system_prompt", "") or ""
-            member_agent._options.append_system_prompt = f"{existing_prompt}\n\n{member_prompt}" if existing_prompt else member_prompt
-
         self._pool = pool
         self._team_id = str(uuid.uuid4())[:8]
         self._team_name = name
         self._member_definitions = {m: dict(agents_def[m]) for m in members}
+        self._config = config
+        self._abort_signal = abort_signal
+        for member_name in members:
+            self._configure_member(member_name)
         self._active = True
         await self.ensure_orchestrator_team_state(orchestrator)
 
     async def dispatch(self, member: str, task: str) -> str:
         if not self._active or self._pool is None:
             return "No team is active. Use /team create to start a team."
+        if member in self._pool._unhealthy:
+            try:
+                await self._recover_member(member)
+            except Exception as exc:
+                return f"Error: team member '{member}' could not be recreated after a previous error: {exc}"
         return await self._pool.dispatch(member, task)
 
     async def dispatch_async(self, member: str, task: str, task_id: str, cwd: str, env: dict[str, str]) -> str:
         """Non-blocking dispatch. Returns task_id immediately; member processes in background."""
         if not self._active or self._pool is None:
             return "No team is active. Use /team create to start a team."
+        if member in self._pool._unhealthy:
+            try:
+                await self._recover_member(member)
+            except Exception as exc:
+                return f"Error: team member '{member}' could not be recreated after a previous error: {exc}"
         result = await self._pool.dispatch_async(member, task, task_id, cwd, env)
         return result
 
@@ -351,6 +395,8 @@ class TeamManager:
         self._team_id = ""
         self._team_name = ""
         self._member_definitions = {}
+        self._config = None
+        self._abort_signal = None
         self._original_tool_pool = None
         self._active = False
 

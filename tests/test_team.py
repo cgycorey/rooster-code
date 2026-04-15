@@ -600,6 +600,154 @@ def test_team_manager_dispatch_delegates_to_pool():
     assert result == "LGTM"
 
 
+def test_team_manager_dispatch_recovers_unhealthy_member():
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        manager._team_name = "dev-team"
+        manager._config = _make_config()
+        manager._member_definitions = {
+            "reviewer": {"description": "code reviewer", "prompt": "You are a reviewer."}
+        }
+        pool = AgentPool()
+        failed_agent = FakeAgent()
+        failed_agent._prompt_error = RuntimeError("rate limited")
+        pool._members["reviewer"] = failed_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+        pool._unhealthy.add("reviewer")
+        manager._pool = pool
+
+        async def fake_create_member(self, name, definition, config, abort_signal=None):
+            recovered = FakeAgent(responses=["LGTM"])
+            self._members[name] = recovered
+            self._mailboxes[name] = asyncio.Queue()
+            self._locks[name] = asyncio.Lock()
+
+        import unittest.mock
+        with unittest.mock.patch.object(AgentPool, "create_member", fake_create_member):
+            result = await manager.dispatch("reviewer", "review code")
+
+        assert result == "LGTM"
+        assert "reviewer" not in pool._unhealthy
+        assert failed_agent._closed is True
+
+    asyncio.run(_run())
+
+
+def test_team_manager_dispatch_async_recovers_unhealthy_member():
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        manager._team_name = "dev-team"
+        manager._config = _make_config()
+        manager._member_definitions = {
+            "reviewer": {"description": "code reviewer", "prompt": "You are a reviewer."}
+        }
+        pool = AgentPool()
+        failed_agent = FakeAgent()
+        failed_agent._prompt_error = RuntimeError("rate limited")
+        pool._members["reviewer"] = failed_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+        pool._unhealthy.add("reviewer")
+        manager._pool = pool
+
+        async def fake_create_member(self, name, definition, config, abort_signal=None):
+            recovered = FakeAgent(responses=["LGTM"])
+            self._members[name] = recovered
+            self._mailboxes[name] = asyncio.Queue()
+            self._locks[name] = asyncio.Lock()
+
+        import unittest.mock
+        with unittest.mock.patch.object(AgentPool, "create_member", fake_create_member):
+            with unittest.mock.patch("rooster_code.runtime._track_background_task"):
+                with unittest.mock.patch("rooster_code.runtime._update_background_subagent_task", new_callable=unittest.mock.AsyncMock):
+                    task_id = await manager.dispatch_async("reviewer", "review code", "task-1", ".", {})
+
+        assert task_id == "task-1"
+        assert "reviewer" not in pool._unhealthy
+        assert failed_agent._closed is True
+
+    asyncio.run(_run())
+
+
+def test_team_manager_dispatch_recovery_preserves_mailbox_messages():
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        manager._team_name = "dev-team"
+        manager._config = _make_config()
+        manager._member_definitions = {
+            "reviewer": {"description": "code reviewer", "prompt": "You are a reviewer."}
+        }
+        pool = AgentPool()
+        failed_agent = FakeAgent()
+        failed_agent._prompt_error = RuntimeError("rate limited")
+        pool._members["reviewer"] = failed_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+        pool._unhealthy.add("reviewer")
+        pool.send_message("reviewer", {"from": "builder", "content": "check this first"})
+        manager._pool = pool
+        captured: dict[str, str] = {}
+
+        class RecoveringAgent(FakeAgent):
+            async def prompt(self, text: str, overrides: dict[str, Any] | None = None):
+                captured["task"] = text
+                return await super().prompt(text, overrides)
+
+        async def fake_create_member(self, name, definition, config, abort_signal=None):
+            recovered = RecoveringAgent(responses=["LGTM"])
+            self._members[name] = recovered
+            self._mailboxes[name] = asyncio.Queue()
+            self._locks[name] = asyncio.Lock()
+
+        import unittest.mock
+        with unittest.mock.patch.object(AgentPool, "create_member", fake_create_member):
+            result = await manager.dispatch("reviewer", "review code")
+
+        assert result == "LGTM"
+        assert "[Message from builder]: check this first" in captured["task"]
+        assert captured["task"].endswith("review code")
+
+    asyncio.run(_run())
+
+
+def test_team_manager_dispatch_recovery_failure_keeps_member_recoverable():
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        manager._team_name = "dev-team"
+        manager._config = _make_config()
+        manager._member_definitions = {
+            "reviewer": {"description": "code reviewer", "prompt": "You are a reviewer."}
+        }
+        pool = AgentPool()
+        failed_agent = FakeAgent()
+        pool._members["reviewer"] = failed_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+        pool._unhealthy.add("reviewer")
+        original_mailbox = pool._mailboxes["reviewer"]
+        manager._pool = pool
+
+        async def fake_create_member(self, name, definition, config, abort_signal=None):
+            raise RuntimeError("still rate limited")
+
+        import unittest.mock
+        with unittest.mock.patch.object(AgentPool, "create_member", fake_create_member):
+            result = await manager.dispatch("reviewer", "review code")
+
+        assert "could not be recreated" in result
+        assert "reviewer" in pool._unhealthy
+        assert pool._members["reviewer"] is failed_agent
+        assert pool._mailboxes["reviewer"] is original_mailbox
+        assert failed_agent._closed is False
+
+    asyncio.run(_run())
+
+
 def test_team_manager_send_message_delegates_to_pool():
     manager = TeamManager()
     manager._active = True
