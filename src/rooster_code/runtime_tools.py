@@ -106,13 +106,13 @@ class RuntimeAgentTool(BaseTool):
         return True
 
     async def call(self, input: dict[str, Any], context: ToolContext) -> ToolResult:
-        from cock_code.team import get_runtime_team_bridge
+        from rooster_code.team import get_runtime_team_bridge
         team_manager, _orchestrator = get_runtime_team_bridge()
         if team_manager is not None and team_manager.is_active():
             member_name = str(input.get("name") or input.get("subagent_type") or input.get("description") or "")
             prompt_text = str(input.get("prompt", "")).strip()
             if team_manager._pool is not None and team_manager._pool.has_member(member_name):
-                from cock_code.team import TeamDispatchTool
+                from rooster_code.team import TeamDispatchTool
                 dispatch_tool = TeamDispatchTool(team_manager)
                 return await dispatch_tool.call({"member": member_name, "task": prompt_text}, context)
             available = ", ".join(team_manager._pool.member_names) if team_manager._pool else "none"

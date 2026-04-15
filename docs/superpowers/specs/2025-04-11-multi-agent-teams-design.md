@@ -2,7 +2,7 @@
 
 ## Overview
 
-Implement persistent multi-agent teams in cock-code with orchestrator-driven task dispatch, real-time inter-agent messaging, and interactive agent management. No changes to the Open Agent SDK — all implementation lives in cock-code.
+Implement persistent multi-agent teams in rooster-code with orchestrator-driven task dispatch, real-time inter-agent messaging, and interactive agent management. No changes to the Open Agent SDK — all implementation lives in rooster-code.
 
 ## Design Decisions
 
@@ -15,7 +15,7 @@ Implement persistent multi-agent teams in cock-code with orchestrator-driven tas
 
 1. **Command syntax:** Simplified — no `--flags`. `/agents add` takes positional args only. Complex configs go in JSON file. This avoids shlex parser complexity.
 2. **Mailbox injection:** Prepend to prompt text. Format: `[Message from sender]: content\n\n{original_task}`. Simplest approach that works with `agent.prompt()` without SDK changes.
-3. **SDK team tools:** Filter out `TeamCreateTool` and `TeamDeleteTool` from the orchestrator's tool pool when a cock-code team is active. `state teams` still shows SDK team state; `/team info` shows cock-code team state.
+3. **SDK team tools:** Filter out `TeamCreateTool` and `TeamDeleteTool` from the orchestrator's tool pool when a rooster-code team is active. `state teams` still shows SDK team state; `/team info` shows rooster-code team state.
 4. **`/clear` semantics:** Clears orchestrator history AND all member histories. Stale member context causes confusion.
 5. **Dynamic tool pool:** Add `patch_tool_pool(agent, add_tools, remove_names)` helper that mutates `agent._tool_pool` after initialization. SDK engine re-reads `_tool_pool` on each tool call.
 6. **System prompt update:** Mutate `agent._options.append_system_prompt` on the live chat agent when team state changes. Store original for rollback on `/team stop`.
@@ -176,14 +176,14 @@ Each member agent in the pool must respect the `abort_signal`:
 
 ### New files
 
-- `src/cock_code/team.py` — `AgentPool`, `TeamManager`, `TeamDispatchTool`, `TeamSendMessageTool`, mailbox delivery, `patch_tool_pool()` helper
+- `src/rooster_code/team.py` — `AgentPool`, `TeamManager`, `TeamDispatchTool`, `TeamSendMessageTool`, mailbox delivery, `patch_tool_pool()` helper
 
 ### Modified files
 
-- `src/cock_code/cli.py` — `/agents` and `/team` slash commands, `TeamManager` lifecycle in `run_chat()`, cleanup in `finally` block
-- `src/cock_code/runtime.py` — `_create_sdk_agent` supports pool member creation, `_agent_context_prompt()` updated for team awareness, `patch_tool_pool()` for dynamic tool injection
-- `src/cock_code/rendering.py` — render team status (`/team info`), agent list (`/agents`), update `render_help()`
-- `src/cock_code/chat.py` — no changes needed — `parse_chat_command()` returns `(name, args)` which already handles `/agents add name desc` and `/team create name m1 m2`
+- `src/rooster_code/cli.py` — `/agents` and `/team` slash commands, `TeamManager` lifecycle in `run_chat()`, cleanup in `finally` block
+- `src/rooster_code/runtime.py` — `_create_sdk_agent` supports pool member creation, `_agent_context_prompt()` updated for team awareness, `patch_tool_pool()` for dynamic tool injection
+- `src/rooster_code/rendering.py` — render team status (`/team info`), agent list (`/agents`), update `render_help()`
+- `src/rooster_code/chat.py` — no changes needed — `parse_chat_command()` returns `(name, args)` which already handles `/agents add name desc` and `/team create name m1 m2`
 
 ### Unchanged
 

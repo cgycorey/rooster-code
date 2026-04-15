@@ -11,8 +11,7 @@ This script demonstrates the multi-agent team messaging system:
 import asyncio
 from unittest.mock import MagicMock
 
-from cock_code.config import RuntimeConfig
-from cock_code.team import AgentPool, TeamManager, TeamSendMessageTool, patch_tool_pool
+from rooster_code.team import AgentPool, TeamManager, TeamSendMessageTool, patch_tool_pool
 
 
 class DemoAgent:

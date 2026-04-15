@@ -2,16 +2,16 @@ import asyncio
 from pathlib import Path
 from typing import Coroutine, cast
 
-import cock_code.runtime as runtime
+import rooster_code.runtime as runtime
 import pytest
 from open_agent_sdk import SDKMessage, SDKMessageType, ToolContext, ToolResult
 from open_agent_sdk.providers import CreateMessageResponse
 from open_agent_sdk.skills import clear_skills, get_skill
 from open_agent_sdk.tools import clear_tasks, get_all_tasks
-from cock_code.config import RuntimeConfig
+from rooster_code.config import RuntimeConfig
 
-from cock_code.runtime import build_agent_options, create_runtime_agent
-from cock_code.runtime import enforce_session_retention, find_requested_agent_name
+from rooster_code.runtime import build_agent_options, create_runtime_agent
+from rooster_code.runtime import enforce_session_retention, find_requested_agent_name
 
 
 @pytest.fixture(autouse=True)
@@ -293,7 +293,7 @@ def test_create_runtime_agent_does_not_inject_custom_transport(monkeypatch) -> N
     class FakeAgent:
         _client = None
 
-    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
 
     agent = create_runtime_agent(
         RuntimeConfig(
@@ -1117,7 +1117,7 @@ def test_create_runtime_agent_replaces_placeholder_agent_tool_after_initialize(m
         async def _initialize(self) -> None:
             self._tool_pool = [PlaceholderAgentTool(), ReadTool()]
 
-    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
 
     agent = create_runtime_agent(
         RuntimeConfig(
@@ -1152,7 +1152,7 @@ def test_create_runtime_agent_replaces_read_and_edit_tools_after_initialize(monk
         async def _initialize(self) -> None:
             self._tool_pool = [ReadTool(), EditTool(), OtherTool()]
 
-    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
 
     agent = create_runtime_agent(RuntimeConfig(api_key="test", base_url="https://nano-gpt.com/api/v1", model="m1"))
 
@@ -1181,7 +1181,7 @@ def test_create_runtime_agent_bridges_sdk_team_tools_after_initialize(monkeypatc
         async def _initialize(self) -> None:
             self._tool_pool = [TeamCreateTool(), TeamDeleteTool(), OtherTool()]
 
-    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
 
     agent = create_runtime_agent(RuntimeConfig(api_key="test", base_url="https://nano-gpt.com/api/v1", model="m1"))
 
@@ -1207,7 +1207,7 @@ def test_create_runtime_agent_adds_default_task_agent_without_agents(monkeypatch
         async def _initialize(self) -> None:
             self._tool_pool = [ReadTool(), AgentTool()]
 
-    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
 
     agent = create_runtime_agent(RuntimeConfig(api_key="test", base_url="https://nano-gpt.com/api/v1", model="m1"))
 
@@ -1235,7 +1235,7 @@ def test_create_runtime_agent_attaches_activity_trace_to_tool_result(monkeypatch
             await self._tool_pool[0].call({"file_path": "sample.txt"}, ToolContext(cwd=str(tmp_path), env={}))
             yield SDKMessage(type=SDKMessageType.TOOL_RESULT, tool_name="Read", result_content="file body")
 
-    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
 
     agent = create_runtime_agent(RuntimeConfig(api_key="test", base_url="https://nano-gpt.com/api/v1", model="m1"))
     (tmp_path / "sample.txt").write_text("hello\n", encoding="utf-8")
@@ -1271,7 +1271,7 @@ def test_create_runtime_agent_emits_activity_system_event_before_tool_result(mon
             await self._tool_pool[0].call({"file_path": "sample.txt"}, ToolContext(cwd=str(tmp_path), env={}))
             yield SDKMessage(type=SDKMessageType.TOOL_RESULT, tool_name="Read", result_content="file body")
 
-    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
 
     agent = create_runtime_agent(RuntimeConfig(api_key="test", base_url="https://nano-gpt.com/api/v1", model="m1"))
     (tmp_path / "sample.txt").write_text("hello\n", encoding="utf-8")
@@ -1319,7 +1319,7 @@ def test_create_runtime_agent_emits_edit_activity_system_event_before_tool_resul
             )
             yield SDKMessage(type=SDKMessageType.TOOL_RESULT, tool_name="Edit", result_content="done")
 
-    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
 
     agent = create_runtime_agent(RuntimeConfig(api_key="test", base_url="https://nano-gpt.com/api/v1", model="m1"))
     (tmp_path / "sample.txt").write_text("old\n", encoding="utf-8")
@@ -1358,7 +1358,7 @@ def test_create_runtime_agent_emits_generic_tool_activity_before_tool_result(mon
             await self._tool_pool[0].call({"command": "pytest -q"}, ToolContext(cwd="/tmp/project", env={}))
             yield SDKMessage(type=SDKMessageType.TOOL_RESULT, tool_name="Bash", result_content="done")
 
-    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
 
     agent = create_runtime_agent(RuntimeConfig(api_key="test", base_url="https://nano-gpt.com/api/v1", model="m1"))
     asyncio.run(agent._initialize())
@@ -1387,7 +1387,7 @@ def test_create_runtime_agent_preserves_query_exceptions(monkeypatch) -> None:
             raise RuntimeError("boom")
             yield
 
-    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeAgent())
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
 
     agent = create_runtime_agent(RuntimeConfig(api_key="test", base_url="https://nano-gpt.com/api/v1", model="m1"))
 
@@ -1422,7 +1422,7 @@ def test_stream_named_agent_events_emits_child_tool_activity(monkeypatch, tmp_pa
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr("cock_code.runtime.create_agent", lambda options: FakeChildAgent())
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeChildAgent())
 
     async def collect_events():
         return [
@@ -1517,8 +1517,8 @@ def test_enforce_session_retention_deletes_sessions_beyond_limit(monkeypatch) ->
         deleted.append(session_id)
         return True
 
-    monkeypatch.setattr("cock_code.runtime.sdk_list_sessions", fake_list_sessions)
-    monkeypatch.setattr("cock_code.runtime.sdk_delete_session", fake_delete_session)
+    monkeypatch.setattr("rooster_code.runtime.sdk_list_sessions", fake_list_sessions)
+    monkeypatch.setattr("rooster_code.runtime.sdk_delete_session", fake_delete_session)
 
     asyncio.run(enforce_session_retention(limit=20))
 
@@ -1828,11 +1828,11 @@ def test_compact_current_session_rejects_empty_provider_summary(monkeypatch) -> 
 
 
 def test_patch_tool_pool_re_exported_from_runtime() -> None:
-    """patch_tool_pool is importable from cock_code.runtime as a re-export from team module."""
-    from cock_code.runtime import patch_tool_pool
+    """patch_tool_pool is importable from rooster_code.runtime as a re-export from team module."""
+    from rooster_code.runtime import patch_tool_pool
 
     # It should be the same function as in the team module
-    from cock_code.team import patch_tool_pool as team_patch_tool_pool
+    from rooster_code.team import patch_tool_pool as team_patch_tool_pool
 
     assert patch_tool_pool is team_patch_tool_pool
 
@@ -1894,8 +1894,8 @@ def test_agent_context_prompt_with_inactive_team_info_is_unchanged() -> None:
 
 
 def test_runtime_agent_tool_rejects_when_team_active():
-    from cock_code.runtime_tools import RuntimeAgentTool, TurnTracker
-    from cock_code.team import set_runtime_team_bridge, TeamManager
+    from rooster_code.runtime_tools import RuntimeAgentTool, TurnTracker
+    from rooster_code.team import set_runtime_team_bridge, TeamManager
 
     tracker = TurnTracker()
 
@@ -1918,8 +1918,8 @@ def test_runtime_agent_tool_rejects_when_team_active():
 
 
 def test_runtime_agent_tool_redirects_to_team_dispatch_for_member():
-    from cock_code.runtime_tools import RuntimeAgentTool, TurnTracker
-    from cock_code.team import set_runtime_team_bridge, TeamManager, AgentPool
+    from rooster_code.runtime_tools import RuntimeAgentTool, TurnTracker
+    from rooster_code.team import set_runtime_team_bridge, TeamManager, AgentPool
     from unittest.mock import AsyncMock
 
     tracker = TurnTracker()
@@ -1942,7 +1942,7 @@ def test_runtime_agent_tool_redirects_to_team_dispatch_for_member():
     set_runtime_team_bridge(team_manager, None)
     try:
         import unittest.mock
-        with unittest.mock.patch("cock_code.runtime._create_background_subagent_task", new_callable=AsyncMock) as mock_create:
+        with unittest.mock.patch("rooster_code.runtime._create_background_subagent_task", new_callable=AsyncMock) as mock_create:
             mock_create.return_value = "task-redirect-1"
             result = asyncio.run(tool.call(
                 {"prompt": "review the code", "description": "review", "name": "reviewer"},
@@ -1956,8 +1956,8 @@ def test_runtime_agent_tool_redirects_to_team_dispatch_for_member():
 
 
 def test_runtime_agent_tool_allows_when_no_team():
-    from cock_code.runtime_tools import RuntimeAgentTool, TurnTracker
-    from cock_code.team import set_runtime_team_bridge
+    from rooster_code.runtime_tools import RuntimeAgentTool, TurnTracker
+    from rooster_code.team import set_runtime_team_bridge
 
     tracker = TurnTracker()
 

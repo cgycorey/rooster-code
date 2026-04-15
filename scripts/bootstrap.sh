@@ -18,7 +18,7 @@ need_cmd() {
 need_cmd git
 need_cmd uv
 
-printf '==> Cock Code bootstrap\n'
+printf '==> Rooster Code bootstrap\n'
 printf '    repo root: %s\n' "$REPO_ROOT"
 printf '    sdk path : %s\n' "$SDK_DIR"
 
@@ -33,6 +33,6 @@ printf '==> Running uv sync\n'
 uv sync --project "$REPO_ROOT"
 
 printf '\nBootstrap complete. Try one of:\n'
-printf '  uv run cock-code --help\n'
-printf '  uv run cock-code ask "Summarize this repository"\n'
-printf '  uv run cock-code chat\n'
+printf '  uv run rooster-code --help\n'
+printf '  uv run rooster-code ask "Summarize this repository"\n'
+printf '  uv run rooster-code chat\n'

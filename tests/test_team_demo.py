@@ -2,8 +2,7 @@
 
 import asyncio
 
-from cock_code.config import RuntimeConfig
-from cock_code.team import AgentPool, TeamManager
+from rooster_code.team import AgentPool, TeamManager
 
 
 class FakeQueryResult:
@@ -51,21 +50,6 @@ async def demo():
     print("=" * 60)
 
     # Set up agents config
-    config = RuntimeConfig(
-        model="test-model",
-        api_key="test",
-        agents={
-            "planner": {
-                "description": "Creates project plans",
-                "prompt": "You are a planner who creates detailed project plans.",
-            },
-            "reviewer": {
-                "description": "Reviews and critiques plans",
-                "prompt": "You are a reviewer who provides critical feedback.",
-            },
-        },
-    )
-
     # Create team manager
     manager = TeamManager()
 
@@ -73,8 +57,6 @@ async def demo():
     class MockOrchestrator:
         _options = type("Options", (), {"append_system_prompt": ""})()
         _tool_pool = []
-
-    orchestrator = MockOrchestrator()
 
     # Create real agent pool manually for demo (bypass SDK init)
     pool = AgentPool()

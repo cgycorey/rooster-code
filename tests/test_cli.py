@@ -1,6 +1,6 @@
 import asyncio
 import contextlib
-from cock_code.cli import build_parser
+from rooster_code.cli import build_parser
 
 
 import importlib
@@ -8,8 +8,8 @@ import signal
 import sys
 from typing import Callable, Coroutine, cast
 
-import cock_code.cli as cli
-from cock_code.config import RuntimeConfig
+import rooster_code.cli as cli
+from rooster_code.config import RuntimeConfig
 from open_agent_sdk import SDKMessage, SDKMessageType
 from prompt_toolkit import PromptSession
 
@@ -33,11 +33,20 @@ class SilentConsole:
 def test_help_includes_top_level_commands() -> None:
     parser = build_parser()
     help_text = parser.format_help()
+    assert "usage: rooster-code" in help_text
     assert "ask" in help_text
     assert "chat" in help_text
     assert "sessions" in help_text
     assert "tools" in help_text
     assert "state" in help_text
+
+
+def test_ask_subcommand_help_mentions_rooster_code_env_override() -> None:
+    parser = build_parser()
+    subparsers = next(action for action in parser._actions if getattr(action, "choices", None))
+    ask_help = subparsers.choices["ask"].format_help()
+
+    assert "Override ROOSTER_CODE_MODEL for this run" in ask_help
 
 
 def test_ask_command_accepts_shared_runtime_flags() -> None:
@@ -139,6 +148,26 @@ def test_main_dispatches_chat(monkeypatch) -> None:
 
     assert exit_code == 0
     assert captured == {"model": "m2"}
+
+
+def test_main_without_command_prints_rooster_code_help(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class ParserStub:
+        @staticmethod
+        def parse_args(argv):
+            return type("Args", (), {"command": None})()
+
+        @staticmethod
+        def print_help():
+            captured["printed"] = "usage: rooster-code"
+
+    monkeypatch.setattr(cli, "build_parser", lambda: ParserStub())
+
+    exit_code = cli.main([])
+
+    assert exit_code == 0
+    assert captured["printed"] == "usage: rooster-code"
 
 
 def test_run_ask_routes_explicit_agent_request(monkeypatch) -> None:
@@ -264,7 +293,7 @@ def test_run_ask_uses_runtime_abort_signal_and_sigint(monkeypatch) -> None:
     monkeypatch.setattr(cli, "clear_question_handler", lambda: None)
     monkeypatch.setattr(cli, "cancel_background_subagent_tasks", lambda: asyncio.sleep(0))
 
-    import cock_code.runtime as runtime
+    import rooster_code.runtime as runtime
     abort_values: list[object] = []
     monkeypatch.setattr(runtime, "set_abort_signal", lambda value: abort_values.append(value))
     monkeypatch.setattr(cli.signal, "signal", fake_signal)
@@ -422,6 +451,41 @@ def test_run_chat_renders_tool_table_for_tools_command(monkeypatch) -> None:
     assert captured["closed"] is True
 
 
+def test_run_chat_uses_rooster_code_prompt_label(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeAgent:
+        def clear(self) -> None:
+            return None
+
+        async def set_model(self, model: str) -> None:
+            return None
+
+        async def set_permission_mode(self, mode: str) -> None:
+            return None
+
+        async def query(self, prompt: str):
+            if False:
+                yield None
+
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_prompt_async(self, prompt_text: str, *args, **kwargs):
+        captured["prompt_text"] = prompt_text
+        return "/exit"
+
+    monkeypatch.setattr(PromptSession, "prompt_async", fake_prompt_async)
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m1", persist_session=False)))
+
+    assert exit_code == 0
+    assert captured["prompt_text"] == "rooster-code> "
+    assert captured["closed"] is True
+
+
 def test_main_returns_130_on_keyboard_interrupt(monkeypatch) -> None:
     def fake_asyncio_run(coroutine):
         coroutine.close()
@@ -441,15 +505,15 @@ def test_importing_cli_does_not_eagerly_import_sdk(monkeypatch) -> None:
     real_import = builtins.__import__
 
     def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name in {"cock_code.runtime", "open_agent_sdk"}:
+        if name in {"rooster_code.runtime", "open_agent_sdk"}:
             raise RuntimeError(f"unexpected eager import: {name}")
         return real_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    sys.modules.pop("cock_code.cli", None)
-    sys.modules.pop("cock_code.rendering", None)
+    sys.modules.pop("rooster_code.cli", None)
+    sys.modules.pop("rooster_code.rendering", None)
 
-    imported = importlib.import_module("cock_code.cli")
+    imported = importlib.import_module("rooster_code.cli")
 
     assert imported is not None
 
@@ -477,11 +541,11 @@ def test_run_async_with_sigint_exit_installs_and_restores_handler(monkeypatch) -
     async def fake_coroutine() -> int:
         return 0
 
-    monkeypatch.setattr("cock_code.cli.signal.getsignal", lambda sig: "previous-handler")
-    monkeypatch.setattr("cock_code.cli.signal.signal", lambda sig, handler: captured.append((sig, handler)))
+    monkeypatch.setattr("rooster_code.cli.signal.getsignal", lambda sig: "previous-handler")
+    monkeypatch.setattr("rooster_code.cli.signal.signal", lambda sig, handler: captured.append((sig, handler)))
     monkeypatch.setattr(cli.asyncio, "run", lambda coroutine: (coroutine.close(), 0)[1])
 
-    exit_code = importlib.import_module("cock_code.cli").run_async_with_sigint_exit(fake_coroutine())
+    exit_code = importlib.import_module("rooster_code.cli").run_async_with_sigint_exit(fake_coroutine())
 
     assert exit_code == 0
     assert captured[0][0] == signal.SIGINT

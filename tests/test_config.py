@@ -1,16 +1,16 @@
 import argparse
 import json
 
-from cock_code.config import resolve_runtime_env
+from rooster_code.config import resolve_runtime_env
 
 
-def test_cock_code_env_names_are_mapped() -> None:
+def test_rooster_code_env_names_are_mapped() -> None:
     env = {
-        "COCK_CODE_API_KEY": "key-123",
-        "COCK_CODE_BASE_URL": "https://example.test",
-        "COCK_CODE_MODEL": "test-model",
-        "COCK_CODE_API_TYPE": "openai-completions",
-        "COCK_CODE_SEARCH_URL": "https://search.example/search",
+        "ROOSTER_CODE_API_KEY": "key-123",
+        "ROOSTER_CODE_BASE_URL": "https://example.test",
+        "ROOSTER_CODE_MODEL": "test-model",
+        "ROOSTER_CODE_API_TYPE": "openai-completions",
+        "ROOSTER_CODE_SEARCH_URL": "https://search.example/search",
     }
 
     resolved = resolve_runtime_env(env)
@@ -23,7 +23,7 @@ def test_cock_code_env_names_are_mapped() -> None:
 
 
 def test_config_from_namespace_loads_runtime_files_and_kv_pairs(tmp_path) -> None:
-    from cock_code.config import config_from_namespace
+    from rooster_code.config import config_from_namespace
 
     agents_file = tmp_path / "agents.json"
     hooks_file = tmp_path / "hooks.json"
@@ -67,7 +67,7 @@ def test_config_from_namespace_loads_runtime_files_and_kv_pairs(tmp_path) -> Non
         skills_dir=str(skills_dir),
     )
 
-    config = config_from_namespace(args, {"COCK_CODE_API_KEY": "env-key", "COCK_CODE_BASE_URL": "https://env.test"})
+    config = config_from_namespace(args, {"ROOSTER_CODE_API_KEY": "env-key", "ROOSTER_CODE_BASE_URL": "https://env.test"})
 
     assert config.api_key == "env-key"
     assert config.base_url == "https://env.test"
@@ -98,11 +98,11 @@ def test_config_from_namespace_loads_runtime_files_and_kv_pairs(tmp_path) -> Non
     assert config.skills_dir == str(skills_dir)
 
 
-def test_config_from_namespace_loads_cock_code_values_from_local_dotenv(tmp_path, monkeypatch) -> None:
-    from cock_code.config import config_from_namespace
+def test_config_from_namespace_loads_rooster_code_values_from_local_dotenv(tmp_path, monkeypatch) -> None:
+    from rooster_code.config import config_from_namespace
 
     (tmp_path / ".env").write_text(
-        'COCK_CODE_API_KEY="dotenv-key"\nCOCK_CODE_BASE_URL="https://dotenv.test"\nCOCK_CODE_MODEL="glm-5:cloud"\nCOCK_CODE_API_TYPE="openai-completions"\n',
+        'ROOSTER_CODE_API_KEY="dotenv-key"\nROOSTER_CODE_BASE_URL="https://dotenv.test"\nROOSTER_CODE_MODEL="glm-5:cloud"\nROOSTER_CODE_API_TYPE="openai-completions"\n',
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
@@ -144,10 +144,10 @@ def test_config_from_namespace_loads_cock_code_values_from_local_dotenv(tmp_path
 
 
 def test_config_from_namespace_loads_search_url_from_local_dotenv(tmp_path, monkeypatch) -> None:
-    from cock_code.config import config_from_namespace
+    from rooster_code.config import config_from_namespace
 
     (tmp_path / ".env").write_text(
-        'COCK_CODE_SEARCH_URL="https://searx.example/search"\n',
+        'ROOSTER_CODE_SEARCH_URL="https://searx.example/search"\n',
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
@@ -185,10 +185,10 @@ def test_config_from_namespace_loads_search_url_from_local_dotenv(tmp_path, monk
 
 
 def test_config_from_namespace_prefers_cli_search_url_over_dotenv(tmp_path, monkeypatch) -> None:
-    from cock_code.config import config_from_namespace
+    from rooster_code.config import config_from_namespace
 
     (tmp_path / ".env").write_text(
-        'COCK_CODE_SEARCH_URL="https://searx.example/search"\n',
+        'ROOSTER_CODE_SEARCH_URL="https://searx.example/search"\n',
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)

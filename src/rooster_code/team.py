@@ -1,4 +1,4 @@
-"""Multi-agent team orchestration for cock-code."""
+"""Multi-agent team orchestration for rooster-code."""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ class AgentPool:
         config: Any,
         abort_signal: asyncio.Event | None = None,
     ) -> None:
-        from cock_code.runtime import _build_subagent_config, _create_sdk_agent
+        from rooster_code.runtime import _build_subagent_config, _create_sdk_agent
         from open_agent_sdk import ToolContext
 
         child_config = _build_subagent_config(
@@ -94,7 +94,7 @@ class AgentPool:
         env: dict[str, str],
     ) -> str:
         """Fire-and-forget dispatch. Creates SDK task, spawns asyncio.Task, returns task_id immediately."""
-        from cock_code.runtime import (
+        from rooster_code.runtime import (
             _track_background_task,
             _update_background_subagent_task,
             sanitize_task_output,
@@ -242,7 +242,7 @@ class TeamManager:
         if self._active:
             raise RuntimeError("Team already active. Use /team stop first.")
 
-        from cock_code.config import RuntimeConfig
+        from rooster_code.config import RuntimeConfig
         if not isinstance(config, RuntimeConfig):
             raise TypeError("config must be a RuntimeConfig")
 
@@ -410,7 +410,7 @@ class TeamDispatchTool(BaseTool):
         return False
 
     async def call(self, input: dict[str, Any], context: ToolContext) -> ToolResult:
-        from cock_code.runtime import _create_background_subagent_task
+        from rooster_code.runtime import _create_background_subagent_task
 
         member = input.get("member", "")
         task = input.get("task", "")
@@ -431,7 +431,7 @@ class TeamDispatchTool(BaseTool):
         result = await self._team_manager.dispatch_async(member, task, task_id, context.cwd, context.env)
 
         if result.startswith("Error:"):
-            from cock_code.runtime import _update_background_subagent_task
+            from rooster_code.runtime import _update_background_subagent_task
             await _update_background_subagent_task(
                 task_id,
                 status="cancelled",
@@ -542,7 +542,7 @@ class SDKTeamCreateBridgeTool(BaseTool):
         if not members:
             return ToolResult(tool_use_id="", content="Error: members must not be empty", is_error=True)
         member_names: list[str] = [str(member) for member in members]
-        config = getattr(orchestrator, "_cock_code_config", None)
+        config = getattr(orchestrator, "_rooster_code_config", None)
         abort_signal = getattr(getattr(orchestrator, "_options", None), "abort_signal", None)
         if config is None:
             return ToolResult(tool_use_id="", content="Error: missing runtime config", is_error=True)

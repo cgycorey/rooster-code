@@ -2,18 +2,18 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Expose a `/compact` chat command in `cock-code` that manually summarizes the current conversation without relying on private engine state.
+**Goal:** Expose a `/compact` chat command in `rooster-code` that manually summarizes the current conversation without relying on private engine state.
 
-**Architecture:** Implement manual compaction in `../open-agent-sdk-python` as a new async `Agent.compact_history()` method that rewrites `Agent._history`, because `Agent._history` is the only conversation state reused across turns and persisted on `close()`. Keep `cock-code` thin: `src/cock_code/cli.py` should call the new agent method directly, use the existing `render_notice()` UI to show the result, and add `/compact` to `render_help()`. Do **not** add a `runtime.py` helper, do **not** read or write `agent._engine` from `cock-code`, and do **not** expand the first implementation into PRE/POST compact hook wiring.
+**Architecture:** Implement manual compaction in `../open-agent-sdk-python` as a new async `Agent.compact_history()` method that rewrites `Agent._history`, because `Agent._history` is the only conversation state reused across turns and persisted on `close()`. Keep `rooster-code` thin: `src/rooster_code/cli.py` should call the new agent method directly, use the existing `render_notice()` UI to show the result, and add `/compact` to `render_help()`. Do **not** add a `runtime.py` helper, do **not** read or write `agent._engine` from `rooster-code`, and do **not** expand the first implementation into PRE/POST compact hook wiring.
 
 **Tech Stack:** Python 3.12, pytest, Rich, local sibling repo `../open-agent-sdk-python`, `open_agent_sdk.utils.compact`, `open_agent_sdk.utils.tokens`
 
 ## Non-goals
 
-- Do not mutate `agent._engine._messages` or `agent._engine._compact_state` from `cock-code`.
+- Do not mutate `agent._engine._messages` or `agent._engine._compact_state` from `rooster-code`.
 - Do not add a new `render_compact_result()` surface unless the existing `render_notice()` output is clearly insufficient.
 - Do not wire `PRE_COMPACT` / `POST_COMPACT` in this first pass; treat that as a follow-up feature after `/compact` works end-to-end.
-- Do not change `src/cock_code/runtime.py` unless the SDK API shape forces it. With the plan below, it should remain unchanged.
+- Do not change `src/rooster_code/runtime.py` unless the SDK API shape forces it. With the plan below, it should remain unchanged.
 
 ## API shape to implement
 
@@ -214,14 +214,14 @@ git add src/open_agent_sdk/agent.py src/open_agent_sdk/types.py src/open_agent_s
 git commit -m "feat: add manual agent compaction API"
 ```
 
-## Task 2: Expose `/compact` in cock-code chat
+## Task 2: Expose `/compact` in rooster-code chat
 
 **Files:**
 - Modify: `tests/test_chat.py:139-158, 281-300`
-- Modify: `src/cock_code/cli.py:15-28, 312-357`
-- Modify: `src/cock_code/rendering.py:106-119`
+- Modify: `src/rooster_code/cli.py:15-28, 312-357`
+- Modify: `src/rooster_code/rendering.py:106-119`
 
-**Step 1: Write the failing cock-code tests**
+**Step 1: Write the failing rooster-code tests**
 
 Add one new command test and extend the help assertion in `tests/test_chat.py`.
 
@@ -267,9 +267,9 @@ Update the existing help test to also assert:
 assert "/compact" in output
 ```
 
-**Step 2: Run the cock-code tests to verify they fail**
+**Step 2: Run the rooster-code tests to verify they fail**
 
-From `/home/kali/cock-code`, run:
+From `/home/kali/rooster-code`, run:
 
 ```bash
 pytest tests/test_chat.py -k compact -q
@@ -279,7 +279,7 @@ Expected: FAIL because `run_chat()` does not recognize `/compact` yet.
 
 **Step 3: Implement the chat command with the existing UI helpers**
 
-In `src/cock_code/cli.py`, add a new branch near `/clear`.
+In `src/rooster_code/cli.py`, add a new branch near `/clear`.
 
 ```python
 if command.name == "compact":
@@ -297,15 +297,15 @@ if command.name == "compact":
     continue
 ```
 
-In `src/cock_code/rendering.py`, update `render_help()` with one more row.
+In `src/rooster_code/rendering.py`, update `render_help()` with one more row.
 
 ```python
 table.add_row("/compact", "Summarize the current chat history")
 ```
 
-**Step 4: Re-run the cock-code tests**
+**Step 4: Re-run the rooster-code tests**
 
-From `/home/kali/cock-code`, run:
+From `/home/kali/rooster-code`, run:
 
 ```bash
 pytest tests/test_chat.py -q
@@ -313,12 +313,12 @@ pytest tests/test_chat.py -q
 
 Expected: PASS.
 
-**Step 5: Commit the cock-code change**
+**Step 5: Commit the rooster-code change**
 
-From `/home/kali/cock-code`, run:
+From `/home/kali/rooster-code`, run:
 
 ```bash
-git add src/cock_code/cli.py src/cock_code/rendering.py tests/test_chat.py
+git add src/rooster_code/cli.py src/rooster_code/rendering.py tests/test_chat.py
 git commit -m "feat: add manual compact chat command"
 ```
 
@@ -338,9 +338,9 @@ pytest tests/test_agent.py tests/test_compact.py -q
 
 Expected: PASS.
 
-**Step 2: Run the targeted cock-code test cluster**
+**Step 2: Run the targeted rooster-code test cluster**
 
-From `/home/kali/cock-code`, run:
+From `/home/kali/rooster-code`, run:
 
 ```bash
 pytest tests/test_chat.py tests/test_rendering.py tests/test_runtime.py -q
@@ -356,7 +356,7 @@ From `../open-agent-sdk-python`, run:
 pytest -q
 ```
 
-From `/home/kali/cock-code`, run:
+From `/home/kali/rooster-code`, run:
 
 ```bash
 pytest -q
@@ -366,10 +366,10 @@ Expected: PASS in both repos.
 
 **Step 4: Manual smoke check**
 
-From `/home/kali/cock-code`, run a real chat session:
+From `/home/kali/rooster-code`, run a real chat session:
 
 ```bash
-uv run cock-code chat --model claude-sonnet-4-5
+uv run rooster-code chat --model claude-sonnet-4-5
 ```
 
 Inside chat:

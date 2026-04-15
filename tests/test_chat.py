@@ -3,12 +3,12 @@ import contextlib
 from typing import Callable, Coroutine, cast
 from prompt_toolkit import PromptSession
 
-import cock_code.cli as cli
-from cock_code.config import RuntimeConfig
+import rooster_code.cli as cli
+from rooster_code.config import RuntimeConfig
 from open_agent_sdk import SDKMessage, SDKMessageType
 from rich.console import Console
 
-from cock_code.chat import parse_chat_command
+from rooster_code.chat import parse_chat_command
 
 
 def _fake_prompt_iter(prompts_iter):
@@ -1221,7 +1221,7 @@ def test_run_chat_interrupt_does_not_cancel_background_tasks(monkeypatch) -> Non
 def test_render_event_stream_breaks_on_abort_signal() -> None:
     import io
     from rich.console import Console
-    from cock_code.rendering import render_event_stream
+    from rooster_code.rendering import render_event_stream
     from open_agent_sdk import SDKMessage, SDKMessageType
 
     abort_signal = cli.asyncio.Event()
@@ -1245,8 +1245,6 @@ def test_render_event_stream_breaks_on_abort_signal() -> None:
 
 
 def test_run_chat_agents_list_command(monkeypatch) -> None:
-    from cock_code.team import TeamManager
-
     captured: dict[str, object] = {}
     prompts = iter(["/agents", "/exit"])
 
@@ -1371,8 +1369,6 @@ def test_run_chat_agents_remove_in_team_fails(monkeypatch) -> None:
 
 
 def test_run_chat_clear_clears_team_histories(monkeypatch) -> None:
-    from cock_code.team import TeamManager
-
     cleared: dict[str, object] = {}
     prompts = iter(["/clear", "/exit"])
 

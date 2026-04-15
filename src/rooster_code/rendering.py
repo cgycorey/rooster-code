@@ -16,7 +16,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from cock_code.config import RuntimeConfig
+from rooster_code.config import RuntimeConfig
 
 if TYPE_CHECKING:
     from open_agent_sdk import SDKMessage
@@ -30,7 +30,7 @@ def summarize_tool_result(text: str, max_chars: int = 160) -> str:
 
 
 def compact_tool_result(text: str, max_chars: int = 220) -> str:
-    from cock_code.runtime import sanitize_task_output
+    from rooster_code.runtime import sanitize_task_output
 
     text = sanitize_task_output(text)
     lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -102,14 +102,20 @@ def build_rooster_head() -> Text:
     return text
 
 
-def build_cock_code_wordmark() -> Text:
+def build_rooster_code_wordmark() -> Text:
     wordmark = Text()
     lines = [
-        "  ██████  ██████   ██████ ██   ██     ██████  ██████  ██████  ███████ ",
-        " ██      ██    ██ ██      ██  ██     ██      ██    ██ ██   ██ ██      ",
-        " ██      ██    ██ ██      █████      ██      ██    ██ ██   ██ █████   ",
-        " ██      ██    ██ ██      ██  ██     ██      ██    ██ ██   ██ ██      ",
-        "  ██████  ██████   ██████ ██   ██     ██████  ██████  ██████  ███████ ",
+        "██████   ██████   ██████  ███████ ████████ ███████ ██████ ",
+        "██   ██ ██    ██ ██    ██ ██         ██    ██      ██   ██",
+        "██████  ██    ██ ██    ██ ███████    ██    █████   ██████ ",
+        "██   ██ ██    ██ ██    ██      ██    ██    ██      ██   ██",
+        "██   ██  ██████   ██████  ███████    ██    ███████ ██   ██",
+        "",
+        " ██████  ██████  ██████  ███████",
+        "██      ██    ██ ██   ██ ██     ",
+        "██      ██    ██ ██   ██ █████  ",
+        "██      ██    ██ ██   ██ ██     ",
+        " ██████  ██████  ██████  ███████",
     ]
     for line in lines:
         wordmark.append(line, style="bold white on red")
@@ -119,8 +125,8 @@ def build_cock_code_wordmark() -> Text:
 
 def render_banner(console: Console, mode: str, config: RuntimeConfig) -> None:
     console.print(build_rooster_head())
-    console.print(build_cock_code_wordmark())
-    console.print(Rule(f"[bold cyan]COCK-CODE {mode.upper()}[/]", align="left", style="cyan"))
+    console.print(build_rooster_code_wordmark())
+    console.print(Rule(f"[bold cyan]ROOSTER CODE {mode.upper()}[/]", align="left", style="cyan"))
 
     table = Table(show_header=False, box=None, pad_edge=False)
     table.add_column(style="bold blue")

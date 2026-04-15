@@ -65,11 +65,11 @@ def load_dotenv_env(cwd: str | None = None) -> dict[str, str]:
 def resolve_runtime_env(env: Mapping[str, str], cwd: str | None = None) -> RuntimeConfig:
     merged_env = {**load_dotenv_env(cwd), **env}
     return RuntimeConfig(
-        api_key=merged_env.get("COCK_CODE_API_KEY"),
-        base_url=merged_env.get("COCK_CODE_BASE_URL"),
-        model=merged_env.get("COCK_CODE_MODEL"),
-        api_type=merged_env.get("COCK_CODE_API_TYPE"),
-        search_url=merged_env.get("COCK_CODE_SEARCH_URL"),
+        api_key=merged_env.get("ROOSTER_CODE_API_KEY"),
+        base_url=merged_env.get("ROOSTER_CODE_BASE_URL"),
+        model=merged_env.get("ROOSTER_CODE_MODEL"),
+        api_type=merged_env.get("ROOSTER_CODE_API_TYPE"),
+        search_url=merged_env.get("ROOSTER_CODE_SEARCH_URL"),
     )
 
 

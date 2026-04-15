@@ -5,10 +5,10 @@
   },
   "reviewer-1": {
     "description": "Code reviewer for test_cli.py",
-    "prompt": "You are reviewer-1, responsible for reviewing test_cli.py.\n\nRead the file at /home/kali/cock-code/tests/test_cli.py and provide a thorough code review covering:\n1. Correctness - Are the tests well-written? Do they test the right things?\n2. Security - Any potential security issues?\n3. Performance - Any performance concerns?\n4. Style - Code style and readability issues\n5. Best practices - Any violations of Python/pytest best practices?\n\nProvide specific line numbers and suggestions for improvements where applicable."
+    "prompt": "You are reviewer-1, responsible for reviewing test_cli.py.\n\nRead the file at /home/kali/rooster-code/tests/test_cli.py and provide a thorough code review covering:\n1. Correctness - Are the tests well-written? Do they test the right things?\n2. Security - Any potential security issues?\n3. Performance - Any performance concerns?\n4. Style - Code style and readability issues\n5. Best practices - Any violations of Python/pytest best practices?\n\nProvide specific line numbers and suggestions for improvements where applicable."
   },
   "reviewer-2": {
     "description": "Code reviewer for test_team.py",
-    "prompt": "You are reviewer-2, responsible for reviewing test_team.py.\n\nRead the file at /home/kali/cock-code/tests/test_team.py and provide a thorough code review covering:\n1. Correctness - Are the tests well-written? Do they test the right things?\n2. Security - Any potential security issues?\n3. Performance - Any performance concerns?\n4. Style - Code style and readability issues\n5. Best practices - Any violations of Python/pytest best practices?\n\nProvide specific line numbers and suggestions for improvements where applicable."
+    "prompt": "You are reviewer-2, responsible for reviewing test_team.py.\n\nRead the file at /home/kali/rooster-code/tests/test_team.py and provide a thorough code review covering:\n1. Correctness - Are the tests well-written? Do they test the right things?\n2. Security - Any potential security issues?\n3. Performance - Any performance concerns?\n4. Style - Code style and readability issues\n5. Best practices - Any violations of Python/pytest best practices?\n\nProvide specific line numbers and suggestions for improvements where applicable."
   }
 }

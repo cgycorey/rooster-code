@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 from open_agent_sdk.types import ToolContext
 
-from cock_code.team import AgentPool, TeamManager, TeamSendMessageTool, patch_tool_pool
+from rooster_code.team import AgentPool, TeamManager, TeamSendMessageTool, patch_tool_pool
 
 
 class FakeMemberAgent:

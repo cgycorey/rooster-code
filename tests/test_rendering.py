@@ -3,8 +3,8 @@ import asyncio
 from open_agent_sdk import ConversationMessage, MessageRole, SDKMessage, SDKMessageType
 from rich.console import Console
 
-from cock_code.config import RuntimeConfig
-from cock_code.rendering import (
+from rooster_code.config import RuntimeConfig
+from rooster_code.rendering import (
     compact_tool_result,
     render_agents_list,
     render_banner,
@@ -222,24 +222,24 @@ def test_render_banner_shows_mode_and_runtime_context() -> None:
 
     output = console.export_text()
 
-    assert "COCK-CODE CHAT" in output
+    assert "ROOSTER CODE CHAT" in output
     assert "claude-sonnet-4-5" in output
     assert "/tmp/project" in output
     assert "sess-1" in output
 
 
-def test_render_banner_shows_cock_code_band_and_ascii_rooster() -> None:
+def test_render_banner_shows_rooster_code_band_and_ascii_rooster() -> None:
     console = Console(record=True, width=100)
 
     render_banner(console, "ask", RuntimeConfig(model="m"))
 
     output = console.export_text()
 
-    assert "COCK" in output
-    assert "CODE" in output
+    assert "ROOSTER CODE ASK" in output
     assert "◉" in output
     assert "▶▶" in output or "▶" in output
     assert "▄▄" in output
+    assert "██████   ██████   ██████" in output
 
 
 def test_summarize_tool_result_truncates_output() -> None:

@@ -1,12 +1,12 @@
-# Cock Code
+# Rooster Code
 
 <!-- A CLI coding agent powered by Rich and Open Agent SDK -->
 
-Cock Code is a Rich-powered coding agent CLI built on Open Agent SDK.
+Rooster Code is a Rich-powered coding agent CLI built on Open Agent SDK.
 
 ## Implemented agentic features
 
-Cock Code currently includes:
+Rooster Code currently includes:
 
 - **ask** and **interactive chat** agent workflows for one-shot queries and persistent terminal sessions
 - **session management** for listing, resuming, forking, renaming, tagging, and inspecting saved conversations
@@ -28,17 +28,17 @@ Cock Code currently includes:
 
 ## Environment
 
-Cock Code reads these env vars and passes them into the SDK explicitly:
+Rooster Code reads these env vars and passes them into the SDK explicitly:
 
-- `COCK_CODE_API_KEY`
-- `COCK_CODE_BASE_URL`
-- `COCK_CODE_MODEL`
+- `ROOSTER_CODE_API_KEY`
+- `ROOSTER_CODE_BASE_URL`
+- `ROOSTER_CODE_MODEL`
 
 ## Install and run
 
 ### One-command bootstrap (recommended)
 
-After cloning `cock-code`, run:
+After cloning `rooster-code`, run:
 
 ```bash
 ./scripts/bootstrap.sh
@@ -55,24 +55,24 @@ This gives you the layout `pyproject.toml` already expects.
 
 ### Fresh setup from scratch
 
-If you have not cloned `cock-code` yet, this is the simplest flow:
+If you have not cloned `rooster-code` yet, this is the simplest flow:
 
 ```bash
-git clone https://github.com/cgycorey/cock-code
-cd cock-code
+git clone https://github.com/cgycorey/rooster-code
+cd rooster-code
 ./scripts/bootstrap.sh
 ```
 
 ### Supported setup (manual)
 
-Clone `cock-code` and `open-agent-sdk-python` side by side so the existing
+Clone `rooster-code` and `open-agent-sdk-python` side by side so the existing
 `uv` source override works without any edits:
 
 ```bash
 git clone https://github.com/cgycorey/open-agent-sdk-python
-git clone https://github.com/cgycorey/cock-code
+git clone https://github.com/cgycorey/rooster-code
 
-cd cock-code
+cd rooster-code
 uv sync
 ```
 
@@ -80,11 +80,11 @@ Your directory layout should look like this:
 
 ```text
 parent-dir/
-├── cock-code/
+├── rooster-code/
 └── open-agent-sdk-python/
 ```
 
-### If you already cloned `cock-code` somewhere else
+### If you already cloned `rooster-code` somewhere else
 
 You still need the SDK checkout from cgycorey's repository:
 
@@ -99,16 +99,16 @@ in `pyproject.toml` to point at your local checkout before running `uv sync`.
 ### Run
 
 ```bash
-uv run cock-code --help
-uv run cock-code ask "Summarize this repository"
-uv run cock-code chat
+uv run rooster-code --help
+uv run rooster-code ask "Summarize this repository"
+uv run rooster-code chat
 ```
 
 ## Primary commands
 
 ```bash
-uv run cock-code ask "Find the main entry point"
-uv run cock-code chat --model claude-sonnet-4-5
+uv run rooster-code ask "Find the main entry point"
+uv run rooster-code chat --model claude-sonnet-4-5
 ```
 
 Interactive chat supports slash commands such as `/clear`, `/model <name>`, `/status`, and `/exit`.
@@ -116,35 +116,35 @@ Interactive chat supports slash commands such as `/clear`, `/model <name>`, `/st
 ## Session management
 
 ```bash
-uv run cock-code sessions list
-uv run cock-code sessions show <session-id>
-uv run cock-code sessions info <session-id>
-uv run cock-code sessions fork <session-id> --new-id <new-session-id>
-uv run cock-code sessions rename <session-id> "My session"
-uv run cock-code sessions tag <session-id> alpha beta
-uv run cock-code sessions delete <session-id>
+uv run rooster-code sessions list
+uv run rooster-code sessions show <session-id>
+uv run rooster-code sessions info <session-id>
+uv run rooster-code sessions fork <session-id> --new-id <new-session-id>
+uv run rooster-code sessions rename <session-id> "My session"
+uv run rooster-code sessions tag <session-id> alpha beta
+uv run rooster-code sessions delete <session-id>
 ```
 
 ## Tools and state inspection
 
 ```bash
-uv run cock-code tools list
-uv run cock-code state tasks
-uv run cock-code state teams
-uv run cock-code state mailboxes
-uv run cock-code state mailboxes --agent reviewer
-uv run cock-code state config
-uv run cock-code state cron
-uv run cock-code state plan
-uv run cock-code state todos
+uv run rooster-code tools list
+uv run rooster-code state tasks
+uv run rooster-code state teams
+uv run rooster-code state mailboxes
+uv run rooster-code state mailboxes --agent reviewer
+uv run rooster-code state config
+uv run rooster-code state cron
+uv run rooster-code state plan
+uv run rooster-code state todos
 ```
 
 ## Shared runtime flags for ask/chat
 
 ```bash
-uv run cock-code ask "Review src" \
+uv run rooster-code ask "Review src" \
   --model claude-sonnet-4-5 \
-  --cwd /home/kali/cock-code \
+  --cwd /home/kali/rooster-code \
   --resume existing-session \
   --allowed-tool Read \
   --disallowed-tool Bash

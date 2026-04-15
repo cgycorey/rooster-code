@@ -1,6 +1,6 @@
-import cock_code.cli as cli
+import rooster_code.cli as cli
 
-from cock_code.rendering import session_row_count
+from rooster_code.rendering import session_row_count
 
 
 def test_session_row_count_matches_sessions() -> None:

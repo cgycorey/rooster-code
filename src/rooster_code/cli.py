@@ -6,9 +6,7 @@ import contextlib
 import os
 import re
 import signal
-import sys
 import threading
-from urllib.parse import urlencode
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import FormattedText
@@ -19,10 +17,10 @@ from prompt_toolkit.patch_stdout import patch_stdout
 
 import httpx
 
-from cock_code.chat import parse_chat_command
-from cock_code.config import config_from_namespace
-from cock_code.team import TeamManager, set_runtime_team_bridge
-from cock_code.rendering import (
+from rooster_code.chat import parse_chat_command
+from rooster_code.config import config_from_namespace
+from rooster_code.team import TeamManager, set_runtime_team_bridge
+from rooster_code.rendering import (
     build_console,
     render_agents_list,
     render_banner,
@@ -33,7 +31,6 @@ from cock_code.rendering import (
     render_session_info,
     render_session_table,
     render_state,
-    render_text_panel,
     render_tool_table,
     render_transcript,
 )
@@ -87,129 +84,129 @@ def install_search_backend(config) -> None:
 
 
 def create_runtime_agent(config):
-    from cock_code.runtime import create_runtime_agent as runtime_create_agent
+    from rooster_code.runtime import create_runtime_agent as runtime_create_agent
 
     return runtime_create_agent(config)
 
 
 def find_requested_agent_name(config, prompt: str):
-    from cock_code.runtime import find_requested_agent_name as runtime_find_requested_agent_name
+    from rooster_code.runtime import find_requested_agent_name as runtime_find_requested_agent_name
 
     return runtime_find_requested_agent_name(config, prompt)
 
 
 async def run_named_agent_prompt(config, agent_name: str, prompt: str) -> str:
-    from cock_code.runtime import run_named_agent_prompt as runtime_run_named_agent_prompt
+    from rooster_code.runtime import run_named_agent_prompt as runtime_run_named_agent_prompt
 
     return await runtime_run_named_agent_prompt(config, agent_name, prompt)
 
 
 async def stream_named_agent_events(config, agent_name: str, prompt: str):
-    from cock_code.runtime import stream_named_agent_events as runtime_stream_named_agent_events
+    from rooster_code.runtime import stream_named_agent_events as runtime_stream_named_agent_events
 
     async for event in runtime_stream_named_agent_events(config, agent_name, prompt):
         yield event
 
 
 async def stream_skill_events(config, agent, skill_name: str, args: str):
-    from cock_code.runtime import stream_skill_events as runtime_stream_skill_events
+    from rooster_code.runtime import stream_skill_events as runtime_stream_skill_events
 
     async for event in runtime_stream_skill_events(config, agent, skill_name, args):
         yield event
 
 
 async def compact_current_session(agent):
-    from cock_code.runtime import compact_current_session as runtime_compact_current_session
+    from rooster_code.runtime import compact_current_session as runtime_compact_current_session
 
     return await runtime_compact_current_session(agent)
 
 
 def list_skill_names() -> list[str]:
-    from cock_code.runtime import list_skill_names as runtime_list_skill_names
+    from rooster_code.runtime import list_skill_names as runtime_list_skill_names
 
     return runtime_list_skill_names()
 
 
 async def list_sessions():
-    from cock_code.runtime import list_sessions as runtime_list_sessions
+    from rooster_code.runtime import list_sessions as runtime_list_sessions
 
     return await runtime_list_sessions()
 
 
 async def get_session_messages(session_id: str):
-    from cock_code.runtime import get_session_messages as runtime_get_session_messages
+    from rooster_code.runtime import get_session_messages as runtime_get_session_messages
 
     return await runtime_get_session_messages(session_id)
 
 
 async def get_session_info(session_id: str):
-    from cock_code.runtime import get_session_info as runtime_get_session_info
+    from rooster_code.runtime import get_session_info as runtime_get_session_info
 
     return await runtime_get_session_info(session_id)
 
 
 async def delete_session(session_id: str):
-    from cock_code.runtime import delete_session as runtime_delete_session
+    from rooster_code.runtime import delete_session as runtime_delete_session
 
     return await runtime_delete_session(session_id)
 
 
 async def fork_session(session_id: str, new_id: str | None):
-    from cock_code.runtime import fork_session as runtime_fork_session
+    from rooster_code.runtime import fork_session as runtime_fork_session
 
     return await runtime_fork_session(session_id, new_id)
 
 
 async def enforce_session_retention(limit: int = 20):
-    from cock_code.runtime import enforce_session_retention as runtime_enforce_session_retention
+    from rooster_code.runtime import enforce_session_retention as runtime_enforce_session_retention
 
     return await runtime_enforce_session_retention(limit)
 
 
 async def rename_session(session_id: str, title: str):
-    from cock_code.runtime import rename_session as runtime_rename_session
+    from rooster_code.runtime import rename_session as runtime_rename_session
 
     return await runtime_rename_session(session_id, title)
 
 
 async def tag_session(session_id: str, tags: list[str]):
-    from cock_code.runtime import tag_session as runtime_tag_session
+    from rooster_code.runtime import tag_session as runtime_tag_session
 
     return await runtime_tag_session(session_id, tags)
 
 
 def get_state_snapshot(name: str, agent_name: str | None = None):
-    from cock_code.runtime import get_state_snapshot as runtime_get_state_snapshot
+    from rooster_code.runtime import get_state_snapshot as runtime_get_state_snapshot
 
     return runtime_get_state_snapshot(name, agent_name)
 
 
 async def get_task_output(task_id: str) -> str:
-    from cock_code.runtime import get_task_output as runtime_get_task_output
+    from rooster_code.runtime import get_task_output as runtime_get_task_output
 
     return await runtime_get_task_output(task_id)
 
 
 async def stop_task(task_id: str) -> bool:
-    from cock_code.runtime import stop_task as runtime_stop_task
+    from rooster_code.runtime import stop_task as runtime_stop_task
 
     return await runtime_stop_task(task_id)
 
 
 async def start_background_agent_task(config, agent_name: str, prompt: str) -> str:
-    from cock_code.runtime import start_background_agent_task as runtime_start_background_agent_task
+    from rooster_code.runtime import start_background_agent_task as runtime_start_background_agent_task
 
     return await runtime_start_background_agent_task(config, agent_name, prompt)
 
 
 async def wait_for_task(task_id: str) -> dict[str, object]:
-    from cock_code.runtime import wait_for_task as runtime_wait_for_task
+    from rooster_code.runtime import wait_for_task as runtime_wait_for_task
 
     return await runtime_wait_for_task(task_id)
 
 
 _console_lock = threading.RLock()
-_prompt_label = "cock-code> "
+_prompt_label = "rooster-code> "
 _injected_task_ids: set[str] = set()
 
 
@@ -249,7 +246,7 @@ def _create_question_handler(
 
 
 def _render_task_notification(console, agent, note: dict[str, object], prompt_session: PromptSession[str] | None = None) -> None:
-    from cock_code.runtime import sanitize_task_output
+    from rooster_code.runtime import sanitize_task_output
 
     status = str(note.get("status", "completed"))
     style = "green" if status == "completed" else "yellow"
@@ -314,7 +311,7 @@ def _prompt_box(title: str, lines: list[str], style: str) -> FormattedText:
 
 
 def _compact_task_output(output: str, max_chars: int = 240) -> str:
-    from cock_code.runtime import _clean_summary_candidate, sanitize_task_output
+    from rooster_code.runtime import _clean_summary_candidate, sanitize_task_output
 
     output = sanitize_task_output(output)
     lines = [line.strip() for line in output.splitlines() if line.strip()]
@@ -380,7 +377,7 @@ def _compact_task_output(output: str, max_chars: int = 240) -> str:
 
 
 def append_task_result_to_context(agent, task_id: str, task_result: dict[str, object]) -> None:
-    from cock_code.runtime import sanitize_task_output
+    from rooster_code.runtime import sanitize_task_output
 
     output = sanitize_task_output(str(task_result.get("output", "")).strip())
     status = str(task_result.get("status", "")).strip()
@@ -409,26 +406,26 @@ def append_task_result_to_context(agent, task_id: str, task_result: dict[str, ob
 
 
 def read_background_notifications() -> list[dict[str, object]]:
-    from cock_code.runtime import read_background_notifications as runtime_read_background_notifications
+    from rooster_code.runtime import read_background_notifications as runtime_read_background_notifications
 
     return runtime_read_background_notifications()
 
 
 async def cancel_background_subagent_tasks() -> None:
-    from cock_code.runtime import cancel_background_subagent_tasks as runtime_cancel_background_subagent_tasks
+    from rooster_code.runtime import cancel_background_subagent_tasks as runtime_cancel_background_subagent_tasks
 
     await runtime_cancel_background_subagent_tasks()
 
 
 def list_tool_names() -> list[str]:
-    from cock_code.runtime import list_tool_names as runtime_list_tool_names
+    from rooster_code.runtime import list_tool_names as runtime_list_tool_names
 
     return runtime_list_tool_names()
 
 
 def add_runtime_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cwd", help="Working directory for the agent")
-    parser.add_argument("--model", help="Override COCK_CODE_MODEL for this run")
+    parser.add_argument("--model", help="Override ROOSTER_CODE_MODEL for this run")
     parser.add_argument("--permission-mode", help="SDK permission mode")
     parser.add_argument("--search-url", help="SearXNG search endpoint URL")
     parser.add_argument("--max-turns", type=int, help="Maximum SDK turns")
@@ -477,7 +474,7 @@ def run_async_with_sigint_exit(coroutine) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="cock-code", description="Rich CLI wrapper for the Open Agent SDK")
+    parser = argparse.ArgumentParser(prog="rooster-code", description="Rich CLI wrapper for the Open Agent SDK")
     subparsers = parser.add_subparsers(dest="command")
 
     ask_parser = subparsers.add_parser("ask", help="Run a one-shot prompt")
@@ -525,7 +522,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def run_ask(prompt: str, config) -> int:
-    from cock_code.runtime import set_abort_signal
+    from rooster_code.runtime import set_abort_signal
 
     console = build_console()
     render_banner(console, "ask", config)
@@ -714,7 +711,7 @@ async def run_chat(config) -> int:
 
     async def _run_query_with_interrupt(events, **kwargs) -> None:
         nonlocal interrupted, _active_query_task
-        from cock_code.runtime import set_abort_signal
+        from rooster_code.runtime import set_abort_signal
         abort_signal.clear()
         set_abort_signal(abort_signal)
         previous = signal.signal(signal.SIGINT, _cancel_query_on_sigint)
@@ -863,7 +860,7 @@ async def run_chat(config) -> int:
                 continue
             if command.name == "wait" and command.args:
                 task_result = await wait_for_task(command.args[0])
-                from cock_code.runtime import _notified_task_ids, _notified_task_ids_lock
+                from rooster_code.runtime import _notified_task_ids, _notified_task_ids_lock
                 with _notified_task_ids_lock:
                     _notified_task_ids.add(command.args[0])
                 append_task_result_to_context(agent, command.args[0], task_result)

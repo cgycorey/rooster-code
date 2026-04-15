@@ -28,7 +28,6 @@ from open_agent_sdk import (
     is_plan_mode_active,
     get_session_info as sdk_get_session_info,
     get_session_messages as sdk_get_session_messages,
-    get_skill,
     get_user_invocable_skills,
     init_bundled_skills,
     list_sessions as sdk_list_sessions,
@@ -47,9 +46,9 @@ from open_agent_sdk.types import SDKMessage, SDKMessageType, SDKSystemSubtype
 from open_agent_sdk.providers import CreateMessageParams
 from open_agent_sdk.tools.skill_tool import SkillTool
 
-from cock_code.config import RuntimeConfig
-from cock_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeReadTool, RuntimeTraceTool, TurnTracker
-from cock_code.team import SDKTeamCreateBridgeTool, SDKTeamDeleteBridgeTool, patch_tool_pool as _patch_tool_pool
+from rooster_code.config import RuntimeConfig
+from rooster_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeReadTool, RuntimeTraceTool, TurnTracker
+from rooster_code.team import SDKTeamCreateBridgeTool, SDKTeamDeleteBridgeTool, patch_tool_pool as _patch_tool_pool
 
 
 _loaded_local_skill_names: set[str] = set()
@@ -877,7 +876,7 @@ def _create_sdk_agent(
     )
 
     tracker = TurnTracker()
-    setattr(agent, "_cock_code_config", config)
+    setattr(agent, "_rooster_code_config", config)
 
     if hasattr(agent, "query"):
         original_query = agent.query

@@ -53,7 +53,7 @@ wheels = [
 ]
 
 [[package]]
-name = "cock-code"
+name = "rooster-code"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

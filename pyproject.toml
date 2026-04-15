@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "cock-code"
+name = "rooster-code"
 version = "0.1.0"
 description = "Rich CLI coding agent built on the Open Agent SDK"
 readme = "README.md"
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-cock-code = "cock_code.cli:main"
+rooster-code = "rooster_code.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8.3.0"]
@@ -24,4 +24,4 @@ dev = ["pytest>=8.3.0"]
 open-agent-sdk = { path = "../open-agent-sdk-python" }
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/cock_code"]
+packages = ["src/rooster_code"]

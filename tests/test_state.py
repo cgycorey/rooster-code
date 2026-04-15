@@ -1,7 +1,7 @@
-import cock_code.cli as cli
+import rooster_code.cli as cli
 import pytest
 
-from cock_code.runtime import get_state_snapshot
+from rooster_code.runtime import get_state_snapshot
 
 
 def test_get_state_snapshot_supports_todos() -> None:

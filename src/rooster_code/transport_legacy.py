@@ -90,7 +90,7 @@ class RawAnthropicHTTPClient:
         http_client: httpx.AsyncClient | None = None,
     ):
         self.base_url = base_url
-        timeout_seconds = float(os.environ.get("COCK_CODE_HTTP_TIMEOUT_SECONDS", "45"))
+        timeout_seconds = float(os.environ.get("ROOSTER_CODE_HTTP_TIMEOUT_SECONDS", "45"))
         self._http_client = http_client or httpx.AsyncClient(timeout=timeout_seconds)
         self._headers = {
             "accept": "application/json",

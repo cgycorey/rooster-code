@@ -1,4 +1,4 @@
-"""Tests for cock_code.team — AgentPool, TeamManager, TeamDispatchTool, TeamSendMessageTool, patch_tool_pool."""
+"""Tests for rooster_code.team — AgentPool, TeamManager, TeamDispatchTool, TeamSendMessageTool, patch_tool_pool."""
 
 import asyncio
 from typing import Any
@@ -7,10 +7,9 @@ from unittest.mock import MagicMock
 import pytest
 from open_agent_sdk.types import ToolContext
 
-from cock_code.config import RuntimeConfig
-from cock_code.team import (
+from rooster_code.config import RuntimeConfig
+from rooster_code.team import (
     AgentPool,
-    MAX_TEAM_MEMBERS,
     SDKTeamCreateBridgeTool,
     SDKTeamDeleteBridgeTool,
     TeamDispatchTool,
@@ -260,7 +259,7 @@ def test_dispatch_tool_missing_member():
 
     async def _run():
         import unittest.mock
-        with unittest.mock.patch("cock_code.runtime._create_background_subagent_task", new_callable=unittest.mock.AsyncMock) as mock_create_task:
+        with unittest.mock.patch("rooster_code.runtime._create_background_subagent_task", new_callable=unittest.mock.AsyncMock) as mock_create_task:
             mock_create_task.return_value = "test-task-err"
             result = await tool.call({"member": "unknown", "task": "do thing"}, ToolContext(cwd=".", env={}))
 
@@ -292,7 +291,7 @@ def test_dispatch_tool_async_dispatch():
         tool = TeamDispatchTool(manager)
 
         import unittest.mock
-        with unittest.mock.patch("cock_code.runtime._create_background_subagent_task", new_callable=unittest.mock.AsyncMock) as mock_create_task:
+        with unittest.mock.patch("rooster_code.runtime._create_background_subagent_task", new_callable=unittest.mock.AsyncMock) as mock_create_task:
             mock_create_task.return_value = "test-task-123"
             result = await tool.call({"member": "reviewer", "task": "review this change"}, ToolContext(cwd=".", env={}))
 
@@ -393,7 +392,7 @@ def test_sdk_team_create_bridge_tool_creates_persistent_team():
         orchestrator._options.abort_signal = abort_signal
         orchestrator._options.append_system_prompt = "original prompt"
         orchestrator._tool_pool = []
-        orchestrator._cock_code_config = config
+        orchestrator._rooster_code_config = config
 
         async def fake_create_member(self, name, definition, config, abort_signal=None):
             self._members[name] = fake_agent
@@ -430,7 +429,7 @@ def test_sdk_team_create_bridge_tool_materializes_missing_agent_definitions():
         orchestrator._options.abort_signal = abort_signal
         orchestrator._options.append_system_prompt = "original prompt"
         orchestrator._tool_pool = []
-        orchestrator._cock_code_config = config
+        orchestrator._rooster_code_config = config
 
         async def fake_create_member(self, name, definition, config, abort_signal=None):
             self._members[name] = fake_agent
@@ -468,7 +467,7 @@ def test_sdk_team_delete_bridge_tool_deletes_persistent_team():
         orchestrator._options.abort_signal = None
         orchestrator._options.append_system_prompt = "original prompt"
         orchestrator._tool_pool = []
-        orchestrator._cock_code_config = config
+        orchestrator._rooster_code_config = config
 
         async def fake_create_member(self, name, definition, config, abort_signal=None):
             self._members[name] = fake_agent
@@ -780,8 +779,8 @@ def test_agent_pool_dispatch_async_marks_busy():
         pool._mailboxes["reviewer"] = asyncio.Queue()
         pool._locks["reviewer"] = asyncio.Lock()
 
-        with unittest.mock.patch("cock_code.runtime._track_background_task"):
-            with unittest.mock.patch("cock_code.runtime._update_background_subagent_task", new_callable=unittest.mock.AsyncMock):
+        with unittest.mock.patch("rooster_code.runtime._track_background_task"):
+            with unittest.mock.patch("rooster_code.runtime._update_background_subagent_task", new_callable=unittest.mock.AsyncMock):
                 result = await pool.dispatch_async("reviewer", "review code", "task-1", ".", {})
 
         assert result == "task-1"
@@ -893,9 +892,9 @@ def test_dispatch_tool_busy_member_returns_error():
         tool = TeamDispatchTool(manager)
 
         import unittest.mock
-        with unittest.mock.patch("cock_code.runtime._create_background_subagent_task", new_callable=unittest.mock.AsyncMock) as mock_create_task:
+        with unittest.mock.patch("rooster_code.runtime._create_background_subagent_task", new_callable=unittest.mock.AsyncMock) as mock_create_task:
             mock_create_task.return_value = "test-task-err"
-            with unittest.mock.patch("cock_code.runtime._update_background_subagent_task", new_callable=unittest.mock.AsyncMock):
+            with unittest.mock.patch("rooster_code.runtime._update_background_subagent_task", new_callable=unittest.mock.AsyncMock):
                 result = await tool.call({"member": "reviewer", "task": "review this"}, ToolContext(cwd=".", env={}))
 
         assert result.is_error

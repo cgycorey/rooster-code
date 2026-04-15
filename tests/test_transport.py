@@ -2,7 +2,7 @@ import asyncio
 
 import httpx
 
-from cock_code.transport_legacy import RawAnthropicHTTPClient, TransportHTTPError
+from rooster_code.transport_legacy import RawAnthropicHTTPClient, TransportHTTPError
 
 
 def test_raw_http_client_maps_timeout_to_api_error() -> None:
