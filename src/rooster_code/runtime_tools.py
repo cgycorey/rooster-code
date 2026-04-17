@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from difflib import unified_diff
+import json
 import os
 import asyncio
 from typing import Any, Awaitable, Callable
@@ -223,4 +224,91 @@ class RuntimeEditTool(BaseTool):
         return ToolResult(
             tool_use_id="",
             content=f"Successfully edited {target_path}\n{diff}" if diff else f"Successfully edited {target_path}",
+        )
+
+
+class RuntimeSkillTool(BaseTool):
+    """Wraps the SDK SkillTool to execute skills instead of returning raw JSON.
+
+    When the model calls the Skill tool, the SDK's SkillTool returns a JSON
+    payload with the skill prompt, status, and metadata. This wrapper intercepts
+    that result and either:
+    - Inline skills: returns the prompt text so the model follows instructions
+    - Forked skills: executes in a child agent and returns the output
+    """
+
+    _name = "Skill"
+    _description = "Execute a skill within the current conversation."
+    _input_schema = ToolInputSchema(
+        properties={
+            "skill": {"type": "string", "description": "The skill name to execute"},
+            "args": {"type": "string", "description": "Optional arguments for the skill"},
+        },
+        required=["skill"],
+    )
+
+    def __init__(self, delegate: BaseTool, config: Any, tracker: TurnTracker):
+        self._delegate = delegate
+        self._config = config
+        self._tracker = tracker
+
+    def is_read_only(self, input: dict[str, Any] | None = None) -> bool:
+        return False
+
+    def is_concurrency_safe(self, input: dict[str, Any] | None = None) -> bool:
+        return False
+
+    async def call(self, input: dict[str, Any], context: ToolContext) -> ToolResult:
+        self._tracker.record_activity("Running skill", "Skill", str(input.get("skill", "")))
+
+        result = await self._delegate.call(input, context)
+        if result.is_error:
+            return result
+
+        try:
+            payload = json.loads(str(result.content))
+        except (json.JSONDecodeError, TypeError):
+            return result
+
+        if not isinstance(payload, dict) or not payload.get("success"):
+            return result
+
+        prompt_text = str(payload.get("prompt", "")).strip()
+        command_name = str(payload.get("commandName", input.get("skill", "")))
+        status = str(payload.get("status") or "inline")
+
+        if not prompt_text:
+            return ToolResult(
+                tool_use_id="",
+                content=f'Skill "{command_name}" activated but provided no instructions.',
+            )
+
+        if status == "forked":
+            from rooster_code.runtime import (
+                _create_sdk_agent,
+                _prompt_agent_with_abort,
+                _format_subagent_task_output,
+            )
+            from dataclasses import replace
+
+            child_config = replace(
+                self._config,
+                model=str(payload.get("model") or self._config.model or ""),
+                allowed_tools=payload.get("allowedTools") if isinstance(payload.get("allowedTools"), list) else self._config.allowed_tools,
+                persist_session=False,
+            )
+            child_agent = _create_sdk_agent(child_config, include_runtime_agent_tool=False)
+            try:
+                query_result = await _prompt_agent_with_abort(child_agent, prompt_text)
+            finally:
+                await child_agent.close()
+            raw_text = query_result.text.strip() if query_result.text else ""
+            output = _format_subagent_task_output(raw_text, query_result.messages)
+            if not output or output == "Agent completed with no text output.":
+                output = raw_text or "Agent completed with no text output."
+            return ToolResult(tool_use_id="", content=output)
+
+        return ToolResult(
+            tool_use_id="",
+            content=f'Skill "{command_name}" activated. Follow these instructions:\n\n{prompt_text}',
         )

@@ -1,9 +1,10 @@
 import asyncio
+import json
 from pathlib import Path
 
 from open_agent_sdk import BaseTool, ToolContext, ToolResult
 
-from rooster_code.runtime_tools import RuntimeEditTool, RuntimeReadTool, TurnTracker
+from rooster_code.runtime_tools import RuntimeEditTool, RuntimeReadTool, RuntimeSkillTool, TurnTracker
 
 
 class FakeReadTool(BaseTool):
@@ -107,5 +108,104 @@ def test_runtime_read_tool_emits_activity_before_read_finishes(tmp_path) -> None
 
         delegate.finish.set()
         await task
+
+    asyncio.run(run_test())
+
+
+class FakeSkillDelegate(BaseTool):
+    _name = "Skill"
+
+    def __init__(self, response: ToolResult):
+        self._response = response
+
+    @property
+    def name(self):
+        return self._name
+
+    async def call(self, input, context):
+        return self._response
+
+
+class FakeConfig:
+    def __init__(self):
+        self.model = "test-model"
+        self.allowed_tools = None
+        self.cwd = "/tmp"
+        self.env = {}
+        self.persist_session = False
+        self.api_key = ""
+        self.base_url = ""
+        self.api_type = ""
+        self.disallowed_tools = None
+        self.session_id = ""
+        self.resume = ""
+        self.continue_session = None
+        self.fork_session = ""
+        self.max_turns = None
+        self.max_budget_usd = None
+        self.max_tokens = None
+        self.thinking_budget = None
+        self.debug = False
+        self.sandbox = None
+        self.include_partials = False
+        self.hooks = None
+        self.mcp_servers = None
+        self.extra_args = None
+        self.custom_headers = None
+        self.json_schema = None
+        self.agents = None
+        self.skills_dir = None
+        self.permission_mode = "default"
+
+
+def test_runtime_skill_tool_returns_prompt_for_inline_skills() -> None:
+    async def run_test():
+        tracker = TurnTracker()
+        payload = json.dumps({
+            "success": True,
+            "commandName": "plan",
+            "status": "inline",
+            "prompt": "Create a detailed plan for the user's request.",
+        })
+        delegate = FakeSkillDelegate(ToolResult(tool_use_id="", content=payload))
+        tool = RuntimeSkillTool(delegate, FakeConfig(), tracker)
+
+        result = await tool.call({"skill": "plan", "args": "add auth"}, ToolContext(cwd="/tmp", env={}))
+
+        assert result.is_error is False
+        assert "Skill \"plan\" activated" in str(result.content)
+        assert "Create a detailed plan" in str(result.content)
+        assert tracker.consume_activity_trace() == [
+            {"action": "Running skill", "tool": "Skill", "target": "plan"}
+        ]
+
+    asyncio.run(run_test())
+
+
+def test_runtime_skill_tool_passes_through_errors() -> None:
+    async def run_test():
+        tracker = TurnTracker()
+        delegate = FakeSkillDelegate(ToolResult(tool_use_id="", content='Error: unknown skill "missing"', is_error=True))
+        tool = RuntimeSkillTool(delegate, FakeConfig(), tracker)
+
+        result = await tool.call({"skill": "missing"}, ToolContext(cwd="/tmp", env={}))
+
+        assert result.is_error is True
+        assert "unknown skill" in str(result.content)
+
+    asyncio.run(run_test())
+
+
+def test_runtime_skill_tool_handles_no_prompt_gracefully() -> None:
+    async def run_test():
+        tracker = TurnTracker()
+        payload = json.dumps({"success": True, "commandName": "plan", "status": "inline", "prompt": ""})
+        delegate = FakeSkillDelegate(ToolResult(tool_use_id="", content=payload))
+        tool = RuntimeSkillTool(delegate, FakeConfig(), tracker)
+
+        result = await tool.call({"skill": "plan"}, ToolContext(cwd="/tmp", env={}))
+
+        assert result.is_error is False
+        assert "no instructions" in str(result.content).lower() or "Skill" in str(result.content)
 
     asyncio.run(run_test())

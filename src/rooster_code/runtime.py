@@ -47,7 +47,7 @@ from open_agent_sdk.providers import CreateMessageParams
 from open_agent_sdk.tools.skill_tool import SkillTool
 
 from rooster_code.config import RuntimeConfig
-from rooster_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeReadTool, RuntimeTraceTool, TurnTracker
+from rooster_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeReadTool, RuntimeSkillTool, RuntimeTraceTool, TurnTracker
 from rooster_code.team import SDKTeamCreateBridgeTool, SDKTeamDeleteBridgeTool, patch_tool_pool as _patch_tool_pool
 
 
@@ -1041,6 +1041,8 @@ def _create_sdk_agent(
                     new_pool.append(RuntimeReadTool(tool, tracker))
                 elif getattr(tool, "name", "") == "Edit":
                     new_pool.append(RuntimeEditTool(tool, tracker))
+                elif getattr(tool, "name", "") == "Skill":
+                    new_pool.append(RuntimeSkillTool(tool, config, tracker))
                 elif getattr(tool, "name", "") != "Agent":
                     new_pool.append(RuntimeTraceTool(tool, tracker))
             if not replaced:
@@ -1063,6 +1065,8 @@ def _create_sdk_agent(
                     new_pool.append(RuntimeReadTool(tool, tracker))
                 elif getattr(tool, "name", "") == "Edit":
                     new_pool.append(RuntimeEditTool(tool, tracker))
+                elif getattr(tool, "name", "") == "Skill":
+                    new_pool.append(RuntimeSkillTool(tool, config, tracker))
                 elif getattr(tool, "name", "") != "Agent":
                     new_pool.append(RuntimeTraceTool(tool, tracker))
             agent._tool_pool = new_pool
