@@ -206,9 +206,9 @@ async def start_background_agent_task(config: RuntimeConfig, agent_name: str, pr
     if result.is_error:
         raise RuntimeError(str(result.content))
     text = str(result.content)
-    parts = text.split()
-    if len(parts) >= 3 and parts[0] == "Created" and parts[1] == "task":
-        return parts[2]
+    match = re.search(r"\bCreated task (\S+)", text)
+    if match:
+        return match.group(1).rstrip(".,:;!?")
     raise RuntimeError(f"Could not parse background task ID from: {text}")
 
 
@@ -263,10 +263,18 @@ def _effective_agents(config: RuntimeConfig) -> dict[str, Any]:
 def _resolve_agent_definition(config: RuntimeConfig, input: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
     agents = _effective_agents(config)
 
-    requested = str(input.get("name") or input.get("subagent_type") or "")
+    requested = str(input.get("name") or input.get("subagent_type") or "").strip()
     if requested:
         raw = agents.get(requested)
-        return requested, raw if isinstance(raw, dict) else None
+        if isinstance(raw, dict):
+            return requested, raw
+
+        requested_lower = requested.lower()
+        for name, definition in agents.items():
+            if name.lower() == requested_lower:
+                return name, definition if isinstance(definition, dict) else None
+
+        return requested, None
 
     if len(agents) == 1:
         key = next(iter(agents))
@@ -341,78 +349,37 @@ def _extract_text_blocks(message: dict[str, Any]) -> list[str]:
         if block.get("type") != "text":
             continue
         text = str(block.get("text", "")).strip()
-        if text:
+        if text and not re.match(r"^[a-z][\w-]*:tool_call\b", text, re.IGNORECASE):
             parts.append(text)
     return parts
 
 
-def _looks_like_planning_text(text: str) -> bool:
-    normalized = " ".join(text.strip().lower().split())
-    if not normalized:
-        return False
-    planning_prefixes = (
-        "let me ",
-        "i'll ",
-        "i will ",
-        "first, ",
-        "first ",
-        "next, ",
-        "next ",
-        "to start",
-        "starting with",
-    )
-    return normalized.startswith(planning_prefixes)
-
-
-def _clean_summary_candidate(text: str) -> str:
-    cleaned = " ".join(text.strip().split())
-    if not cleaned:
-        return ""
-    if re.match(r"^(now i have|after reviewing)\b", cleaned, re.IGNORECASE):
-        return ""
-    segments = re.split(r"(?<=[.!?])\s+", cleaned)
-    kept: list[str] = []
-    for segment in segments:
-        piece = segment.strip()
-        if not piece:
-            continue
-        if _looks_like_planning_text(piece):
-            break
-        if kept and re.match(r"^(let me|i'll|i will|first|next|to start|starting with)\b", piece, re.IGNORECASE):
-            break
-        if kept and re.match(r"^(here(?:'s| is)|after reviewing|now i have)\b", piece, re.IGNORECASE):
-            break
-        kept.append(piece)
-    if kept:
-        return " ".join(kept).strip()
-    if _looks_like_planning_text(cleaned):
-        return ""
-    inline_markers = [
-        " here's ",
-        " here is ",
-        " after reviewing ",
-        " now i have ",
-        " let me ",
-        " i'll ",
-        " i will ",
-        " first, ",
-        " first ",
-        " next, ",
-        " next ",
-        " to start ",
-        " starting with ",
-    ]
-    lowered = f" {cleaned.lower()} "
-    cut_positions = [lowered.find(marker) for marker in inline_markers if lowered.find(marker) != -1]
-    if cut_positions:
-        cutoff = min(cut_positions)
-        candidate = cleaned[: max(cutoff - 1, 0)].strip(" :;-.,")
-        return candidate if candidate and not _looks_like_planning_text(candidate) else ""
-    return cleaned
+_TOOL_CALL_ARTIFACT_RE = re.compile(r"^[a-z][\w-]*:tool_call\b.*$", re.MULTILINE | re.IGNORECASE)
 
 
 def sanitize_task_output(output: str) -> str:
-    return _ANSI_ESCAPE_RE.sub("", output)
+    output = _ANSI_ESCAPE_RE.sub("", output)
+    output = _TOOL_CALL_ARTIFACT_RE.sub("", output)
+    return output
+
+
+def _collect_assistant_text(messages: list[dict[str, Any]]) -> list[str]:
+    parts: list[str] = []
+    for message in messages:
+        if str(message.get("role", "")) != "assistant":
+            continue
+        parts.extend(_extract_text_blocks(message))
+    return parts
+
+
+def _format_subagent_task_output(result_text: str, messages: list[dict[str, Any]]) -> str:
+    assistant_text = "\n\n".join(part.strip() for part in _collect_assistant_text(messages) if part.strip())
+    if assistant_text:
+        return sanitize_task_output(assistant_text)
+    raw_text = sanitize_task_output(result_text.strip())
+    if raw_text:
+        return raw_text
+    return "Agent completed with no text output."
 
 
 def _format_subagent_summary(result_text: str, messages: list[dict[str, Any]]) -> str:
@@ -422,46 +389,66 @@ def _format_subagent_summary(result_text: str, messages: list[dict[str, Any]]) -
     open_issues: list[str] = []
     next_steps: list[str] = []
     findings: list[str] = []
-    summary_candidates: list[str] = []
+    has_structured = False
 
     for message in messages:
         if str(message.get("role", "")) != "assistant":
             continue
         for text in _extract_text_blocks(message):
-            cleaned_block = _clean_summary_candidate(text)
-            if cleaned_block:
-                summary_candidates.append(cleaned_block)
             for raw_line in text.splitlines():
                 line = raw_line.strip()
                 if not line:
                     continue
                 lower = line.lower()
                 if lower.startswith("outcome:"):
-                    cleaned_outcome = _clean_summary_candidate(line.partition(":")[2].strip())
-                    if cleaned_outcome:
-                        outcomes.append(cleaned_outcome)
+                    value = line.partition(":")[2].strip()
+                    if value:
+                        outcomes.append(value)
+                        has_structured = True
                 elif lower.startswith("files:"):
                     files.append(line.partition(":")[2].strip())
+                    has_structured = True
                 elif lower.startswith("commands:"):
                     commands.append(line.partition(":")[2].strip())
+                    has_structured = True
                 elif lower.startswith("findings:"):
-                    cleaned_finding = _clean_summary_candidate(line.partition(":")[2].strip())
-                    if cleaned_finding:
-                        findings.append(cleaned_finding)
+                    value = line.partition(":")[2].strip()
+                    if value:
+                        findings.append(value)
+                    has_structured = True
                 elif lower.startswith("open issues:"):
                     open_issues.append(line.partition(":")[2].strip())
+                    has_structured = True
                 elif lower.startswith("next step:"):
                     next_steps.append(line.partition(":")[2].strip())
+                    has_structured = True
 
+    # Fallback: first meaningful line from raw text, then from assistant messages
     fallback = "No useful output returned"
-    fallback_candidates = [_clean_summary_candidate(result_text.strip())]
-    fallback_candidates.extend(reversed(summary_candidates))
-    for candidate in fallback_candidates:
-        if not candidate:
-            continue
-        fallback = candidate
-        break
-    lines = [f"Outcome: {'; '.join(outcomes) if outcomes else fallback}" ]
+    for line in result_text.strip().splitlines():
+        line = line.strip()
+        if line and line not in {"---", "***"} and not re.fullmatch(r"#+", line):
+            fallback = line
+            break
+    if fallback == "No useful output returned":
+        for message in messages:
+            if str(message.get("role", "")) != "assistant":
+                continue
+            for text in _extract_text_blocks(message):
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line and line not in {"---", "***"} and not re.fullmatch(r"#+", line):
+                        fallback = line
+                        break
+                if fallback != "No useful output returned":
+                    break
+            if fallback != "No useful output returned":
+                break
+
+    if not has_structured:
+        return ""
+
+    lines = [f"Outcome: {'; '.join(outcomes) if outcomes else fallback}"]
     if files:
         lines.append(f"Files: {'; '.join(files)}")
     if commands:
@@ -496,9 +483,9 @@ async def _create_background_subagent_task(subject: str, description: str, cwd: 
     if result.is_error:
         raise RuntimeError(f"Failed to create task: {result.content}")
     text = str(result.content)
-    parts = text.split()
-    if len(parts) >= 3 and parts[0] == "Created" and parts[1] == "task":
-        return parts[2].rstrip(":")
+    match = re.search(r"\bCreated task (\S+)", text)
+    if match:
+        return match.group(1).rstrip(".,:;!?")
     raise RuntimeError(f"Could not parse task ID from: {text}")
 
 
@@ -560,12 +547,8 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
                 finally:
                     await child_agent.close()
                 raw_text = query_result.text.strip() if query_result.text else ""
-                summary = _format_subagent_summary(raw_text, query_result.messages)
-                if "No useful output returned" in summary and raw_text:
-                    output = raw_text
-                elif summary:
-                    output = summary
-                else:
+                output = _format_subagent_task_output(raw_text, query_result.messages)
+                if not output or output == "Agent completed with no text output.":
                     output = raw_text or "Agent completed with no text output."
                 await _update_background_subagent_task(
                     task_id, status="completed", output=output,
@@ -632,6 +615,8 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
 
             text = query_result.text.strip() if query_result.text else ""
             summary = _format_subagent_summary(text, query_result.messages)
+            if not summary:
+                summary = _format_subagent_task_output(text, query_result.messages)
             return ToolResult(tool_use_id="", content=summary or f'Skill "{skill_name}" completed with no text output.')
         finally:
             await working_agent.close()
@@ -648,6 +633,8 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
 
     text = result.text.strip() if result.text else ""
     summary = _format_subagent_summary(text, result.messages)
+    if not summary:
+        summary = _format_subagent_task_output(text, result.messages)
     return ToolResult(tool_use_id="", content=summary or f"Agent {agent_name} completed with no text output.")
 
 
@@ -735,7 +722,10 @@ def find_requested_agent_name(config: RuntimeConfig, prompt: str) -> str | None:
         if f"{lower_name} agent" in lower_prompt or f"use {lower_name}" in lower_prompt:
             return name
     if "use an agent" in lower_prompt or "use a subagent" in lower_prompt or "use an assistant agent" in lower_prompt:
-        return "task"
+        if "task" in _effective_agents(config):
+            return "task"
+        if len(_effective_agents(config)) == 1:
+            return next(iter(_effective_agents(config)))
     return None
 
 
@@ -1170,7 +1160,8 @@ async def enforce_session_retention(limit: int = 20) -> None:
     for session in sessions[limit:]:
         session_id = session.get("id")
         if isinstance(session_id, str) and session_id:
-            await sdk_delete_session(session_id)
+            with contextlib.suppress(OSError, PermissionError):
+                await sdk_delete_session(session_id)
 
 
 async def fork_session(session_id: str, new_id: str | None):

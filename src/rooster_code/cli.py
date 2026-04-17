@@ -311,68 +311,16 @@ def _prompt_box(title: str, lines: list[str], style: str) -> FormattedText:
 
 
 def _compact_task_output(output: str, max_chars: int = 240) -> str:
-    from rooster_code.runtime import _clean_summary_candidate, sanitize_task_output
+    from rooster_code.runtime import sanitize_task_output
 
     output = sanitize_task_output(output)
-    lines = [line.strip() for line in output.splitlines() if line.strip()]
-    if not lines:
-        return "No useful output returned"
-
-    def _split_chunks(text: str) -> list[str]:
-        chunks = re.split(r"\s+#{2,}\s+|\s+---\s+|\s+\*\*\*\s+", text)
-        return [chunk.strip() for chunk in chunks if chunk.strip()]
-
-    def _is_heading_like(text: str) -> bool:
-        normalized = text.strip().lower().strip(":- ")
-        if not normalized:
-            return True
-        patterns = (
-            r"[a-z ]*(review|report|summary)",
-            r"(critical|moderate|minor) issues",
-            r"changes overview",
-            r"executive summary",
-            r"questions",
-            r"recommendations?",
-        )
-        return any(re.fullmatch(pattern, normalized, re.IGNORECASE) for pattern in patterns)
-
-    def _extract_review_sentence(text: str) -> str:
-        sentence = text.strip()
-        sentence = re.sub(r"^#+\s*", "", sentence)
-        sentence = re.sub(r"^(?:[A-Za-z]+(?:\s+[A-Za-z]+){0,4}\s+(?:review|report|summary))(?:\s+|[:.-]\s*)", "", sentence, flags=re.IGNORECASE)
-        sentence = re.sub(r"^(after reviewing\b[^,.:;]*[,.:;]?\s*)", "", sentence, flags=re.IGNORECASE)
-        sentence = re.sub(r"^(now\b[^.]*[.:]?\s*)", "", sentence, flags=re.IGNORECASE)
-        sentence = re.sub(r"^(here(?:'s| is)\s+(?:my|the)\s+review:?\s*)", "", sentence, flags=re.IGNORECASE)
-        sentence = sentence.strip()
-        if not sentence or sentence.lower() in {"now", "summary"}:
-            return ""
-        return sentence
-
-    candidates: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped in {"---", "***"}:
-            continue
-        if re.fullmatch(r"#+", stripped):
-            continue
-        stripped = re.sub(r"^[>*#\-\s]+", "", stripped)
-        for chunk in _split_chunks(stripped):
-            chunk = re.sub(r"^[>*#\-\s]+", "", chunk).strip()
-            if not chunk:
-                continue
-            if chunk.lower().startswith("outcome:"):
-                normalized = _clean_summary_candidate(chunk.partition(":")[2].strip())
-            else:
-                normalized = _clean_summary_candidate(chunk)
-            normalized = _extract_review_sentence(normalized)
-            if normalized and not normalized.lower().startswith(("files:", "commands:", "open issues:", "next step:", "findings:")):
-                if _is_heading_like(normalized):
-                    continue
-                candidates.append(normalized)
-
-    for candidate in candidates:
-        if candidate:
-            return candidate if len(candidate) <= max_chars else f"{candidate[:max_chars].rstrip()}..."
+    for line in output.splitlines():
+        line = line.strip()
+        if line and line not in {"---", "***"} and not re.fullmatch(r"#+", line):
+            if line.lower().startswith("outcome:"):
+                line = line.partition(":")[2].strip()
+            if line:
+                return line if len(line) <= max_chars else f"{line[:max_chars].rstrip()}..."
     return "No useful output returned"
 
 
@@ -885,6 +833,9 @@ async def run_chat(config) -> int:
                     await agent.close()
                 config.resume = command.args[0]
                 agent = create_runtime_agent(config)
+                set_runtime_team_bridge(team_manager, agent)
+                if team_manager.is_active():
+                    await team_manager.ensure_orchestrator_team_state(agent)
                 render_notice(console, "Session", f"Resumed {command.args[0]}", "green")
                 continue
             if command.name == "agents":

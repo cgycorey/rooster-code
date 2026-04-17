@@ -33,47 +33,13 @@ def compact_tool_result(text: str, max_chars: int = 220) -> str:
     from rooster_code.runtime import sanitize_task_output
 
     text = sanitize_task_output(text)
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
-        return "No useful output returned"
-
-    def normalize(line: str) -> str:
-        line = re.sub(r"^Outcome:\s*", "", line, flags=re.IGNORECASE).strip()
-        line = re.sub(r"^#+\s*", "", line)
-        line = re.sub(r"^[>*\-\s]+", "", line)
-        line = " ".join(line.split())
-        line = re.sub(r"^(here(?:'s| is)\s+(?:my|the)\s+review:?\s*)", "", line, flags=re.IGNORECASE)
-        line = re.sub(r"^(after reviewing\b[^,.:;]*[,.:;]?\s*)", "", line, flags=re.IGNORECASE)
-        line = re.sub(r"^(now\b[^.]*[.:]?\s*)", "", line, flags=re.IGNORECASE)
-        match = re.search(r"\b(let me\b|i'll\b|i will\b)", line, re.IGNORECASE)
-        if match:
-            line = line[: match.start()].rstrip(" :;-.,")
-        return line.strip()
-
-    for line in lines:
-        candidate = normalize(line)
-        if not candidate:
-            continue
-        lowered = candidate.lower().strip(":- ")
-        if lowered in {
-            "review",
-            "report",
-            "summary",
-            "code review",
-            "review report",
-            "code review summary",
-            "performance review report",
-            "security review report",
-            "correctness review",
-            "critical issues",
-            "changes summary",
-            "executive summary",
-            "questions",
-            "suggestions",
-        }:
-            continue
-        return candidate if len(candidate) <= max_chars else f"{candidate[:max_chars].rstrip()}..."
-
+    for line in text.splitlines():
+        line = line.strip()
+        if line and line not in {"---", "***"} and not re.fullmatch(r"#+", line):
+            if line.lower().startswith("outcome:"):
+                line = line.partition(":")[2].strip()
+            if line:
+                return line if len(line) <= max_chars else f"{line[:max_chars].rstrip()}..."
     return "No useful output returned"
 
 

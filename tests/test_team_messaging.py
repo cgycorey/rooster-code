@@ -189,7 +189,7 @@ def test_send_message_tool_broadcast_from_member():
             ToolContext(cwd=".", env={}),
         )
         assert not result.is_error
-        assert str(result.content) == "Message broadcast to all agents."
+        assert str(result.content).startswith("Message broadcast to all agents.")
         assert pool._mailboxes["builder"].get_nowait() == {
             "from": "reviewer",
             "content": "team update",

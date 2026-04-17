@@ -45,7 +45,6 @@ class AgentPool:
         self._locks: dict[str, asyncio.Lock] = {}
         self._unhealthy: set[str] = set()
         self._busy: set[str] = set()
-        self._message_dispatch_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def member_names(self) -> list[str]:
@@ -106,6 +105,7 @@ class AgentPool:
     ) -> str:
         """Fire-and-forget dispatch. Creates SDK task, spawns asyncio.Task, returns task_id immediately."""
         from rooster_code.runtime import (
+            _format_subagent_task_output,
             _track_background_task,
             _update_background_subagent_task,
             sanitize_task_output,
@@ -122,7 +122,18 @@ class AgentPool:
 
         async def _run_member() -> None:
             try:
-                result = await self.dispatch(member, task)
+                async with self._locks[member]:
+                    agent = self._members[member]
+                    task_with_messages = self._inject_mailbox(member, task)
+                    try:
+                        query_result = await agent.prompt(task_with_messages)
+                    except Exception as exc:
+                        self._unhealthy.add(member)
+                        raise RuntimeError(f"member '{member}' failed: {exc}") from exc
+                result = _format_subagent_task_output(
+                    query_result.text or "",
+                    getattr(query_result, "messages", []),
+                )
                 await _update_background_subagent_task(
                     task_id,
                     status="completed",
@@ -140,7 +151,6 @@ class AgentPool:
                 )
                 raise
             except Exception as exc:
-                self._unhealthy.add(member)
                 await _update_background_subagent_task(
                     task_id,
                     status="cancelled",
@@ -176,9 +186,7 @@ class AgentPool:
             finally:
                 self._busy.discard(member)
 
-        task_handle = asyncio.create_task(_run())
-        self._message_dispatch_tasks.add(task_handle)
-        task_handle.add_done_callback(self._message_dispatch_tasks.discard)
+        asyncio.create_task(_run())
         return True
 
     def snapshot_mailboxes(self) -> dict[str, list[dict[str, Any]]]:
@@ -203,17 +211,12 @@ class AgentPool:
         return f"{header}\n\n{task}"
 
     async def close_all(self) -> None:
-        for task in list(self._message_dispatch_tasks):
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
         for agent in self._members.values():
             with contextlib.suppress(Exception):
                 await agent.close()
         self._members.clear()
         self._mailboxes.clear()
         self._locks.clear()
-        self._message_dispatch_tasks.clear()
         self._unhealthy.clear()
         self._busy.clear()
 
@@ -248,6 +251,7 @@ class TeamManager:
             f"You are the orchestrator for team '{self._team_name}'. Members: {', '.join(self._member_definitions.keys())}.",
             "Use TeamDispatch to assign tasks to members. TeamDispatch runs the task on the member and returns the result.",
             "Use SendMessage for informational teammate coordination; it may wake an idle teammate to process queued mail, but it does NOT replace TeamDispatch for explicit task assignment.",
+            f"If the user wants to leave team mode or use the Agent tool directly, call TeamDelete with team_id '{self._team_id}' first.",
             "Do NOT use the Agent tool — it is not available while a team is active. Always use TeamDispatch instead.",
             "When you assign work with TeamDispatch, the member processes it in the background. The result will appear when complete.",
             "Do not also perform the same work yourself unless the member fails, stops, or you are explicitly taking over.",
@@ -352,7 +356,7 @@ class TeamManager:
         patch_tool_pool(
             orchestrator,
             add_tools=[TeamDispatchTool(self), TeamSendMessageTool(self, sender_name="orchestrator"), TeamStatusTool(self)],
-            remove_names=["TeamCreate", "TeamDelete", "Agent", "SendMessage", "TeamDispatch", "Read"],
+            remove_names=["TeamCreate", "Agent", "SendMessage", "TeamDispatch", "Read"],
         )
         if hasattr(orchestrator, "_options"):
             orchestrator._options.append_system_prompt = self._team_prompt()
@@ -405,7 +409,7 @@ class TeamManager:
         patch_tool_pool(
             orchestrator,
             add_tools=[dispatch_tool, send_tool, status_tool],
-            remove_names=["TeamCreate", "TeamDelete", "Agent", "SendMessage", "Read"],
+            remove_names=["TeamCreate", "Agent", "SendMessage", "Read"],
         )
 
         self._pool = pool
@@ -441,9 +445,60 @@ class TeamManager:
         result = await self._pool.dispatch_async(member, task, task_id, cwd, env)
         return result
 
-    async def send_message(self, to: str, content: str, sender: str = "orchestrator", message_type: str = "text") -> None:
+    async def _wake_member_for_messages(self, member: str, cwd: str, env: dict[str, str]) -> dict[str, str]:
+        if not self._active or self._pool is None:
+            return {"status": "inactive"}
+        if member in self._pool._unhealthy:
+            try:
+                await self._recover_member(member)
+            except Exception:
+                return {"status": "queued_unhealthy"}
+        if member in self._pool._busy:
+            return {"status": "queued_busy"}
+        agent = self._pool._members.get(member)
+        if not callable(getattr(agent, "prompt", None)):
+            return {"status": "queued_unavailable"}
+        mailbox = self._pool._mailboxes.get(member)
+        if mailbox is None or mailbox.empty():
+            return {"status": "no_messages"}
+
+        from rooster_code.runtime import _create_background_subagent_task, _update_background_subagent_task
+
+        task_id = await _create_background_subagent_task(
+            f"team-mailbox-{member}",
+            MAILBOX_DISPATCH_TASK,
+            cwd,
+            env,
+        )
+        result = await self._pool.dispatch_async(member, MAILBOX_DISPATCH_TASK, task_id, cwd, env)
+        if result.startswith("Error:"):
+            await _update_background_subagent_task(
+                task_id,
+                status="cancelled",
+                output=result,
+                cwd=cwd,
+                env=env,
+            )
+            if "busy" in result.lower():
+                return {"status": "queued_busy"}
+            if "unavailable" in result.lower():
+                return {"status": "queued_unhealthy"}
+            return {"status": "error", "task_id": task_id}
+        return {"status": "dispatched", "task_id": task_id}
+
+    async def send_message(
+        self,
+        to: str,
+        content: str,
+        sender: str = "orchestrator",
+        message_type: str = "text",
+        *,
+        cwd: str = ".",
+        env: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         if not self._active or self._pool is None:
             raise RuntimeError("No team is active. Use /team create to start a team.")
+        tool_env = env or {}
         message = {"type": message_type, "from": sender, "content": content}
         if to == "*":
             member_names = list(dict.fromkeys([
@@ -451,14 +506,17 @@ class TeamManager:
                 *self._pool._mailboxes.keys(),
                 *self._pool._members.keys(),
             ]))
+            wake_results: list[dict[str, str]] = []
             for member_name in member_names:
                 self._pool.send_message(member_name, dict(message))
-                self._pool.wake_for_messages(member_name)
-            return
+                wake = await self._wake_member_for_messages(member_name, cwd, tool_env)
+                wake_results.append({"member": member_name, **wake})
+            return {"mode": "broadcast", "results": wake_results}
         if not self._pool.has_member(to) and to not in self._member_definitions:
             raise RuntimeError(f"Unknown team member '{to}'")
         self._pool.send_message(to, message)
-        self._pool.wake_for_messages(to)
+        wake = await self._wake_member_for_messages(to, cwd, tool_env)
+        return {"mode": "single", "results": [{"member": to, **wake}]}
 
     async def clear(self) -> None:
         if self._pool is not None:
@@ -473,6 +531,7 @@ class TeamManager:
 
         if self._original_tool_pool is not None:
             orchestrator._tool_pool = list(self._original_tool_pool)
+            _sync_engine_tool_state(orchestrator)
         else:
             patch_tool_pool(
                 orchestrator,
@@ -532,16 +591,16 @@ def patch_tool_pool(
         agent._tool_pool[:] = [t for t in agent._tool_pool if t.name not in remove_names]
     if add_tools:
         agent._tool_pool.extend(add_tools)
-    # Keep the active QueryEngine's tool_map in sync so mid-turn tool
-    # additions/removals are both visible to the API and executable.
+    _sync_engine_tool_state(agent)
+
+
+def _sync_engine_tool_state(agent: Any) -> None:
+    """Keep an active QueryEngine aligned with the agent's current tool pool."""
     engine = getattr(agent, "_engine", None)
     if engine is not None:
-        if remove_names:
-            for name in remove_names:
-                engine._tool_map.pop(name, None)
-        if add_tools:
-            for tool in add_tools:
-                engine._tool_map[tool.name] = tool
+        if hasattr(engine, "_config"):
+            engine._config.tools = agent._tool_pool
+        engine._tool_map = {tool.name: tool for tool in agent._tool_pool}
 
 
 class TeamDispatchTool(BaseTool):
@@ -669,9 +728,44 @@ class TeamSendMessageTool(BaseTool):
         if not content:
             return ToolResult(tool_use_id="", content="Error: 'content' is required", is_error=True)
         try:
-            await self._team_manager.send_message(to, content, sender=self._sender_name, message_type=message_type)
+            result = await self._team_manager.send_message(
+                to,
+                content,
+                sender=self._sender_name,
+                message_type=message_type,
+                cwd=context.cwd,
+                env=context.env,
+            )
             if to == "*":
-                return ToolResult(tool_use_id="", content="Message broadcast to all agents.")
+                dispatched = [entry for entry in result.get("results", []) if entry.get("status") == "dispatched"]
+                queued = [entry for entry in result.get("results", []) if str(entry.get("status", "")).startswith("queued_")]
+                parts = ["Message broadcast to all agents."]
+                if dispatched:
+                    summary = ", ".join(
+                        f"{entry['member']} ({entry['task_id']})"
+                        for entry in dispatched
+                        if entry.get("task_id")
+                    )
+                    if summary:
+                        parts.append(f"Wake tasks created: {summary}.")
+                if queued:
+                    parts.append(
+                        "Queued for later: "
+                        + ", ".join(f"{entry['member']} ({entry['status']})" for entry in queued)
+                        + "."
+                    )
+                return ToolResult(tool_use_id="", content=" ".join(parts))
+            entry = result.get("results", [{}])[0]
+            if entry.get("status") == "dispatched" and entry.get("task_id"):
+                return ToolResult(
+                    tool_use_id="",
+                    content=f"Message sent to {to}. Wake task created: {entry['task_id']}.",
+                )
+            if str(entry.get("status", "")).startswith("queued_"):
+                return ToolResult(
+                    tool_use_id="",
+                    content=f"Message sent to {to}. Delivery queued: {entry['status']}.",
+                )
             return ToolResult(tool_use_id="", content=f"Message sent to {to}.")
         except Exception as exc:
             return ToolResult(tool_use_id="", content=f"Error: {exc}", is_error=True)

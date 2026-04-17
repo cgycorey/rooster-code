@@ -147,14 +147,14 @@ def test_render_event_stream_shows_agent_result_panel() -> None:
     assert "AGENT_PATH=used" in output
 
 
-def test_render_event_stream_compacts_verbose_agent_result() -> None:
+def test_render_event_stream_shows_full_agent_result() -> None:
     console = Console(record=True, width=100)
 
     async def events():
         yield SDKMessage(
             type=SDKMessageType.TOOL_RESULT,
             tool_name="Agent",
-            result_content="Outcome: All tests pass. Now let me analyze the code changes in detail: --- ## Code Review Summary",
+            result_content="Outcome: All tests pass. Let me analyze the code changes. Found 2 bugs.",
         )
 
     asyncio.run(render_event_stream(console, events()))
@@ -162,8 +162,8 @@ def test_render_event_stream_compacts_verbose_agent_result() -> None:
     output = console.export_text()
 
     assert "Agent Result" in output
-    assert "All tests pass." in output
-    assert "Code Review Summary" not in output
+    assert "All tests pass" in output
+    assert "Found 2 bugs" in output
 
 
 def test_render_event_stream_compacts_team_tool_result() -> None:
@@ -173,7 +173,7 @@ def test_render_event_stream_compacts_team_tool_result() -> None:
         yield SDKMessage(
             type=SDKMessageType.TOOL_RESULT,
             tool_name="TeamDispatch",
-            result_content="Outcome: Here is the full team dispatch report. Let me now continue with more analysis.",
+            result_content="Outcome: Here is the full team dispatch report. Let me now continue with more analysis. Dispatch completed.",
         )
 
     asyncio.run(render_event_stream(console, events()))
@@ -182,7 +182,8 @@ def test_render_event_stream_compacts_team_tool_result() -> None:
 
     assert "TeamDispatch" in output
     assert "full team dispatch report" in output
-    assert "continue with more analysis" not in output
+    assert "Dispatch" in output
+    assert "completed" in output
 
 
 def test_compact_tool_result_strips_ansi_sequences() -> None:

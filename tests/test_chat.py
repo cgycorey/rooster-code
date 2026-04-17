@@ -496,6 +496,30 @@ def test_render_task_notification_uses_rich_notice_without_prompt_session(monkey
     )
 
 
+def test_render_task_notification_mentions_task_output_when_preview_truncated(monkeypatch) -> None:
+    notices: list[tuple[str, str, str]] = []
+
+    class FakeAgent:
+        _history: list[dict[str, object]] = []
+
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+
+    cli._render_task_notification(
+        SilentConsole(),
+        FakeAgent(),
+        {
+            "type": "background_task_completed",
+            "task_id": "task_1",
+            "status": "completed",
+            "subject": "builder",
+            "output": "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9",
+        },
+        None,
+    )
+
+    assert "Full output: /task-output task_1" in notices[0][1]
+
+
 def test_compact_task_output_trims_noisy_reviewer_report() -> None:
     output = (
         "Outcome: All tests pass. Here's my review:\n\n"
@@ -506,10 +530,10 @@ def test_compact_task_output_trims_noisy_reviewer_report() -> None:
 
     summary = cli._compact_task_output(output)
 
-    assert summary == "All tests pass."
+    assert summary.startswith("All tests pass")
 
 
-def test_compact_task_output_skips_headings_and_planning_text() -> None:
+def test_compact_task_output_shows_first_meaningful_line() -> None:
     output = (
         "Outcome: Now I have a complete view of all the modified files.\n"
         "\n"
@@ -519,10 +543,10 @@ def test_compact_task_output_skips_headings_and_planning_text() -> None:
 
     summary = cli._compact_task_output(output)
 
-    assert summary == "Found no critical issues in the modified files."
+    assert summary == "Now I have a complete view of all the modified files."
 
 
-def test_compact_task_output_handles_collapsed_markdown_review_report() -> None:
+def test_compact_task_output_handles_long_single_line_output() -> None:
     output = (
         "Outcome: # Performance Review Report After reviewing all five files, I've identified several performance issues. "
         "Here's the detailed report: --- ## Critical Issues ### 1. runtime.py Line 479-486: Inefficient History Trimming"
@@ -530,15 +554,16 @@ def test_compact_task_output_handles_collapsed_markdown_review_report() -> None:
 
     summary = cli._compact_task_output(output)
 
-    assert summary == "I've identified several performance issues."
+    assert "# Performance Review Report" in summary
+    assert "performance issues" in summary
 
 
-def test_compact_task_output_drops_now_prefix_fragments() -> None:
+def test_compact_task_output_shows_agent_output_with_now_prefix() -> None:
     output = "Outcome: Now I'll provide a detailed security analysis of the modified files."
 
     summary = cli._compact_task_output(output)
 
-    assert summary == "No useful output returned"
+    assert "detailed security analysis" in summary
 
 
 def test_run_chat_shows_background_completion_before_prompt(monkeypatch) -> None:
@@ -918,6 +943,7 @@ def test_run_chat_shows_sessions(monkeypatch) -> None:
 def test_run_chat_resumes_a_different_session(monkeypatch) -> None:
     created: list[str | None] = []
     closed: list[str] = []
+    bridge_agents: list[object | None] = []
     prompts = iter(["/resume sess-9", "/exit"])
 
     class FakeAgent:
@@ -934,6 +960,10 @@ def test_run_chat_resumes_a_different_session(monkeypatch) -> None:
     monkeypatch.setattr(cli, "create_runtime_agent", fake_create_runtime_agent)
     monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
     monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+    monkeypatch.setattr(cli, "set_runtime_team_bridge", lambda manager, agent: bridge_agents.append(agent))
+    async def fake_enforce_session_retention(limit=20):
+        return None
+    monkeypatch.setattr(cli, "enforce_session_retention", fake_enforce_session_retention)
 
     config = RuntimeConfig(model="m2", resume="start")
     exit_code = cli.asyncio.run(cli.run_chat(config))
@@ -942,6 +972,49 @@ def test_run_chat_resumes_a_different_session(monkeypatch) -> None:
     assert created == ["start", "sess-9"]
     assert closed == ["start", "sess-9"]
     assert config.resume == "sess-9"
+    assert len(bridge_agents) >= 1
+    assert getattr(bridge_agents[0], "name", None) == "start"
+
+
+def test_run_chat_resume_reapplies_team_state_to_new_agent(monkeypatch) -> None:
+    prompts = iter(["/resume sess-9", "/exit"])
+    ensure_calls: list[str] = []
+
+    class FakeAgent:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def close(self) -> None:
+            return None
+
+    class FakeTeamManager:
+        def __init__(self) -> None:
+            self._active = True
+
+        def is_active(self) -> bool:
+            return self._active
+
+        async def ensure_orchestrator_team_state(self, agent) -> None:
+            ensure_calls.append(agent.name)
+
+        async def clear(self) -> None:
+            return None
+
+        async def close_team(self, agent) -> None:
+            self._active = False
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent(config.resume or "initial"))
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "TeamManager", FakeTeamManager)
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+    async def fake_enforce_session_retention(limit=20):
+        return None
+    monkeypatch.setattr(cli, "enforce_session_retention", fake_enforce_session_retention)
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2", resume="start")))
+
+    assert exit_code == 0
+    assert "sess-9" in ensure_calls
 
 
 def test_run_chat_help_renders_available_commands(monkeypatch) -> None:

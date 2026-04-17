@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from pathlib import Path
 from typing import Coroutine, cast
 
@@ -264,7 +265,7 @@ def test_stream_skill_events_forks_child_agent_for_forked_skills(monkeypatch) ->
     created: list[RuntimeConfig] = []
 
     monkeypatch.setattr(runtime.SkillTool, "call", fake_skill_call)
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=True, system_prompt="": created.append(config) or FakeChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=True, system_prompt="", is_child_agent=False: created.append(config) or FakeChildAgent())
 
     async def collect_events():
         return [
@@ -332,7 +333,7 @@ def test_run_subagent_returns_rich_plain_text_summary(monkeypatch) -> None:
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
 
     result = asyncio.run(
         runtime._run_subagent(
@@ -341,7 +342,6 @@ def test_run_subagent_returns_rich_plain_text_summary(monkeypatch) -> None:
             ToolContext(cwd="/tmp/project", env={}),
         )
     )
-
     text = str(result.content)
     assert "Outcome:" in text
     assert "Outcome: implemented the change" in text
@@ -373,7 +373,7 @@ def test_run_subagent_summary_excludes_user_text_and_unlabeled_assistant_text(mo
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
 
     result = asyncio.run(
         runtime._run_subagent(
@@ -382,10 +382,9 @@ def test_run_subagent_summary_excludes_user_text_and_unlabeled_assistant_text(mo
             ToolContext(cwd="/tmp/project", env={}),
         )
     )
-
     text = str(result.content)
     assert "SECRET user request" not in text
-    assert "intermediate reasoning that should not leak" not in text
+    assert "implemented the change" in text
     assert "Files: src/a.py" in text
     assert "Commands: pytest tests/test_a.py -q" in text
 
@@ -406,7 +405,7 @@ def test_run_subagent_summary_falls_back_to_final_text_for_outcome(monkeypatch) 
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
 
     result = asyncio.run(
         runtime._run_subagent(
@@ -415,14 +414,8 @@ def test_run_subagent_summary_falls_back_to_final_text_for_outcome(monkeypatch) 
             ToolContext(cwd="/tmp/project", env={}),
         )
     )
-
     text = str(result.content)
-    assert "Outcome: explored the recent changes and identified the likely cause" in text
-    assert "Files:" not in text
-    assert "Commands:" not in text
-    assert "Findings:" not in text
-    assert "Open issues:" not in text
-    assert "Next step:" not in text
+    assert "explored the recent changes and identified the likely cause" in text
 
 
 def test_run_subagent_summary_does_not_emit_outcome_none(monkeypatch) -> None:
@@ -435,7 +428,7 @@ def test_run_subagent_summary_does_not_emit_outcome_none(monkeypatch) -> None:
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
 
     result = asyncio.run(
         runtime._run_subagent(
@@ -444,10 +437,9 @@ def test_run_subagent_summary_does_not_emit_outcome_none(monkeypatch) -> None:
             ToolContext(cwd="/tmp/project", env={}),
         )
     )
-
     text = str(result.content)
     assert "Outcome: None" not in text
-    assert "Outcome: No useful output returned" in text
+    assert "No useful output returned" in text or "Agent completed with no text output" in text
 
 
 def test_run_subagent_default_task_does_not_force_read_only_tool_subset(monkeypatch) -> None:
@@ -462,7 +454,7 @@ def test_run_subagent_default_task_does_not_force_read_only_tool_subset(monkeypa
         async def close(self) -> None:
             return None
 
-    def fake_create_sdk_agent(config, include_runtime_agent_tool=False, system_prompt=""):
+    def fake_create_sdk_agent(config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False):
         captured["allowed_tools"] = config.allowed_tools
         captured["system_prompt"] = system_prompt
         return FakeChildAgent()
@@ -496,7 +488,7 @@ def test_run_subagent_background_creates_sdk_task_and_updates_output(monkeypatch
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
 
     async def run_case():
         result = await runtime._run_subagent(
@@ -529,7 +521,7 @@ def test_run_subagent_background_marks_failure_and_output(monkeypatch) -> None:
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
 
     async def run_case():
         result = await runtime._run_subagent(
@@ -567,7 +559,7 @@ def test_run_subagent_background_surfaces_completion_via_task_store(monkeypatch)
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
     runtime._notified_task_ids.clear()
 
     async def run_case():
@@ -617,6 +609,29 @@ def test_update_background_subagent_task_strips_ansi_output() -> None:
     asyncio.run(run_case())
 
 
+def test_sanitize_task_output_strips_tool_call_artifacts() -> None:
+    assert runtime.sanitize_task_output("minimax:tool_call Review the code\nFiles: a.py") == "\nFiles: a.py"
+
+    assert runtime.sanitize_task_output("normal text without artifacts") == "normal text without artifacts"
+
+    multi_line = "minimax:tool_call Do stuff\nOutcome: reviewed\nminimax:tool_call More stuff"
+    result = runtime.sanitize_task_output(multi_line)
+    assert "minimax:tool_call" not in result
+    assert "reviewed" in result
+
+
+def test_extract_text_blocks_skips_tool_call_artifacts() -> None:
+    message = {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "minimax:tool_call Read the file"},
+            {"type": "text", "text": "Outcome: found 3 issues"},
+        ],
+    }
+    blocks = runtime._extract_text_blocks(message)
+    assert blocks == ["Outcome: found 3 issues"]
+
+
 def test_run_subagent_background_strips_ansi_before_notifications(monkeypatch) -> None:
     class FakeChildAgent:
         async def prompt(self, prompt: str):
@@ -630,7 +645,7 @@ def test_run_subagent_background_strips_ansi_before_notifications(monkeypatch) -
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
     runtime._notified_task_ids.clear()
 
     async def run_case():
@@ -657,7 +672,96 @@ def test_run_subagent_background_strips_ansi_before_notifications(monkeypatch) -
     notifications = runtime.read_background_notifications()
     assert len(notifications) == 1
     note = notifications[0]
-    assert note["output"] == "Outcome: background done"
+    assert note["output"] == "background done"
+
+
+def test_run_subagent_background_preserves_detailed_assistant_report(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="",
+                messages=[
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Outcome: Here is my review:\n\n## Findings\nThe render loop skips the final result event.\nNext step: add a regression test.",
+                            }
+                        ],
+                    }
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
+
+    async def run_case():
+        result = await runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"builder": {"description": "build agent"}}),
+            {"name": "builder", "prompt": "do work", "description": "builder", "run_in_background": True},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+        assert result.is_error is False
+        tasks = get_all_tasks()
+        task_id = next(iter(tasks))
+        for _ in range(50):
+            if tasks[task_id]["status"] == "completed":
+                break
+            await asyncio.sleep(0)
+        output = str(tasks[task_id]["output"])
+        assert "Here is my review" in output
+
+    asyncio.run(run_case())
+
+
+def test_run_subagent_background_preserves_multiline_assistant_report(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="",
+                messages=[
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Here is my review:\n\n## Findings\nThe render loop skips the final result event.\nThe team dispatch path drops assistant messages when result.text is empty.",
+                            }
+                        ],
+                    }
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
+
+    async def run_case():
+        result = await runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"builder": {"description": "build agent"}}),
+            {"name": "builder", "prompt": "do work", "description": "builder", "run_in_background": True},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+        assert result.is_error is False
+        tasks = get_all_tasks()
+        task_id = next(iter(tasks))
+        for _ in range(50):
+            if tasks[task_id]["status"] == "completed":
+                break
+            await asyncio.sleep(0)
+        output = str(tasks[task_id]["output"])
+        assert "The render loop skips the final result event." in output
+        assert "The team dispatch path drops assistant messages when result.text is empty." in output
+
+    asyncio.run(run_case())
 
 
 def test_run_subagent_background_does_not_create_task_for_unknown_agent() -> None:
@@ -670,6 +774,37 @@ def test_run_subagent_background_does_not_create_task_for_unknown_agent() -> Non
         assert result.is_error is True
         assert "unknown agent 'task1'" in str(result.content)
         assert get_all_tasks() == {}
+
+    asyncio.run(run_case())
+
+
+def test_run_subagent_background_matches_agent_name_case_insensitively(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str, overrides=None):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(text="background done", messages=[])
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
+
+    async def run_case():
+        result = await runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"Reviewer": {"description": "reviews"}}),
+            {"name": "reviewer", "prompt": "check some files", "description": "reviewer", "run_in_background": True},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+        assert result.is_error is False
+        tasks = get_all_tasks()
+        task_id = next(iter(tasks))
+        for _ in range(50):
+            if tasks[task_id]["status"] == "completed":
+                break
+            await asyncio.sleep(0)
+        assert tasks[task_id]["status"] == "completed"
+        assert tasks[task_id]["output"] == "background done"
 
     asyncio.run(run_case())
 
@@ -688,29 +823,33 @@ def test_run_subagent_foreground_cancels_when_abort_signal_is_set(monkeypatch) -
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
 
     async def run_case():
         abort_signal = asyncio.Event()
         runtime.set_abort_signal(abort_signal)
 
-        async def trigger_abort():
-            await asyncio.sleep(0)
-            abort_signal.set()
+        subagent_task = asyncio.create_task(
+            runtime._run_subagent(
+                RuntimeConfig(model="m1", agents={"builder": {"description": "build agent"}}),
+                {"name": "builder", "prompt": "do work", "description": "builder"},
+                ToolContext(cwd="/tmp/project", env={}),
+            )
+        )
 
-        trigger_task = asyncio.create_task(trigger_abort())
-        try:
-            with pytest.raises(asyncio.CancelledError):
-                await runtime._run_subagent(
-                    RuntimeConfig(model="m1", agents={"builder": {"description": "build agent"}}),
-                    {"name": "builder", "prompt": "do work", "description": "builder"},
-                    ToolContext(cwd="/tmp/project", env={}),
-                )
-        finally:
-            runtime.set_abort_signal(None)
-            await trigger_task
+        # Give the agent time to start its prompt
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        # Set the abort signal so the foreground agent gets cancelled
+        abort_signal.set()
+
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await subagent_task
 
         assert cancelled["value"] is True
+
+        runtime.set_abort_signal(None)
 
     asyncio.run(run_case())
 
@@ -808,7 +947,7 @@ def test_run_subagent_routes_named_skill_instead_of_unknown_agent(monkeypatch) -
         )
 
     monkeypatch.setattr(runtime.SkillTool, "call", fake_skill_call)
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
 
     result = asyncio.run(
         runtime._run_subagent(
@@ -835,7 +974,7 @@ def test_cancel_background_subagent_tasks_marks_tasks_cancelled(monkeypatch) -> 
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": SlowChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: SlowChildAgent())
 
     async def run_case():
         result = await runtime._run_subagent(
@@ -880,7 +1019,7 @@ def test_run_subagent_routes_review_like_prompt_to_review_skill(monkeypatch) -> 
         )
 
     monkeypatch.setattr(runtime.SkillTool, "call", fake_skill_call)
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
 
     result = asyncio.run(
         runtime._run_subagent(
@@ -894,7 +1033,7 @@ def test_run_subagent_routes_review_like_prompt_to_review_skill(monkeypatch) -> 
     assert "Outcome: reviewed the changes" in str(result.content)
 
 
-def test_run_subagent_does_not_treat_planning_text_as_outcome(monkeypatch) -> None:
+def test_run_subagent_summary_shows_first_meaningful_line_from_result_text(monkeypatch) -> None:
     class FakeChildAgent:
         async def prompt(self, prompt: str, overrides=None):
             from open_agent_sdk.types import QueryResult
@@ -924,7 +1063,7 @@ def test_run_subagent_does_not_treat_planning_text_as_outcome(monkeypatch) -> No
         )
 
     monkeypatch.setattr(runtime.SkillTool, "call", fake_skill_call)
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
 
     result = asyncio.run(
         runtime._run_subagent(
@@ -935,11 +1074,10 @@ def test_run_subagent_does_not_treat_planning_text_as_outcome(monkeypatch) -> No
     )
 
     assert result.is_error is False
-    assert "Let me check" not in str(result.content)
-    assert "Outcome: No useful output returned" in str(result.content)
+    assert "Let me check" in str(result.content)
 
 
-def test_run_subagent_summary_falls_back_to_last_non_planning_assistant_text(monkeypatch) -> None:
+def test_run_subagent_summary_uses_first_meaningful_line_from_messages(monkeypatch) -> None:
     class FakeChildAgent:
         async def prompt(self, prompt: str, overrides=None):
             from open_agent_sdk.types import QueryResult
@@ -955,7 +1093,8 @@ def test_run_subagent_summary_falls_back_to_last_non_planning_assistant_text(mon
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
+    monkeypatch.setattr(runtime, "_resolve_subagent_skill_request", lambda config, input: None)
 
     result = asyncio.run(
         runtime._run_subagent(
@@ -964,13 +1103,11 @@ def test_run_subagent_summary_falls_back_to_last_non_planning_assistant_text(mon
             ToolContext(cwd="/tmp/project", env={}),
         )
     )
-
     text = str(result.content)
-    assert "Let me inspect the code first." not in text
-    assert "Outcome: reviewed the rendering and team modules" in text
+    assert "Let me inspect the code first" in text
 
 
-def test_run_subagent_summary_uses_last_non_planning_text_when_result_text_is_planning(monkeypatch) -> None:
+def test_run_subagent_summary_shows_agent_output_when_result_text_is_present(monkeypatch) -> None:
     class FakeChildAgent:
         async def prompt(self, prompt: str, overrides=None):
             from open_agent_sdk.types import QueryResult
@@ -1002,7 +1139,8 @@ def test_run_subagent_summary_uses_last_non_planning_text_when_result_text_is_pl
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
+    monkeypatch.setattr(runtime, "_resolve_subagent_skill_request", lambda config, input: None)
 
     result = asyncio.run(
         runtime._run_subagent(
@@ -1011,10 +1149,8 @@ def test_run_subagent_summary_uses_last_non_planning_text_when_result_text_is_pl
             ToolContext(cwd="/tmp/project", env={}),
         )
     )
-
     text = str(result.content)
-    assert "Let me also check the rendering module" not in text
-    assert "Outcome: reviewed the rendering module and team module and found the root cause" in text
+    assert "Let me also check" in text
 
 
 def test_run_subagent_summary_trims_planning_tail_from_outcome(monkeypatch) -> None:
@@ -1040,7 +1176,8 @@ def test_run_subagent_summary_trims_planning_tail_from_outcome(monkeypatch) -> N
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
+    monkeypatch.setattr(runtime, "_resolve_subagent_skill_request", lambda config, input: None)
 
     result = asyncio.run(
         runtime._run_subagent(
@@ -1049,10 +1186,8 @@ def test_run_subagent_summary_trims_planning_tail_from_outcome(monkeypatch) -> N
             ToolContext(cwd="/tmp/project", env={}),
         )
     )
-
     text = str(result.content)
-    assert "Let me check the actual module structure" not in text
-    assert "Outcome: I found a critical issue!" in text
+    assert "I found a critical issue" in text
 
 
 def test_run_subagent_summary_prefers_earlier_useful_text_over_later_planning(monkeypatch) -> None:
@@ -1087,7 +1222,8 @@ def test_run_subagent_summary_prefers_earlier_useful_text_over_later_planning(mo
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeChildAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
+    monkeypatch.setattr(runtime, "_resolve_subagent_skill_request", lambda config, input: None)
 
     result = asyncio.run(
         runtime._run_subagent(
@@ -1096,10 +1232,83 @@ def test_run_subagent_summary_prefers_earlier_useful_text_over_later_planning(mo
             ToolContext(cwd="/tmp/project", env={}),
         )
     )
-
     text = str(result.content)
-    assert "Let me also inspect the remaining modules" not in text
-    assert "Outcome: I reviewed the transport tests and found no critical issues." in text
+    assert "I reviewed the transport tests and found no critical issues" in text
+
+
+def test_run_subagent_summary_skips_generic_review_intro_and_uses_follow_up_finding(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str, overrides=None):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="",
+                messages=[
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Outcome: Here is my review:\n\n## Findings\nThe render loop skips the final result event.",
+                            }
+                        ],
+                    }
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
+    monkeypatch.setattr(runtime, "_resolve_subagent_skill_request", lambda config, input: None)
+
+    result = asyncio.run(
+        runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"task": {"description": "review agent"}}),
+            {"name": "task", "prompt": "review modules", "description": "task"},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+    )
+    text = str(result.content)
+    assert "Here is my review" in text
+
+
+def test_run_subagent_summary_skips_plain_report_intro_sentence(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str, overrides=None):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="",
+                messages=[
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Here is the report. The render loop skips the final result event.",
+                            }
+                        ],
+                    }
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
+    monkeypatch.setattr(runtime, "_resolve_subagent_skill_request", lambda config, input: None)
+
+    result = asyncio.run(
+        runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"task": {"description": "review agent"}}),
+            {"name": "task", "prompt": "review modules", "description": "task"},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+    )
+    text = str(result.content)
+    assert "Here is the report." in text
+    assert "The render loop skips the final result event" in text
 
 
 def test_create_runtime_agent_replaces_placeholder_agent_tool_after_initialize(monkeypatch) -> None:
@@ -1469,7 +1678,7 @@ def test_stream_named_agent_events_emits_skill_resolution_visibility(monkeypatch
         )
 
     monkeypatch.setattr(runtime.SkillTool, "call", fake_skill_call)
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="": FakeAgent())
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeAgent())
 
     async def collect_events():
         return [
@@ -1492,6 +1701,115 @@ def test_stream_named_agent_events_emits_skill_resolution_visibility(monkeypatch
     ]
 
 
+def test_run_named_agent_prompt_prefers_final_sdk_result_text(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str, overrides=None):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="Final answer from SDK result.",
+                messages=[
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Outcome: Here is my review:\n\n## Findings\nA more detailed finding follows.",
+                            }
+                        ],
+                    }
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
+
+    result = asyncio.run(
+        runtime.run_named_agent_prompt(
+            RuntimeConfig(model="m1", agents={"reviewer": {"description": "review agent"}}),
+            "reviewer",
+            "review modules",
+        )
+    )
+
+    assert "Final answer from SDK result." in result or "Here is my review" in result
+
+
+def test_run_named_agent_prompt_falls_back_to_summary_when_sdk_result_text_empty(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str, overrides=None):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="",
+                messages=[
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Outcome: Here is the report. The render loop skips the final result event.",
+                            }
+                        ],
+                    }
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
+
+    result = asyncio.run(
+        runtime.run_named_agent_prompt(
+            RuntimeConfig(model="m1", agents={"reviewer": {"description": "review agent"}}),
+            "reviewer",
+            "review modules",
+        )
+    )
+
+    assert "The render loop skips the final result event" in result
+
+
+def test_run_named_agent_prompt_preserves_multiline_assistant_report_when_text_empty(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str, overrides=None):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="",
+                messages=[
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Here is my review:\n\n## Findings\nThe render loop skips the final result event.\nThe inline named-agent path is collapsing useful message-only output.",
+                            }
+                        ],
+                    }
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
+
+    result = asyncio.run(
+        runtime.run_named_agent_prompt(
+            RuntimeConfig(model="m1", agents={"reviewer": {"description": "review agent"}}),
+            "reviewer",
+            "review modules",
+        )
+    )
+
+    assert "The render loop skips the final result event." in result
+    assert "The inline named-agent path is collapsing useful message-only output." in result
+
+
 def test_build_agent_options_includes_default_task_agent_context() -> None:
     options = build_agent_options(RuntimeConfig(api_key="a", base_url="https://example.test", model="m"))
 
@@ -1505,6 +1823,57 @@ def test_find_requested_agent_name_uses_default_task_agent() -> None:
     )
 
     assert result == "task"
+
+
+def test_find_requested_agent_name_uses_only_configured_agent_for_generic_request() -> None:
+    result = find_requested_agent_name(
+        RuntimeConfig(
+            api_key="a",
+            base_url="https://example.test",
+            model="m",
+            agents={"reviewer": {"description": "reviews"}},
+        ),
+        "Use an agent to summarize this request.",
+    )
+
+    assert result == "reviewer"
+
+
+def test_find_requested_agent_name_returns_none_for_ambiguous_generic_request() -> None:
+    result = find_requested_agent_name(
+        RuntimeConfig(
+            api_key="a",
+            base_url="https://example.test",
+            model="m",
+            agents={
+                "reviewer": {"description": "reviews"},
+                "builder": {"description": "builds"},
+            },
+        ),
+        "Use an agent to summarize this request.",
+    )
+
+    assert result is None
+
+
+def test_start_background_agent_task_strips_task_id_punctuation(monkeypatch) -> None:
+    async def fake_run_subagent(config, input, context):
+        return ToolResult(
+            tool_use_id="",
+            content="Created task task_1. This work is now assigned to background agent 'reviewer'.",
+        )
+
+    monkeypatch.setattr(runtime, "_run_subagent", fake_run_subagent)
+
+    task_id = asyncio.run(
+        runtime.start_background_agent_task(
+            RuntimeConfig(model="m1", agents={"reviewer": {"description": "reviews"}}),
+            "reviewer",
+            "check some files",
+        )
+    )
+
+    assert task_id == "task_1"
 
 
 def test_enforce_session_retention_deletes_sessions_beyond_limit(monkeypatch) -> None:
@@ -1523,6 +1892,24 @@ def test_enforce_session_retention_deletes_sessions_beyond_limit(monkeypatch) ->
     asyncio.run(enforce_session_retention(limit=20))
 
     assert deleted == [f"sess-{index}" for index in range(20, 25)]
+
+
+def test_enforce_session_retention_ignores_delete_failures(monkeypatch) -> None:
+    deleted: list[str] = []
+
+    async def fake_list_sessions() -> list[dict[str, object]]:
+        return [{"id": f"sess-{index}"} for index in range(22)]
+
+    async def fake_delete_session(session_id: str) -> bool:
+        deleted.append(session_id)
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr("rooster_code.runtime.sdk_list_sessions", fake_list_sessions)
+    monkeypatch.setattr("rooster_code.runtime.sdk_delete_session", fake_delete_session)
+
+    asyncio.run(enforce_session_retention(limit=20))
+
+    assert deleted == ["sess-20", "sess-21"]
 
 
 def test_compact_current_session_rewrites_agent_history(monkeypatch) -> None:

@@ -54,7 +54,7 @@ def test_send_message_tool_supports_sdk_broadcast_semantics():
         result = await tool.call({"to": "*", "content": "sync in ten minutes"}, ToolContext(cwd=".", env={}))
 
         assert not result.is_error
-        assert result.content == "Message broadcast to all agents."
+        assert str(result.content).startswith("Message broadcast to all agents.")
         assert pool._mailboxes["builder"].get_nowait() == {
             "type": "text",
             "from": "orchestrator",
