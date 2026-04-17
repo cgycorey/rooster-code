@@ -314,7 +314,7 @@ def _compact_task_output(output: str, max_chars: int = 240) -> str:
     from rooster_code.runtime import sanitize_task_output
 
     output = sanitize_task_output(output)
-    for line in output.splitlines():
+    for line in reversed(output.splitlines()):
         line = line.strip()
         if line and line not in {"---", "***"} and not re.fullmatch(r"#+", line):
             if line.lower().startswith("outcome:"):
@@ -341,13 +341,18 @@ def append_task_result_to_context(agent, task_id: str, task_result: dict[str, ob
         history.append(
             {
                 "role": "user",
-                "content": [{"type": "text", "text": f"[Background task {task_id} completed]\n\n{output}"}],
+                "content": [{"type": "text", "text": f"[Background task {task_id} {status}]\n\n{output}"}],
             }
+        )
+        assistant_text = (
+            f"Received background task {task_id} result. Ready to continue from that result without redoing the same delegated work."
+            if status == "completed"
+            else f"Received background task {task_id} cancellation/failure. Do not assume the delegated work completed; decide whether to retry, take over, or change approach based on the failure output."
         )
         history.append(
             {
                 "role": "assistant",
-                "content": [{"type": "text", "text": f"Received background task {task_id} result. Ready to continue from that result without redoing the same delegated work."}],
+                "content": [{"type": "text", "text": assistant_text}],
             }
         )
 

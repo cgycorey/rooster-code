@@ -520,7 +520,7 @@ def test_render_task_notification_mentions_task_output_when_preview_truncated(mo
     assert "Full output: /task-output task_1" in notices[0][1]
 
 
-def test_compact_task_output_trims_noisy_reviewer_report() -> None:
+def test_compact_task_output_picks_last_meaningful_line_from_review_report() -> None:
     output = (
         "Outcome: All tests pass. Here's my review:\n\n"
         "---\n\n"
@@ -530,10 +530,10 @@ def test_compact_task_output_trims_noisy_reviewer_report() -> None:
 
     summary = cli._compact_task_output(output)
 
-    assert summary.startswith("All tests pass")
+    assert summary.startswith("Lots of detailed follow-up analysis here")
 
 
-def test_compact_task_output_shows_first_meaningful_line() -> None:
+def test_compact_task_output_shows_last_meaningful_line() -> None:
     output = (
         "Outcome: Now I have a complete view of all the modified files.\n"
         "\n"
@@ -543,7 +543,7 @@ def test_compact_task_output_shows_first_meaningful_line() -> None:
 
     summary = cli._compact_task_output(output)
 
-    assert summary == "Now I have a complete view of all the modified files."
+    assert summary == "Found no critical issues in the modified files."
 
 
 def test_compact_task_output_handles_long_single_line_output() -> None:
@@ -777,6 +777,30 @@ def test_run_chat_wait_injects_completed_task_output_into_context(monkeypatch) -
     assert agent._history[-1] == {
         "role": "assistant",
         "content": [{"type": "text", "text": "Received background task task_1 result. Ready to continue from that result without redoing the same delegated work."}],
+    }
+
+
+def test_append_task_result_to_context_marks_cancelled_tasks_as_cancelled() -> None:
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history: list[dict[str, object]] = []
+
+    cli._injected_task_ids.clear()
+    agent = FakeAgent()
+
+    cli.append_task_result_to_context(
+        agent,
+        "task_2",
+        {"status": "cancelled", "output": "Error: failed to finish"},
+    )
+
+    assert agent._history[-2] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "[Background task task_2 cancelled]\n\nError: failed to finish"}],
+    }
+    assert agent._history[-1] == {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Received background task task_2 cancellation/failure. Do not assume the delegated work completed; decide whether to retry, take over, or change approach based on the failure output."}],
     }
 
 

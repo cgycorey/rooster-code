@@ -286,6 +286,7 @@ def test_agent_pool_close_all():
     assert len(pool._mailboxes) == 0
     assert len(pool._locks) == 0
     assert len(pool._unhealthy) == 0
+    assert len(pool._message_dispatch_tasks) == 0
 
 
 def test_agent_pool_clear_histories():
@@ -1180,6 +1181,39 @@ def test_team_manager_create_and_close_team():
         assert "SendMessage" not in tool_names
         assert tool_names == ["Read", "Agent", "TeamCreate", "TeamDelete"]
         assert orchestrator._options.append_system_prompt == "original prompt"
+
+    asyncio.run(_run())
+
+
+def test_team_manager_create_team_adds_team_delete_when_missing_from_orchestrator():
+    async def _run():
+        manager = TeamManager()
+        config = _make_config()
+        fake_agent = FakeAgent()
+
+        class FakeTool:
+            def __init__(self, name: str):
+                self._name = name
+
+            @property
+            def name(self) -> str:
+                return self._name
+
+        orchestrator = MagicMock()
+        orchestrator._options.append_system_prompt = "original prompt"
+        orchestrator._tool_pool = [FakeTool("Read"), FakeTool("Agent"), FakeTool("TeamCreate")]
+
+        async def fake_create_member(self, name, definition, config, abort_signal=None):
+            self._members[name] = fake_agent
+            self._mailboxes[name] = asyncio.Queue()
+            self._locks[name] = asyncio.Lock()
+
+        import unittest.mock
+        with unittest.mock.patch.object(AgentPool, "create_member", fake_create_member):
+            await manager.create_team("dev-team", ["reviewer"], config, orchestrator)
+
+        tool_names = [t.name for t in orchestrator._tool_pool]
+        assert "TeamDelete" in tool_names
 
     asyncio.run(_run())
 

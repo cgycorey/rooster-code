@@ -45,6 +45,7 @@ class AgentPool:
         self._locks: dict[str, asyncio.Lock] = {}
         self._unhealthy: set[str] = set()
         self._busy: set[str] = set()
+        self._message_dispatch_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def member_names(self) -> list[str]:
@@ -186,14 +187,24 @@ class AgentPool:
             finally:
                 self._busy.discard(member)
 
-        asyncio.create_task(_run())
+        task_handle = asyncio.create_task(_run())
+        self._message_dispatch_tasks.add(task_handle)
+        task_handle.add_done_callback(self._message_dispatch_tasks.discard)
         return True
 
     def snapshot_mailboxes(self) -> dict[str, list[dict[str, Any]]]:
-        return {
-            name: [_sdk_mailbox_message_snapshot(message) for message in list(mailbox._queue)]
-            for name, mailbox in self._mailboxes.items()
-        }
+        snapshots: dict[str, list[dict[str, Any]]] = {}
+        for name, mailbox in self._mailboxes.items():
+            drained: list[dict[str, str]] = []
+            while True:
+                try:
+                    drained.append(mailbox.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+            snapshots[name] = [_sdk_mailbox_message_snapshot(message) for message in drained]
+            for message in drained:
+                mailbox.put_nowait(message)
+        return snapshots
 
     def _inject_mailbox(self, member: str, task: str) -> str:
         messages: list[str] = []
@@ -211,12 +222,17 @@ class AgentPool:
         return f"{header}\n\n{task}"
 
     async def close_all(self) -> None:
+        for task in list(self._message_dispatch_tasks):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         for agent in self._members.values():
             with contextlib.suppress(Exception):
                 await agent.close()
         self._members.clear()
         self._mailboxes.clear()
         self._locks.clear()
+        self._message_dispatch_tasks.clear()
         self._unhealthy.clear()
         self._busy.clear()
 
@@ -249,7 +265,7 @@ class TeamManager:
         lines = [
             f"# Team: {self._team_name}",
             f"You are the orchestrator for team '{self._team_name}'. Members: {', '.join(self._member_definitions.keys())}.",
-            "Use TeamDispatch to assign tasks to members. TeamDispatch runs the task on the member and returns the result.",
+            "Use TeamDispatch to assign tasks to members. TeamDispatch starts the work in the background and the result appears when complete.",
             "Use SendMessage for informational teammate coordination; it may wake an idle teammate to process queued mail, but it does NOT replace TeamDispatch for explicit task assignment.",
             f"If the user wants to leave team mode or use the Agent tool directly, call TeamDelete with team_id '{self._team_id}' first.",
             "Do NOT use the Agent tool — it is not available while a team is active. Always use TeamDispatch instead.",
@@ -355,8 +371,8 @@ class TeamManager:
             await orchestrator._initialize()
         patch_tool_pool(
             orchestrator,
-            add_tools=[TeamDispatchTool(self), TeamSendMessageTool(self, sender_name="orchestrator"), TeamStatusTool(self)],
-            remove_names=["TeamCreate", "Agent", "SendMessage", "TeamDispatch", "Read"],
+            add_tools=[TeamDispatchTool(self), TeamSendMessageTool(self, sender_name="orchestrator"), TeamStatusTool(self), SDKTeamDeleteBridgeTool()],
+            remove_names=["TeamCreate", "TeamDelete", "Agent", "SendMessage", "TeamDispatch", "Read"],
         )
         if hasattr(orchestrator, "_options"):
             orchestrator._options.append_system_prompt = self._team_prompt()
@@ -406,10 +422,11 @@ class TeamManager:
         dispatch_tool = TeamDispatchTool(self)
         send_tool = TeamSendMessageTool(self, sender_name="orchestrator")
         status_tool = TeamStatusTool(self)
+        delete_tool = SDKTeamDeleteBridgeTool()
         patch_tool_pool(
             orchestrator,
-            add_tools=[dispatch_tool, send_tool, status_tool],
-            remove_names=["TeamCreate", "Agent", "SendMessage", "Read"],
+            add_tools=[dispatch_tool, send_tool, status_tool, delete_tool],
+            remove_names=["TeamCreate", "TeamDelete", "Agent", "SendMessage", "Read"],
         )
 
         self._pool = pool
@@ -536,7 +553,7 @@ class TeamManager:
             patch_tool_pool(
                 orchestrator,
                 add_tools=[],
-                remove_names=["TeamDispatch", "SendMessage", "TeamStatus"],
+                remove_names=["TeamDispatch", "SendMessage", "TeamStatus", "TeamDelete"],
             )
 
         orchestrator._options.append_system_prompt = self._original_append_prompt

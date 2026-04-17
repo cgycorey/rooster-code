@@ -234,8 +234,10 @@ def _resolve_subagent_skill_request(config: RuntimeConfig, input: dict[str, Any]
     prompt = str(input.get("prompt") or "").strip()
     description = str(input.get("description") or "").strip()
 
-    if requested and requested in available:
-        return available[requested], prompt or description
+    if requested:
+        if requested in available:
+            return available[requested], prompt or description
+        return None
 
     for source in (prompt, description):
         if not source:
@@ -284,6 +286,16 @@ def _resolve_agent_definition(config: RuntimeConfig, input: dict[str, Any]) -> t
     return "", None
 
 
+def _default_agent(agents: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+    if not agents:
+        return "", None
+    if "task" in agents and isinstance(agents["task"], dict):
+        return "task", agents["task"]
+    key = next(iter(agents))
+    raw = agents[key]
+    return key, raw if isinstance(raw, dict) else None
+
+
 def _build_subagent_config(
     config: RuntimeConfig,
     definition: dict[str, Any],
@@ -304,24 +316,35 @@ def _build_subagent_config(
     )
 
 
-def _agent_context_prompt(config: RuntimeConfig, team_info: dict[str, Any] | None = None) -> str:
+def _agent_context_prompt(
+    config: RuntimeConfig,
+    *,
+    include_runtime_agent_tool: bool = True,
+    team_info: dict[str, Any] | None = None,
+) -> str:
     agents = _effective_agents(config)
 
-    lines = [
-        "# Configured Agents",
-        "Use the Agent tool with the agent name when delegation is helpful.",
-        "When you delegate work to the Agent tool or a background task, treat that work as assigned to that agent. Do not also perform the same work yourself unless the delegated task failed, was cancelled, or you are explicitly asked to compare or verify it.",
-    ]
-    for name, definition in agents.items():
-        if isinstance(definition, dict):
-            description = str(definition.get("description") or definition.get("prompt") or "")
-        else:
-            description = ""
-        lines.append(f"- {name}: {description}".rstrip())
+    lines: list[str] = []
+    if include_runtime_agent_tool and agents:
+        lines.extend(
+            [
+                "# Configured Agents",
+                "Use the Agent tool with the agent name when delegation is helpful.",
+                "When you delegate work to the Agent tool or a background task, treat that work as assigned to that agent. Do not also perform the same work yourself unless the delegated task failed, was cancelled, or you are explicitly asked to compare or verify it.",
+            ]
+        )
+        for name, definition in agents.items():
+            if isinstance(definition, dict):
+                description = str(definition.get("description") or definition.get("prompt") or "")
+            else:
+                description = ""
+            lines.append(f"- {name}: {description}".rstrip())
 
     skills_prompt = format_skills_for_prompt(config.max_tokens)
     if skills_prompt:
-        lines.extend(["", "# Available Skills", skills_prompt])
+        if lines:
+            lines.append("")
+        lines.extend(["# Available Skills", skills_prompt])
 
     if team_info and team_info.get("active"):
         members = team_info.get("members", {})
@@ -363,22 +386,64 @@ def sanitize_task_output(output: str) -> str:
     return output
 
 
-def _collect_assistant_text(messages: list[dict[str, Any]]) -> list[str]:
+def _collect_assistant_text(messages: list[dict[str, Any]], *, last_only: bool = False) -> list[str]:
     parts: list[str] = []
     for message in messages:
         if str(message.get("role", "")) != "assistant":
             continue
         parts.extend(_extract_text_blocks(message))
+    if last_only and parts:
+        return [parts[-1]]
+    return parts
+
+
+def _extract_tool_result_blocks(message: dict[str, Any]) -> list[str]:
+    content = message.get("content", [])
+    if not isinstance(content, list):
+        return []
+    parts: list[str] = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_result":
+            continue
+        result_content = block.get("content", "")
+        if isinstance(result_content, str):
+            text = result_content.strip()
+            if text:
+                parts.append(text)
+            continue
+        if not isinstance(result_content, list):
+            continue
+        for nested in result_content:
+            if not isinstance(nested, dict) or nested.get("type") != "text":
+                continue
+            text = str(nested.get("text", "")).strip()
+            if text:
+                parts.append(text)
+    return parts
+
+
+def _collect_tool_result_text(messages: list[dict[str, Any]]) -> list[str]:
+    parts: list[str] = []
+    for message in messages:
+        if str(message.get("role", "")) != "user":
+            continue
+        parts.extend(_extract_tool_result_blocks(message))
     return parts
 
 
 def _format_subagent_task_output(result_text: str, messages: list[dict[str, Any]]) -> str:
-    assistant_text = "\n\n".join(part.strip() for part in _collect_assistant_text(messages) if part.strip())
-    if assistant_text:
-        return sanitize_task_output(assistant_text)
     raw_text = sanitize_task_output(result_text.strip())
     if raw_text:
+        summary = _format_subagent_summary(result_text, messages)
+        if summary:
+            return summary
         return raw_text
+    assistant_text = "\n\n".join(part.strip() for part in _collect_assistant_text(messages, last_only=True) if part.strip())
+    if assistant_text:
+        return sanitize_task_output(assistant_text)
+    tool_result_text = "\n\n".join(part.strip() for part in _collect_tool_result_text(messages) if part.strip())
+    if tool_result_text:
+        return sanitize_task_output(tool_result_text)
     return "Agent completed with no text output."
 
 
@@ -389,7 +454,8 @@ def _format_subagent_summary(result_text: str, messages: list[dict[str, Any]]) -
     open_issues: list[str] = []
     next_steps: list[str] = []
     findings: list[str] = []
-    has_structured = False
+    has_outcome = False
+    has_structured_fields = False
 
     for message in messages:
         if str(message.get("role", "")) != "assistant":
@@ -404,38 +470,40 @@ def _format_subagent_summary(result_text: str, messages: list[dict[str, Any]]) -
                     value = line.partition(":")[2].strip()
                     if value:
                         outcomes.append(value)
-                        has_structured = True
+                        has_outcome = True
                 elif lower.startswith("files:"):
                     files.append(line.partition(":")[2].strip())
-                    has_structured = True
+                    has_structured_fields = True
                 elif lower.startswith("commands:"):
                     commands.append(line.partition(":")[2].strip())
-                    has_structured = True
+                    has_structured_fields = True
                 elif lower.startswith("findings:"):
                     value = line.partition(":")[2].strip()
                     if value:
                         findings.append(value)
-                    has_structured = True
+                    has_structured_fields = True
                 elif lower.startswith("open issues:"):
                     open_issues.append(line.partition(":")[2].strip())
-                    has_structured = True
+                    has_structured_fields = True
                 elif lower.startswith("next step:"):
                     next_steps.append(line.partition(":")[2].strip())
-                    has_structured = True
+                    has_structured_fields = True
 
-    # Fallback: first meaningful line from raw text, then from assistant messages
+    # Fallback: last meaningful line from raw text, then from last assistant message
     fallback = "No useful output returned"
-    for line in result_text.strip().splitlines():
+    fallback_from_result = "No useful output returned"
+    for line in reversed(result_text.strip().splitlines()):
         line = line.strip()
         if line and line not in {"---", "***"} and not re.fullmatch(r"#+", line):
             fallback = line
+            fallback_from_result = line
             break
     if fallback == "No useful output returned":
-        for message in messages:
+        for message in reversed(messages):
             if str(message.get("role", "")) != "assistant":
                 continue
-            for text in _extract_text_blocks(message):
-                for line in text.splitlines():
+            for text in reversed(_extract_text_blocks(message)):
+                for line in reversed(text.splitlines()):
                     line = line.strip()
                     if line and line not in {"---", "***"} and not re.fullmatch(r"#+", line):
                         fallback = line
@@ -445,7 +513,15 @@ def _format_subagent_summary(result_text: str, messages: list[dict[str, Any]]) -
             if fallback != "No useful output returned":
                 break
 
-    if not has_structured:
+    if not has_outcome and has_structured_fields:
+        normalized_fallback = fallback_from_result.lower()
+        if fallback_from_result != "No useful output returned" and not normalized_fallback.startswith(
+            ("files:", "commands:", "findings:", "open issues:", "next step:", "outcome:")
+        ):
+            outcomes.append(fallback_from_result)
+            has_outcome = True
+
+    if not has_outcome:
         return ""
 
     lines = [f"Outcome: {'; '.join(outcomes) if outcomes else fallback}"]
@@ -513,13 +589,25 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
     if not prompt:
         return ToolResult(tool_use_id="", content="Error: prompt is required", is_error=True)
 
+    requested_name = str(input.get("name") or input.get("subagent_type") or "").strip()
     skill_request = _resolve_subagent_skill_request(config, input)
     agent_name, definition = _resolve_agent_definition(config, input)
+    if requested_name and definition is not None:
+        skill_request = None
 
     if skill_request is None and definition is None:
-        if _effective_agents(config):
+        if input.get("run_in_background"):
+            agents = _effective_agents(config)
+            default_name, default_def = _default_agent(agents)
+            if default_def is not None:
+                agent_name = default_name
+                definition = default_def
+            else:
+                return ToolResult(tool_use_id="", content="Error: no agents configured", is_error=True)
+        elif _effective_agents(config):
             return ToolResult(tool_use_id="", content=f"Error: unknown agent '{agent_name or 'unspecified'}'", is_error=True)
-        return ToolResult(tool_use_id="", content="Error: no agents configured", is_error=True)
+        else:
+            return ToolResult(tool_use_id="", content="Error: no agents configured", is_error=True)
 
     if input.get("run_in_background"):
         task_id = await _create_background_subagent_task(
@@ -529,18 +617,19 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
             context.env,
         )
 
-        agent_name_bg, definition_bg = _resolve_agent_definition(config, input)
+        effective_name = agent_name
+        effective_def = definition
 
         async def run_background() -> None:
             try:
-                if definition_bg is None:
+                if effective_def is None:
                     await _update_background_subagent_task(
                         task_id, status="cancelled", output="Error: no agent definition resolved",
                         cwd=context.cwd, env=context.env,
                     )
                     return
-                child_config = _build_subagent_config(config, definition_bg, input, context)
-                system_prompt = str(definition_bg.get("prompt") or definition_bg.get("system_prompt") or definition_bg.get("description") or "")
+                child_config = _build_subagent_config(config, effective_def, input, context)
+                system_prompt = str(effective_def.get("prompt") or effective_def.get("system_prompt") or effective_def.get("description") or "")
                 child_agent = _create_sdk_agent(child_config, include_runtime_agent_tool=False, system_prompt=system_prompt)
                 try:
                     query_result = await _prompt_agent_with_abort(child_agent, prompt)
@@ -778,7 +867,7 @@ async def _stream_skill(config: RuntimeConfig, agent, skill_name: str, args: str
             allowed_tools=payload.get("allowedTools") if isinstance(payload.get("allowedTools"), list) else config.allowed_tools,
             persist_session=False,
         )
-        child_agent = _create_sdk_agent(child_config, include_runtime_agent_tool=True)
+        child_agent = _create_sdk_agent(child_config, include_runtime_agent_tool=False)
         try:
             async for event in child_agent.query(prompt_text):
                 if _abort_signal is not None and _abort_signal.is_set():
@@ -815,7 +904,7 @@ def build_agent_options(
     system_prompt: str = "",
 ) -> AgentOptions:
     _ensure_skills_loaded(config)
-    agent_prompt = _agent_context_prompt(config)
+    agent_prompt = _agent_context_prompt(config, include_runtime_agent_tool=include_runtime_agent_tool)
     return AgentOptions(
         api_key=config.api_key or "",
         base_url=config.base_url or "",

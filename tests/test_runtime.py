@@ -109,6 +109,21 @@ def test_build_agent_options_carries_runtime_configuration() -> None:
     assert options.extra_args == {"temperature": 0}
 
 
+def test_build_agent_options_omits_agent_tool_prompt_when_agent_tool_disabled() -> None:
+    options = build_agent_options(
+        RuntimeConfig(
+            api_key="abc",
+            base_url="https://example.test",
+            model="m1",
+            agents={"reviewer": {"description": "code reviewer"}},
+        ),
+        include_runtime_agent_tool=False,
+    )
+
+    assert "Use the Agent tool" not in options.append_system_prompt
+    assert "# Configured Agents" not in options.append_system_prompt
+
+
 def test_build_agent_options_includes_bundled_and_local_skills(tmp_path: Path) -> None:
     skill_dir = tmp_path / "skills" / "explain"
     skill_dir.mkdir(parents=True)
@@ -262,10 +277,14 @@ def test_stream_skill_events_forks_child_agent_for_forked_skills(monkeypatch) ->
             content='{"success": true, "commandName": "review", "status": "forked", "prompt": "Review changes", "model": "m-fork"}',
         )
 
-    created: list[RuntimeConfig] = []
+    created: list[tuple[RuntimeConfig, bool]] = []
 
     monkeypatch.setattr(runtime.SkillTool, "call", fake_skill_call)
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=True, system_prompt="", is_child_agent=False: created.append(config) or FakeChildAgent())
+    monkeypatch.setattr(
+        runtime,
+        "_create_sdk_agent",
+        lambda config, include_runtime_agent_tool=True, system_prompt="", is_child_agent=False: created.append((config, include_runtime_agent_tool)) or FakeChildAgent(),
+    )
 
     async def collect_events():
         return [
@@ -281,7 +300,8 @@ def test_stream_skill_events_forks_child_agent_for_forked_skills(monkeypatch) ->
     events = asyncio.run(collect_events())
 
     assert [event.type for event in events] == [SDKMessageType.SYSTEM, SDKMessageType.SYSTEM, SDKMessageType.RESULT, SDKMessageType.SYSTEM]
-    assert created[0].model == "m-fork"
+    assert created[0][0].model == "m-fork"
+    assert created[0][1] is False
     assert events[0].system_data["activity_trace"] == [
         {"action": "Resolved subagent", "tool": "Skill", "target": "review (forked)"}
     ]
@@ -592,6 +612,50 @@ def test_run_subagent_background_surfaces_completion_via_task_store(monkeypatch)
     assert "Outcome: background done" in str(note["output"])
 
 
+def test_run_subagent_background_uses_tool_result_text_when_assistant_text_missing(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="",
+                messages=[
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "tool_use", "id": "tool_1", "name": "Read", "input": {"filePath": "src/a.py"}}],
+                    },
+                    {
+                        "role": "user",
+                        "content": [{"type": "tool_result", "tool_use_id": "tool_1", "content": "src/a.py\nFound review target"}],
+                    },
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
+
+    async def run_case():
+        result = await runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"builder": {"description": "build agent"}}),
+            {"name": "builder", "prompt": "do work", "description": "builder", "run_in_background": True},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+        assert result.is_error is False
+        tasks = get_all_tasks()
+        task_id = next(iter(tasks))
+        for _ in range(50):
+            if tasks[task_id]["status"] == "completed":
+                break
+            await asyncio.sleep(0)
+        assert tasks[task_id]["status"] == "completed"
+        assert "src/a.py" in tasks[task_id]["output"]
+        assert "Found review target" in tasks[task_id]["output"]
+
+    asyncio.run(run_case())
+
+
 def test_update_background_subagent_task_strips_ansi_output() -> None:
     async def run_case():
         task_id = await runtime._create_background_subagent_task("builder", "do work", "/tmp/project", {})
@@ -764,16 +828,30 @@ def test_run_subagent_background_preserves_multiline_assistant_report(monkeypatc
     asyncio.run(run_case())
 
 
-def test_run_subagent_background_does_not_create_task_for_unknown_agent() -> None:
+def test_run_subagent_background_falls_back_to_default_agent_for_unknown_name() -> None:
     async def run_case():
         result = await runtime._run_subagent(
             RuntimeConfig(model="m1"),
             {"name": "task1", "prompt": "check some files", "description": "task1", "run_in_background": True},
             ToolContext(cwd="/tmp/project", env={}),
         )
-        assert result.is_error is True
-        assert "unknown agent 'task1'" in str(result.content)
-        assert get_all_tasks() == {}
+        assert result.is_error is False
+        assert "Created task" in str(result.content)
+        assert get_all_tasks() != {}
+
+    asyncio.run(run_case())
+
+
+def test_run_subagent_background_uses_default_agent_over_prompt_inferred_skill_when_named_agent_missing() -> None:
+    async def run_case():
+        result = await runtime._run_subagent(
+            RuntimeConfig(model="m1", skills_dir="skills"),
+            {"name": "reviewer", "prompt": "review any file", "description": "reviewer", "run_in_background": True},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+        assert result.is_error is False
+        assert "Created task" in str(result.content)
+        assert get_all_tasks() != {}
 
     asyncio.run(run_case())
 
@@ -1033,6 +1111,43 @@ def test_run_subagent_routes_review_like_prompt_to_review_skill(monkeypatch) -> 
     assert "Outcome: reviewed the changes" in str(result.content)
 
 
+def test_run_subagent_prefers_explicit_named_agent_over_prompt_inferred_skill(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str, overrides=None):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="agent reviewer output",
+                messages=[
+                    {"role": "assistant", "content": [{"type": "text", "text": "Outcome: agent reviewer output"}]},
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_skill_call(self, input, context):
+        raise AssertionError("prompt-inferred skill should not override explicit named agent")
+
+    monkeypatch.setattr(runtime.SkillTool, "call", fake_skill_call)
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
+
+    result = asyncio.run(
+        runtime._run_subagent(
+            RuntimeConfig(
+                model="m1",
+                skills_dir="skills",
+                agents={"reviewer": {"description": "reviews files"}},
+            ),
+            {"name": "reviewer", "prompt": "review any file", "description": "reviewer"},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+    )
+
+    assert result.is_error is False
+    assert "agent reviewer output" in str(result.content)
+
+
 def test_run_subagent_summary_shows_first_meaningful_line_from_result_text(monkeypatch) -> None:
     class FakeChildAgent:
         async def prompt(self, prompt: str, overrides=None):
@@ -1077,34 +1192,34 @@ def test_run_subagent_summary_shows_first_meaningful_line_from_result_text(monke
     assert "Let me check" in str(result.content)
 
 
-def test_run_subagent_summary_uses_first_meaningful_line_from_messages(monkeypatch) -> None:
-    class FakeChildAgent:
-        async def prompt(self, prompt: str, overrides=None):
-            from open_agent_sdk.types import QueryResult
+def test_run_subagent_summary_uses_last_meaningful_line_from_messages(monkeypatch) -> None:
+        class FakeChildAgent:
+            async def prompt(self, prompt: str, overrides=None):
+                from open_agent_sdk.types import QueryResult
 
-            return QueryResult(
-                text="",
-                messages=[
-                    {"role": "assistant", "content": [{"type": "text", "text": "Let me inspect the code first."}]},
-                    {"role": "assistant", "content": [{"type": "text", "text": "reviewed the rendering and team modules"}]},
-                ],
+                return QueryResult(
+                    text="",
+                    messages=[
+                        {"role": "assistant", "content": [{"type": "text", "text": "Let me inspect the code first."}]},
+                        {"role": "assistant", "content": [{"type": "text", "text": "reviewed the rendering and team modules"}]},
+                    ],
+                )
+
+            async def close(self) -> None:
+                return None
+
+        monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
+        monkeypatch.setattr(runtime, "_resolve_subagent_skill_request", lambda config, input: None)
+
+        result = asyncio.run(
+            runtime._run_subagent(
+                RuntimeConfig(model="m1", agents={"task": {"description": "review agent"}}),
+                {"name": "task", "prompt": "review modules", "description": "task"},
+                ToolContext(cwd="/tmp/project", env={}),
             )
-
-        async def close(self) -> None:
-            return None
-
-    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
-    monkeypatch.setattr(runtime, "_resolve_subagent_skill_request", lambda config, input: None)
-
-    result = asyncio.run(
-        runtime._run_subagent(
-            RuntimeConfig(model="m1", agents={"task": {"description": "review agent"}}),
-            {"name": "task", "prompt": "review modules", "description": "task"},
-            ToolContext(cwd="/tmp/project", env={}),
         )
-    )
-    text = str(result.content)
-    assert "Let me inspect the code first" in text
+        text = str(result.content)
+        assert "reviewed the rendering and team modules" in text
 
 
 def test_run_subagent_summary_shows_agent_output_when_result_text_is_present(monkeypatch) -> None:
@@ -1153,6 +1268,41 @@ def test_run_subagent_summary_shows_agent_output_when_result_text_is_present(mon
     assert "Let me also check" in text
 
 
+def test_run_subagent_files_only_output_falls_back_to_full_text(monkeypatch) -> None:
+    class FakeChildAgent:
+        async def prompt(self, prompt: str, overrides=None):
+            from open_agent_sdk.types import QueryResult
+
+            text = "Files: src/a.py\nCommands: pytest tests/test_a.py -q"
+            return QueryResult(
+                text=text,
+                messages=[
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": text}],
+                    }
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeChildAgent())
+    monkeypatch.setattr(runtime, "_resolve_subagent_skill_request", lambda config, input: None)
+
+    result = asyncio.run(
+        runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"task": {"description": "review agent"}}),
+            {"name": "task", "prompt": "review modules", "description": "task"},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+    )
+
+    text = str(result.content)
+    assert "Files: src/a.py" in text
+    assert "Commands: pytest tests/test_a.py -q" in text
+
+
 def test_run_subagent_summary_trims_planning_tail_from_outcome(monkeypatch) -> None:
     class FakeChildAgent:
         async def prompt(self, prompt: str, overrides=None):
@@ -1190,7 +1340,7 @@ def test_run_subagent_summary_trims_planning_tail_from_outcome(monkeypatch) -> N
     assert "I found a critical issue" in text
 
 
-def test_run_subagent_summary_prefers_earlier_useful_text_over_later_planning(monkeypatch) -> None:
+def test_run_subagent_summary_prefers_later_conclusion_over_earlier_planning(monkeypatch) -> None:
     class FakeChildAgent:
         async def prompt(self, prompt: str, overrides=None):
             from open_agent_sdk.types import QueryResult
@@ -1233,7 +1383,7 @@ def test_run_subagent_summary_prefers_earlier_useful_text_over_later_planning(mo
         )
     )
     text = str(result.content)
-    assert "I reviewed the transport tests and found no critical issues" in text
+    assert "Let me also inspect the remaining modules" in text
 
 
 def test_run_subagent_summary_skips_generic_review_intro_and_uses_follow_up_finding(monkeypatch) -> None:
@@ -2307,7 +2457,6 @@ def test_runtime_agent_tool_rejects_when_team_active():
 def test_runtime_agent_tool_redirects_to_team_dispatch_for_member():
     from rooster_code.runtime_tools import RuntimeAgentTool, TurnTracker
     from rooster_code.team import set_runtime_team_bridge, TeamManager, AgentPool
-    from unittest.mock import AsyncMock
 
     tracker = TurnTracker()
 
@@ -2321,7 +2470,14 @@ def test_runtime_agent_tool_redirects_to_team_dispatch_for_member():
     team_manager._team_id = "test"
     team_manager._team_name = "test-team"
     pool = AgentPool()
-    pool._members["reviewer"] = AsyncMock()
+
+    class FakeMemberAgent:
+        async def prompt(self, prompt: str, overrides: dict[str, object] | None = None):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(text="done", messages=[])
+
+    pool._members["reviewer"] = FakeMemberAgent()
     pool._mailboxes["reviewer"] = asyncio.Queue()
     pool._locks["reviewer"] = asyncio.Lock()
     team_manager._pool = pool
@@ -2329,7 +2485,7 @@ def test_runtime_agent_tool_redirects_to_team_dispatch_for_member():
     set_runtime_team_bridge(team_manager, None)
     try:
         import unittest.mock
-        with unittest.mock.patch("rooster_code.runtime._create_background_subagent_task", new_callable=AsyncMock) as mock_create:
+        with unittest.mock.patch("rooster_code.runtime._create_background_subagent_task", new_callable=unittest.mock.AsyncMock) as mock_create:
             mock_create.return_value = "task-redirect-1"
             result = asyncio.run(tool.call(
                 {"prompt": "review the code", "description": "review", "name": "reviewer"},
