@@ -894,6 +894,21 @@ def test_run_subagent_background_uses_default_agent_over_prompt_inferred_skill_w
     asyncio.run(run_case())
 
 
+def test_run_subagent_foreground_unknown_agent_lists_available() -> None:
+    async def run_case():
+        result = await runtime._run_subagent(
+            RuntimeConfig(model="m1", agents={"builder": {"description": "build agent"}, "reviewer": {"description": "review agent"}}),
+            {"name": "unknown_agent", "prompt": "do something", "description": "unknown_agent"},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+        assert result.is_error is True
+        assert "unknown agent 'unknown_agent'" in str(result.content)
+        assert "builder" in str(result.content)
+        assert "reviewer" in str(result.content)
+
+    asyncio.run(run_case())
+
+
 def test_run_subagent_background_matches_agent_name_case_insensitively(monkeypatch) -> None:
     class FakeChildAgent:
         async def prompt(self, prompt: str, overrides=None):

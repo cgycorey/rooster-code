@@ -613,8 +613,9 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
                 definition = default_def
             else:
                 return ToolResult(tool_use_id="", content="Error: no agents configured", is_error=True)
-        elif _effective_agents(config):
-            return ToolResult(tool_use_id="", content=f"Error: unknown agent '{agent_name or 'unspecified'}'", is_error=True)
+        elif agents := _effective_agents(config):
+            available = ", ".join(agents) or "none"
+            return ToolResult(tool_use_id="", content=f"Error: unknown agent '{agent_name or 'unspecified'}'. Available agents: {available}", is_error=True)
         else:
             return ToolResult(tool_use_id="", content="Error: no agents configured", is_error=True)
 

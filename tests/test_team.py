@@ -1252,6 +1252,55 @@ def test_team_manager_send_message_after_create_team_auto_dispatches():
     asyncio.run(_run())
 
 
+def test_team_manager_prompt_removes_agent_guidance_from_original_prompt():
+    async def _run():
+        manager = TeamManager()
+        config = _make_config()
+        fake_agent = FakeAgent()
+
+        class FakeTool:
+            def __init__(self, name: str):
+                self._name = name
+
+            @property
+            def name(self) -> str:
+                return self._name
+
+        orchestrator = MagicMock()
+        orchestrator._options.append_system_prompt = "\n".join(
+            [
+                "# Tool Use Guidance",
+                "If the user asks to use a named skill and it appears under Available Skills, call the Skill tool once.",
+                "If work is multi-step, exploratory, or likely to benefit from parallelism, use the Agent tool with a concise description and prompt. Set run_in_background=true when the user can continue while it works.",
+                "If a background task is assigned, do not duplicate the same work yourself unless it fails.",
+                "If a team is active, prefer TeamDispatch for assigning work to members; use SendMessage only for coordination.",
+                "# Configured Agents",
+                "Use the Agent tool with the agent name when delegation is helpful.",
+            ]
+        )
+        orchestrator._tool_pool = [FakeTool("Read"), FakeTool("Agent"), FakeTool("TeamCreate"), FakeTool("TeamDelete")]
+
+        async def fake_create_member(self, name, definition, config, abort_signal=None):
+            self._members[name] = fake_agent
+            self._mailboxes[name] = asyncio.Queue()
+            self._locks[name] = asyncio.Lock()
+
+        import unittest.mock
+        with unittest.mock.patch.object(AgentPool, "create_member", fake_create_member):
+            await manager.create_team("dev-team", ["reviewer"], config, orchestrator)
+
+        prompt = orchestrator._options.append_system_prompt
+        assert "call the Skill tool once" in prompt
+        assert "prefer TeamDispatch" in prompt
+        assert "multi-step, exploratory" not in prompt
+        assert "run_in_background" not in prompt
+        assert "do not duplicate" not in prompt
+        assert "# Configured Agents" not in prompt
+        assert "Use the Agent tool with the agent name" not in prompt
+
+    asyncio.run(_run())
+
+
 def test_team_manager_ensure_orchestrator_team_state_reapplies_after_reset():
     async def _run():
         manager = TeamManager()

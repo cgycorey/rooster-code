@@ -314,6 +314,30 @@ def _compact_task_output(output: str, max_chars: int = 240) -> str:
     from rooster_code.runtime import sanitize_task_output
 
     output = sanitize_task_output(output)
+    lines = [line.strip() for line in output.splitlines()]
+
+    for index, line in enumerate(lines):
+        if not line.lower().startswith("**top-level files:**"):
+            continue
+        table_rows: list[str] = []
+        for row in lines[index + 1 :]:
+            if not row:
+                if table_rows:
+                    break
+                continue
+            if row.startswith("|") and row.endswith("|"):
+                if row == "|------|------|":
+                    continue
+                if row.lower() == "| file | size |":
+                    continue
+                table_rows.append(row)
+                continue
+            if table_rows:
+                break
+        if table_rows:
+            summary = " ".join(table_rows)
+            return summary if len(summary) <= max_chars else f"{summary[:max_chars].rstrip()}..."
+
     for line in reversed(output.splitlines()):
         line = line.strip()
         if line and line not in {"---", "***"} and not re.fullmatch(r"#+", line):

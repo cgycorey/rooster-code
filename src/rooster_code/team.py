@@ -273,10 +273,28 @@ class TeamManager:
             "Do not also perform the same work yourself unless the member fails, stops, or you are explicitly taking over.",
         ]
         if original:
-            sanitized = "\n".join(
-                line for line in original.splitlines()
-                if "Use the Agent tool" not in line and "Agent tool or a background task" not in line
-            ).strip()
+            sanitized_lines: list[str] = []
+            skip_configured_agents = False
+            for line in original.splitlines():
+                stripped = line.strip()
+                if stripped == "# Configured Agents":
+                    skip_configured_agents = True
+                    continue
+                if skip_configured_agents:
+                    if stripped.startswith("# "):
+                        skip_configured_agents = False
+                    else:
+                        continue
+                lower = line.lower()
+                if (
+                    "use the agent tool" in lower
+                    or "agent tool or a background task" in lower
+                    or "run_in_background" in lower
+                    or "do not duplicate" in lower
+                ):
+                    continue
+                sanitized_lines.append(line)
+            sanitized = "\n".join(sanitized_lines).strip()
             if sanitized:
                 lines.insert(0, sanitized)
                 lines.insert(1, "")

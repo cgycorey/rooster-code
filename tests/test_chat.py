@@ -566,6 +566,23 @@ def test_compact_task_output_shows_agent_output_with_now_prefix() -> None:
     assert "detailed security analysis" in summary
 
 
+def test_compact_task_output_prefers_file_table_over_trailing_directory_line() -> None:
+    output = (
+        "**Top-level files:**\n\n"
+        "| File | Size |\n"
+        "|------|------|\n"
+        "| `.env` | 205 bytes |\n"
+        "| `pyproject.toml` | 566 bytes |\n\n"
+        "**Top-level directories:** `src`, `tests`, `.venv`"
+    )
+
+    summary = cli._compact_task_output(output)
+
+    assert ".env" in summary
+    assert "pyproject.toml" in summary
+    assert "Top-level directories" not in summary
+
+
 def test_run_chat_shows_background_completion_before_prompt(monkeypatch) -> None:
     rendered: list[str] = []
 
