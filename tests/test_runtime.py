@@ -124,6 +124,44 @@ def test_build_agent_options_omits_agent_tool_prompt_when_agent_tool_disabled() 
     assert "# Configured Agents" not in options.append_system_prompt
 
 
+def test_build_agent_options_limits_tool_use_guidance_when_agent_tool_disabled() -> None:
+    options = build_agent_options(
+        RuntimeConfig(
+            api_key="abc",
+            base_url="https://example.test",
+            model="m1",
+            agents={"reviewer": {"description": "code reviewer"}},
+        ),
+        include_runtime_agent_tool=False,
+    )
+
+    prompt = options.append_system_prompt
+    assert "# Tool Use Guidance" in prompt
+    assert "call the Skill tool once" in prompt
+    assert "use the Agent tool" not in prompt
+    assert "run_in_background=true" not in prompt
+    assert "# Configured Agents" not in prompt
+
+
+def test_build_agent_options_includes_tool_use_guidance() -> None:
+    options = build_agent_options(
+        RuntimeConfig(
+            api_key="abc",
+            base_url="https://example.test",
+            model="m1",
+            agents={"reviewer": {"description": "code reviewer"}},
+        )
+    )
+
+    prompt = options.append_system_prompt
+    assert "# Tool Use Guidance" in prompt
+    assert "call the Skill tool once" in prompt
+    assert "use the Agent tool" in prompt
+    assert "run_in_background=true" in prompt
+    assert "do not duplicate" in prompt
+    assert "TeamDispatch" in prompt
+
+
 def test_build_agent_options_includes_bundled_and_local_skills(tmp_path: Path) -> None:
     skill_dir = tmp_path / "skills" / "explain"
     skill_dir.mkdir(parents=True)

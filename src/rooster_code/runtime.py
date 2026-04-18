@@ -324,8 +324,17 @@ def _agent_context_prompt(
 ) -> str:
     agents = _effective_agents(config)
 
-    lines: list[str] = []
+    lines: list[str] = [
+        "# Tool Use Guidance",
+        "If the user asks to use a named skill and it appears under Available Skills, call the Skill tool once with that skill name and the user's request as args. Do not call the same skill repeatedly unless the user asks to refine or retry.",
+        "If a team is active, prefer TeamDispatch for assigning work to members; use SendMessage only for coordination.",
+    ]
     if include_runtime_agent_tool and agents:
+        lines[2:2] = [
+            "If work is multi-step, exploratory, or likely to benefit from parallelism, use the Agent tool with a concise description and prompt. Set run_in_background=true when the user can continue while it works.",
+            "If a background task is assigned, do not duplicate the same work yourself unless it fails, is cancelled, or the user explicitly asks you to take over.",
+        ]
+        lines.append("")
         lines.extend(
             [
                 "# Configured Agents",
