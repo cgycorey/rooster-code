@@ -56,6 +56,7 @@ _loaded_skills_dir: str | None = None
 _background_subagent_tasks: set[asyncio.Task[None]] = set()
 _notified_task_ids: set[str] = set()
 _notified_task_ids_lock = threading.Lock()
+_injected_task_ids_rehydrated: set[str] = set()
 _abort_signal: asyncio.Event | None = None
 _ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
@@ -195,6 +196,68 @@ def read_background_notifications() -> list[dict[str, object]]:
                     "output": str(task.get("output", "")),
                 })
     return notifications
+
+
+def rehydrate_tasks_from_history(agent) -> None:
+    """Reconstruct SDK _tasks entries from injected [Background task ...] messages in chat history.
+
+    On process restart + session resume, the SDK _tasks dict is empty because it's
+    an in-memory-only store.  Background task outputs that were injected into the
+    session transcript survive (as user/assistant message pairs), but /task-output
+    returns 'not found' because _tasks is empty.  This function scans the agent's
+    loaded history and re-creates minimal _tasks entries so /task-output works
+    after resume.
+    """
+    from open_agent_sdk.tools import _tasks, _task_counter
+    import open_agent_sdk.tools as tools_mod
+
+    history = getattr(agent, "_history", None)
+    if not isinstance(history, list):
+        return
+
+    # Pattern: [Background task {task_id} {status}]
+    _BG_TASK_RE = re.compile(r"^\[Background task (\S+) (\S+)\]")
+
+    for message in history:
+        if str(message.get("role", "")) != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            text = block.get("text", "") if isinstance(block, dict) else ""
+            for line in text.splitlines():
+                m = _BG_TASK_RE.match(line.strip())
+                if not m:
+                    continue
+                task_id = m.group(1)
+                status = m.group(2)
+                if task_id in _tasks:
+                    continue
+                if task_id in _injected_task_ids_rehydrated:
+                    continue
+                _injected_task_ids_rehydrated.add(task_id)
+                # Extract the output: everything after the header line
+                rest = text.split(line, 1)
+                output = rest[1].strip() if len(rest) > 1 else ""
+                _tasks[task_id] = {
+                    "id": task_id,
+                    "subject": task_id,
+                    "description": "rehydrated from session history",
+                    "owner": "",
+                    "status": status,
+                    "output": output,
+                    "blocked_by": [],
+                    "blocks": [],
+                }
+                # Bump the counter so new tasks don't collide
+                num = 0
+                try:
+                    num = int(task_id.split("_", 1)[1])
+                except (ValueError, IndexError):
+                    pass
+                if num > tools_mod._task_counter:
+                    tools_mod._task_counter = num
 
 
 async def start_background_agent_task(config: RuntimeConfig, agent_name: str, prompt: str) -> str:
@@ -443,9 +506,6 @@ def _collect_tool_result_text(messages: list[dict[str, Any]]) -> list[str]:
 def _format_subagent_task_output(result_text: str, messages: list[dict[str, Any]]) -> str:
     raw_text = sanitize_task_output(result_text.strip())
     if raw_text:
-        summary = _format_subagent_summary(result_text, messages)
-        if summary:
-            return summary
         return raw_text
     assistant_text = "\n\n".join(part.strip() for part in _collect_assistant_text(messages, last_only=True) if part.strip())
     if assistant_text:
@@ -714,9 +774,11 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
 
             text = query_result.text.strip() if query_result.text else ""
             summary = _format_subagent_summary(text, query_result.messages)
-            if not summary:
-                summary = _format_subagent_task_output(text, query_result.messages)
-            return ToolResult(tool_use_id="", content=summary or f'Skill "{skill_name}" completed with no text output.')
+            if summary and len(summary) >= len(text):
+                content = summary
+            else:
+                content = _format_subagent_task_output(text, query_result.messages)
+            return ToolResult(tool_use_id="", content=content)
         finally:
             await working_agent.close()
 
@@ -732,9 +794,11 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
 
     text = result.text.strip() if result.text else ""
     summary = _format_subagent_summary(text, result.messages)
-    if not summary:
-        summary = _format_subagent_task_output(text, result.messages)
-    return ToolResult(tool_use_id="", content=summary or f"Agent {agent_name} completed with no text output.")
+    if summary and len(summary) >= len(text):
+        content = summary
+    else:
+        content = _format_subagent_task_output(text, result.messages)
+    return ToolResult(tool_use_id="", content=content)
 
 
 async def _prompt_agent_with_abort(agent, prompt: str, overrides: dict[str, Any] | None = None):

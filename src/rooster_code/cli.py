@@ -668,6 +668,7 @@ async def run_chat(config) -> int:
     render_banner(console, "chat", config)
     install_search_backend(config)
     _injected_task_ids.clear()
+    _rehydrated = False
     agent = create_runtime_agent(config)
     interrupted = False
     abort_signal = asyncio.Event()
@@ -756,6 +757,12 @@ async def run_chat(config) -> int:
                     await prompt_task
 
     set_question_handler(_create_question_handler(question_session, abort_signal))
+
+    if hasattr(agent, "_initialize") and callable(agent._initialize):
+        await agent._initialize()
+    from rooster_code.runtime import rehydrate_tasks_from_history
+    rehydrate_tasks_from_history(agent)
+    _rehydrated = True
 
     try:
         while True:
@@ -862,6 +869,7 @@ async def run_chat(config) -> int:
                     await agent.close()
                 config.resume = command.args[0]
                 agent = create_runtime_agent(config)
+                _rehydrated = False
                 set_runtime_team_bridge(team_manager, agent)
                 if team_manager.is_active():
                     await team_manager.ensure_orchestrator_team_state(agent)

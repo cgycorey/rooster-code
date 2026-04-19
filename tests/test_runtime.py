@@ -566,7 +566,7 @@ def test_run_subagent_background_creates_sdk_task_and_updates_output(monkeypatch
                 break
             await asyncio.sleep(0)
         assert tasks[task_id]["status"] == "completed"
-        assert "Outcome: background done" in tasks[task_id]["output"]
+        assert "background done" in tasks[task_id]["output"]
 
     asyncio.run(run_case())
 
@@ -647,7 +647,7 @@ def test_run_subagent_background_surfaces_completion_via_task_store(monkeypatch)
     assert note["type"] == "background_task_completed"
     assert note["status"] == "completed"
     assert note["subject"] == "builder"
-    assert "Outcome: background done" in str(note["output"])
+    assert "background done" in str(note["output"])
 
 
 def test_run_subagent_background_uses_tool_result_text_when_assistant_text_missing(monkeypatch) -> None:
@@ -2566,3 +2566,121 @@ def test_runtime_agent_tool_allows_when_no_team():
     result = asyncio.run(tool.call({"prompt": "test", "description": "test"}, ToolContext(cwd=".", env={})))
     assert not result.is_error
     assert result.content == "agent ran fine"
+
+
+def test_rehydrate_tasks_from_history_reconstructs_tasks_from_injected_messages() -> None:
+    from open_agent_sdk.tools import _tasks, _task_counter
+    import open_agent_sdk.tools as tools_mod
+
+    original_tasks = dict(_tasks)
+    original_counter = tools_mod._task_counter
+    _tasks.clear()
+    tools_mod._task_counter = 0
+    runtime._injected_task_ids_rehydrated.clear()
+
+    try:
+        class FakeAgent:
+            _history = [
+                {"role": "user", "content": [{"type": "text", "text": "[Background task task_1 completed]\n\nOutcome: built the feature\nFiles: src/main.py, src/utils.py"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "Received background task task_1 result."}]},
+                {"role": "user", "content": [{"type": "text", "text": "[Background task task_2 cancelled]\n\ntimeout exceeded"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "Received background task task_2 cancellation/failure."}]},
+                {"role": "user", "content": [{"type": "text", "text": "some unrelated message"}]},
+            ]
+
+        runtime.rehydrate_tasks_from_history(FakeAgent())
+
+        assert "task_1" in _tasks
+        assert _tasks["task_1"]["status"] == "completed"
+        assert "built the feature" in _tasks["task_1"]["output"]
+        assert "src/main.py" in _tasks["task_1"]["output"]
+
+        assert "task_2" in _tasks
+        assert _tasks["task_2"]["status"] == "cancelled"
+        assert "timeout exceeded" in _tasks["task_2"]["output"]
+
+        assert tools_mod._task_counter == 2
+    finally:
+        _tasks.clear()
+        _tasks.update(original_tasks)
+        tools_mod._task_counter = original_counter
+        runtime._injected_task_ids_rehydrated.clear()
+
+
+def test_rehydrate_tasks_from_history_skips_already_present_tasks() -> None:
+    from open_agent_sdk.tools import _tasks, _task_counter
+    import open_agent_sdk.tools as tools_mod
+
+    original_tasks = dict(_tasks)
+    original_counter = tools_mod._task_counter
+    _tasks.clear()
+    tools_mod._task_counter = 0
+    runtime._injected_task_ids_rehydrated.clear()
+
+    try:
+        class FakeAgent:
+            _history = [
+                {"role": "user", "content": [{"type": "text", "text": "[Background task task_3 completed]\n\nOutcome: ran tests"}]},
+            ]
+
+        _tasks["task_3"] = {"id": "task_3", "status": "in_progress", "output": "original output", "subject": "task_3", "description": "", "owner": "", "blocked_by": [], "blocks": []}
+
+        runtime.rehydrate_tasks_from_history(FakeAgent())
+
+        assert _tasks["task_3"]["status"] == "in_progress"
+        assert _tasks["task_3"]["output"] == "original output"
+    finally:
+        _tasks.clear()
+        _tasks.update(original_tasks)
+        tools_mod._task_counter = original_counter
+        runtime._injected_task_ids_rehydrated.clear()
+
+
+def test_format_subagent_task_output_returns_full_text_not_summary() -> None:
+    long_review = (
+        "## Code Review\n\n"
+        "### Issue 1: Race condition in _injected_task_ids\n"
+        "The set check is not atomic.\n\n"
+        "### Issue 2: Missing error handling\n"
+        "Bare except clauses should catch specific exceptions.\n\n"
+        "### Issue 3: Long lines\n"
+        "Some lines exceed 100 characters.\n\n"
+        "Files: src/rooster_code/cli.py\n"
+        "Commands: ruff check --fix\n"
+        "Next step: Run the test suite\n"
+    )
+
+    messages = [
+        {"role": "assistant", "content": [{"type": "text", "text": "Outcome: Found 3 issues\n\n" + long_review}]},
+    ]
+
+    result = runtime._format_subagent_task_output(long_review, messages)
+
+    assert "### Issue 1:" in result
+    assert "### Issue 2:" in result
+    assert "### Issue 3:" in result
+    assert "Race condition" in result
+    assert "Missing error handling" in result
+
+
+def test_format_subagent_summary_still_produces_condensed_output() -> None:
+    long_review = (
+        "## Code Review\n\n"
+        "### Issue 1: Race condition\n"
+        "The set check is not atomic.\n\n"
+        "### Issue 2: Missing error handling\n"
+        "Bare except clauses.\n\n"
+        "Outcome: Found 2 issues\n"
+        "Files: src/rooster_code/cli.py\n"
+        "Commands: ruff check --fix\n"
+    )
+
+    messages = [
+        {"role": "assistant", "content": [{"type": "text", "text": long_review}]},
+    ]
+
+    summary = runtime._format_subagent_summary(long_review, messages)
+
+    assert "Outcome:" in summary
+    assert "Files:" in summary
+    assert len(summary) < len(long_review)
