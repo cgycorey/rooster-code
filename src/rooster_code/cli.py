@@ -11,7 +11,9 @@ import threading
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.shortcuts import print_formatted_text
-from prompt_toolkit.history import InMemoryHistory
+from pathlib import Path
+
+from prompt_toolkit.history import FileHistory
 from prompt_toolkit.history import History
 from prompt_toolkit.patch_stdout import patch_stdout
 
@@ -573,13 +575,16 @@ async def run_ask(prompt: str, config) -> int:
 
 
 def _trim_history(history: History, max_size: int) -> None:
-    if not isinstance(history, InMemoryHistory):
-        return
     strings = history.get_strings()
     overflow = len(strings) - max_size
-    for _ in range(max(0, overflow)):
+    if overflow <= 0:
+        return
+    for _ in range(overflow):
         if history._loaded_strings:
             history._loaded_strings.pop(0)
+    if isinstance(history, FileHistory):
+        with open(history.filename, "w") as fh:
+            fh.write("\n".join(history._loaded_strings) + "\n")
 
 
 def _handle_agents_command(console, command, config, team_manager):
@@ -676,7 +681,9 @@ async def run_chat(config) -> int:
     abort_signal = asyncio.Event()
     team_manager = TeamManager()
     set_runtime_team_bridge(team_manager, agent)
-    prompt_session: PromptSession[str] = PromptSession(history=InMemoryHistory())
+    history_path = Path.home() / ".rooster-code" / "history"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_session: PromptSession[str] = PromptSession(history=FileHistory(str(history_path)))
     question_session: PromptSession[str] = PromptSession()
     _MAX_HISTORY = 50
 
