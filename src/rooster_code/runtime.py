@@ -643,11 +643,14 @@ async def _update_background_subagent_task(task_id: str, *, status: str | None =
     await TaskUpdateTool().call(payload, ToolContext(cwd=cwd, env=env or {}))
 
 
-async def cancel_background_subagent_tasks() -> None:
-    tasks = list(_background_subagent_tasks)
-    for task in tasks:
+def _cancel_bg_tasks_sync() -> None:
+    for task in list(_background_subagent_tasks):
         task.cancel()
-    for task in tasks:
+
+
+async def cancel_background_subagent_tasks() -> None:
+    _cancel_bg_tasks_sync()
+    for task in list(_background_subagent_tasks):
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
 

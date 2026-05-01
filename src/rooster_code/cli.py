@@ -682,11 +682,12 @@ async def run_chat(config) -> int:
 
     def _cancel_query_on_sigint(signum: int, frame: object) -> None:
         nonlocal interrupted
+        from rooster_code.runtime import _cancel_bg_tasks_sync
         interrupted = True
         abort_signal.set()
         if _active_query_task is not None and not _active_query_task.done():
             _active_query_task.cancel()
-        asyncio.ensure_future(cancel_background_subagent_tasks())
+        _cancel_bg_tasks_sync()
 
     _active_query_task: asyncio.Task[None] | None = None
 
