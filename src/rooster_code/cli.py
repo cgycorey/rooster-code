@@ -690,6 +690,8 @@ async def run_chat(config) -> int:
 
     _active_query_task: asyncio.Task[None] | None = None
 
+    signal.signal(signal.SIGINT, _cancel_query_on_sigint)
+
     async def _run_query_with_interrupt(events, **kwargs) -> None:
         nonlocal interrupted, _active_query_task
         from rooster_code.runtime import set_abort_signal
