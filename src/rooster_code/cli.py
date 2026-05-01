@@ -686,12 +686,14 @@ async def run_chat(config) -> int:
         abort_signal.set()
         if _active_query_task is not None and not _active_query_task.done():
             _active_query_task.cancel()
+        asyncio.ensure_future(cancel_background_subagent_tasks())
 
     _active_query_task: asyncio.Task[None] | None = None
 
     async def _run_query_with_interrupt(events, **kwargs) -> None:
         nonlocal interrupted, _active_query_task
         from rooster_code.runtime import set_abort_signal
+        aborted = False
         abort_signal.clear()
         set_abort_signal(abort_signal)
         previous = signal.signal(signal.SIGINT, _cancel_query_on_sigint)
@@ -701,23 +703,26 @@ async def run_chat(config) -> int:
         try:
             await _active_query_task
         except asyncio.CancelledError:
-            await cancel_background_subagent_tasks()
-            if hasattr(agent, "_client") and agent._client:
-                with contextlib.suppress(Exception):
-                    await agent._client.close()
-                agent._client = None
-            if hasattr(agent, "_provider"):
-                agent._provider = None
-            if hasattr(agent, "_engine"):
-                agent._engine = None
-            agent._initialized = False
-            if team_manager.is_active():
-                await team_manager.ensure_orchestrator_team_state(agent)
-            render_notice(console, "Interrupted", "Query cancelled.", "yellow")
+            aborted = True
             interrupted = False
         except Exception as exc:
             render_notice(console, "Error", str(exc), "red")
         finally:
+            if aborted or abort_signal.is_set():
+                await cancel_background_subagent_tasks()
+                if hasattr(agent, "_client") and agent._client:
+                    with contextlib.suppress(Exception):
+                        await agent._client.close()
+                    agent._client = None
+                if hasattr(agent, "_provider"):
+                    agent._provider = None
+                if hasattr(agent, "_engine"):
+                    agent._engine = None
+                agent._initialized = False
+                if team_manager.is_active():
+                    await team_manager.ensure_orchestrator_team_state(agent)
+                render_notice(console, "Interrupted", "Query cancelled.", "yellow")
+                interrupted = False
             _active_query_task = None
             abort_signal.clear()
             set_abort_signal(None)
