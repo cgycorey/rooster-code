@@ -1548,3 +1548,20 @@ def test_run_chat_reapplies_team_state_after_interrupt(monkeypatch) -> None:
 
     assert exit_code == 0
     assert captured["ensure_calls"] == 2
+
+
+def test_compact_task_output_skips_closing_xml_tags() -> None:
+    output = (
+        "<results>\n"
+        "Found 3 issues in the module\n"
+        "1. Race condition on global state\n"
+        "2. Missing error handling in search backend\n"
+        "3. Silent exception suppression\n"
+        "</results>"
+    )
+
+    summary = cli._compact_task_output(output)
+
+    assert "3. Silent exception suppression" in summary
+    assert "</results>" not in summary
+    assert "<results>" not in summary

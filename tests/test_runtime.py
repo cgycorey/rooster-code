@@ -2684,3 +2684,42 @@ def test_format_subagent_summary_still_produces_condensed_output() -> None:
     assert "Outcome:" in summary
     assert "Files:" in summary
     assert len(summary) < len(long_review)
+
+
+def test_rehydrate_tasks_from_history_clears_stale_ids_on_reresume() -> None:
+    from open_agent_sdk.tools import _tasks, _task_counter
+    import open_agent_sdk.tools as tools_mod
+
+    original_tasks = dict(_tasks)
+    original_counter = tools_mod._task_counter
+    _tasks.clear()
+    tools_mod._task_counter = 0
+    runtime._injected_task_ids_rehydrated.clear()
+
+    try:
+        class FakeAgent:
+            _history = [
+                {"role": "user", "content": [{"type": "text", "text": "[Background task task_1 completed]\n\nResult A"}]},
+            ]
+
+        runtime.rehydrate_tasks_from_history(FakeAgent())
+        assert "task_1" in _tasks
+        assert "Result A" in _tasks["task_1"]["output"]
+
+        second_agent = FakeAgent()
+        second_agent._history = [
+            {"role": "user", "content": [{"type": "text", "text": "[Background task task_1 completed]\n\nResult B from different session"}]},
+        ]
+
+        runtime._injected_task_ids_rehydrated.clear()
+        _tasks.clear()
+        tools_mod._task_counter = 0
+
+        runtime.rehydrate_tasks_from_history(second_agent)
+        assert "task_1" in _tasks
+        assert "Result B from different session" in _tasks["task_1"]["output"]
+    finally:
+        _tasks.clear()
+        _tasks.update(original_tasks)
+        tools_mod._task_counter = original_counter
+        runtime._injected_task_ids_rehydrated.clear()

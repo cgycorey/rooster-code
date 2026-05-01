@@ -341,6 +341,8 @@ def _compact_task_output(output: str, max_chars: int = 240) -> str:
     for line in reversed(output.splitlines()):
         line = line.strip()
         if line and line not in {"---", "***"} and not re.fullmatch(r"#+", line):
+            if re.fullmatch(r"</?\w[\w-]*>", line):
+                continue
             if line.lower().startswith("outcome:"):
                 line = line.partition(":")[2].strip()
             if line:
@@ -869,7 +871,11 @@ async def run_chat(config) -> int:
                     await agent.close()
                 config.resume = command.args[0]
                 agent = create_runtime_agent(config)
-                _rehydrated = False
+                if hasattr(agent, "_initialize") and callable(agent._initialize):
+                    await agent._initialize()
+                from rooster_code.runtime import rehydrate_tasks_from_history, _injected_task_ids_rehydrated
+                _injected_task_ids_rehydrated.clear()
+                rehydrate_tasks_from_history(agent)
                 set_runtime_team_bridge(team_manager, agent)
                 if team_manager.is_active():
                     await team_manager.ensure_orchestrator_team_state(agent)

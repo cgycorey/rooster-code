@@ -428,35 +428,55 @@ class TeamManager:
             seen.add(member_name)
 
         pool = AgentPool()
-        for member_name in members:
-            definition = agents_def[member_name]
-            await pool.create_member(member_name, definition, config, abort_signal)
+        original_prompt = getattr(orchestrator._options, "append_system_prompt", "") or ""
+        original_tool_pool = list(orchestrator._tool_pool) if hasattr(orchestrator, "_tool_pool") else None
+        try:
+            for member_name in members:
+                definition = agents_def[member_name]
+                await pool.create_member(member_name, definition, config, abort_signal)
 
-        self._original_append_prompt = getattr(orchestrator._options, "append_system_prompt", "") or ""
+            self._original_append_prompt = original_prompt
+            self._original_tool_pool = original_tool_pool
 
-        if hasattr(orchestrator, "_tool_pool"):
-            self._original_tool_pool = list(orchestrator._tool_pool)
+            dispatch_tool = TeamDispatchTool(self)
+            send_tool = TeamSendMessageTool(self, sender_name="orchestrator")
+            status_tool = TeamStatusTool(self)
+            delete_tool = SDKTeamDeleteBridgeTool()
+            patch_tool_pool(
+                orchestrator,
+                add_tools=[dispatch_tool, send_tool, status_tool, delete_tool],
+                remove_names=["TeamCreate", "TeamDelete", "Agent", "SendMessage", "Read"],
+            )
 
-        dispatch_tool = TeamDispatchTool(self)
-        send_tool = TeamSendMessageTool(self, sender_name="orchestrator")
-        status_tool = TeamStatusTool(self)
-        delete_tool = SDKTeamDeleteBridgeTool()
-        patch_tool_pool(
-            orchestrator,
-            add_tools=[dispatch_tool, send_tool, status_tool, delete_tool],
-            remove_names=["TeamCreate", "TeamDelete", "Agent", "SendMessage", "Read"],
-        )
-
-        self._pool = pool
-        self._team_id = str(uuid.uuid4())[:8]
-        self._team_name = name
-        self._member_definitions = {m: dict(agents_def[m]) for m in members}
-        self._config = config
-        self._abort_signal = abort_signal
-        for member_name in members:
-            self._configure_member(member_name)
-        self._active = True
-        await self.ensure_orchestrator_team_state(orchestrator)
+            self._pool = pool
+            self._team_id = str(uuid.uuid4())[:8]
+            self._team_name = name
+            self._member_definitions = {m: dict(agents_def[m]) for m in members}
+            self._config = config
+            self._abort_signal = abort_signal
+            for member_name in members:
+                self._configure_member(member_name)
+            self._active = True
+            await self.ensure_orchestrator_team_state(orchestrator)
+        except Exception:
+            with contextlib.suppress(Exception):
+                await pool.close_all()
+            if original_tool_pool is not None and hasattr(orchestrator, "_tool_pool"):
+                orchestrator._tool_pool = list(original_tool_pool)
+                _sync_engine_tool_state(orchestrator)
+            if hasattr(orchestrator, "_options"):
+                orchestrator._options.append_system_prompt = original_prompt
+            self._pool = None
+            self._team_id = ""
+            self._team_name = ""
+            self._member_definitions = {}
+            self._config = None
+            self._abort_signal = None
+            self._recovery_locks = {}
+            self._original_tool_pool = None
+            self._original_append_prompt = ""
+            self._active = False
+            raise
 
     async def dispatch(self, member: str, task: str) -> str:
         if not self._active or self._pool is None:
@@ -842,6 +862,7 @@ class SDKTeamCreateBridgeTool(BaseTool):
         team_description = str(input.get("description", "")).strip()
         if not isinstance(getattr(config, "agents", None), dict):
             config.agents = {}
+        materialized_members: list[str] = []
         for member_name in member_names:
             if member_name in config.agents:
                 continue
@@ -853,9 +874,12 @@ class SDKTeamCreateBridgeTool(BaseTool):
                     f"Team purpose: {team_description or 'Collaborate with the orchestrator on assigned tasks.'}"
                 ),
             }
+            materialized_members.append(member_name)
         try:
             await team_manager.create_team(team_name, member_names, config, orchestrator, abort_signal)
         except Exception as exc:
+            for member_name in materialized_members:
+                config.agents.pop(member_name, None)
             return ToolResult(tool_use_id="", content=f"Error: {exc}", is_error=True)
         return ToolResult(
             tool_use_id="",

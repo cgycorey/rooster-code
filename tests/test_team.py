@@ -688,6 +688,40 @@ def test_sdk_team_create_bridge_tool_materializes_missing_agent_definitions():
     asyncio.run(_run())
 
 
+def test_sdk_team_create_bridge_tool_rolls_back_materialized_agents_on_failure():
+    async def _run():
+        manager = TeamManager()
+        config = RuntimeConfig(model="test-model", api_key="test", base_url="https://example.test", agents={})
+        abort_signal = asyncio.Event()
+
+        orchestrator = MagicMock()
+        orchestrator._options.abort_signal = abort_signal
+        orchestrator._options.append_system_prompt = "original prompt"
+        orchestrator._tool_pool = []
+        orchestrator._rooster_code_config = config
+
+        async def fake_create_member(self, name, definition, config, abort_signal=None):
+            raise RuntimeError("member failed to initialize")
+
+        import unittest.mock
+        with unittest.mock.patch.object(AgentPool, "create_member", fake_create_member):
+            set_runtime_team_bridge(manager, orchestrator)
+            try:
+                tool = SDKTeamCreateBridgeTool()
+                result = await tool.call(
+                    {"name": "review-team", "description": "Review changed files", "members": ["reviewer-1"]},
+                    ToolContext(cwd=".", env={}),
+                )
+            finally:
+                set_runtime_team_bridge(None, None)
+
+        assert result.is_error
+        assert not manager.is_active()
+        assert config.agents == {}
+
+    asyncio.run(_run())
+
+
 def test_sdk_team_delete_bridge_tool_deletes_persistent_team():
     async def _run():
         manager = TeamManager()
@@ -771,6 +805,78 @@ def test_team_manager_create_team_too_many_members():
     config = RuntimeConfig(model="m", agents=agents)
     with pytest.raises(RuntimeError, match="more than"):
         asyncio.run(manager.create_team("team1", list(agents.keys()), config, MagicMock()))
+
+
+def test_team_manager_create_team_closes_partial_pool_on_member_creation_failure():
+    async def _run():
+        manager = TeamManager()
+        config = _make_config({
+            "reviewer": {"description": "reviews"},
+            "builder": {"description": "builds"},
+        })
+        created_agent = FakeAgent()
+
+        async def fake_create_member(self, name, definition, config, abort_signal=None):
+            if name == "builder":
+                raise RuntimeError("builder failed to initialize")
+            self._members[name] = created_agent
+            self._mailboxes[name] = asyncio.Queue()
+            self._locks[name] = asyncio.Lock()
+
+        import unittest.mock
+        with unittest.mock.patch.object(AgentPool, "create_member", fake_create_member):
+            with pytest.raises(RuntimeError, match="builder failed"):
+                await manager.create_team("team1", ["reviewer", "builder"], config, MagicMock())
+
+        assert not manager.is_active()
+        assert manager._pool is None
+        assert created_agent._closed is True
+
+    asyncio.run(_run())
+
+
+def test_team_manager_create_team_restores_state_when_partial_pool_cleanup_fails():
+    async def _run():
+        manager = TeamManager()
+        config = _make_config({
+            "reviewer": {"description": "reviews"},
+            "builder": {"description": "builds"},
+        })
+
+        class FakeTool:
+            def __init__(self, name: str):
+                self._name = name
+
+            @property
+            def name(self) -> str:
+                return self._name
+
+        orchestrator = MagicMock()
+        orchestrator._options.append_system_prompt = "original prompt"
+        orchestrator._tool_pool = [FakeTool("Read"), FakeTool("Agent"), FakeTool("TeamCreate")]
+
+        async def fake_create_member(self, name, definition, config, abort_signal=None):
+            if name == "builder":
+                raise RuntimeError("builder failed to initialize")
+            self._members[name] = FakeAgent()
+            self._mailboxes[name] = asyncio.Queue()
+            self._locks[name] = asyncio.Lock()
+
+        async def failing_close_all(self):
+            raise RuntimeError("cleanup failed")
+
+        import unittest.mock
+        with unittest.mock.patch.object(AgentPool, "create_member", fake_create_member):
+            with unittest.mock.patch.object(AgentPool, "close_all", failing_close_all):
+                with pytest.raises(RuntimeError, match="builder failed"):
+                    await manager.create_team("team1", ["reviewer", "builder"], config, orchestrator)
+
+        assert not manager.is_active()
+        assert manager._pool is None
+        assert orchestrator._options.append_system_prompt == "original prompt"
+        assert [tool.name for tool in orchestrator._tool_pool] == ["Read", "Agent", "TeamCreate"]
+
+    asyncio.run(_run())
 
 
 def test_team_manager_dispatch_no_active_team():
