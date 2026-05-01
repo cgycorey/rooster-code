@@ -712,6 +712,8 @@ async def run_chat(config) -> int:
             render_notice(console, "Error", str(exc), "red")
         finally:
             if aborted or abort_signal.is_set():
+                render_notice(console, "Interrupted", "Query cancelled.", "yellow")
+                interrupted = False
                 await cancel_background_subagent_tasks()
                 if hasattr(agent, "_client") and agent._client:
                     with contextlib.suppress(Exception):
@@ -724,8 +726,6 @@ async def run_chat(config) -> int:
                 agent._initialized = False
                 if team_manager.is_active():
                     await team_manager.ensure_orchestrator_team_state(agent)
-                render_notice(console, "Interrupted", "Query cancelled.", "yellow")
-                interrupted = False
             _active_query_task = None
             abort_signal.clear()
             set_abort_signal(None)
