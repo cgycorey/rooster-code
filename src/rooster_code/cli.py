@@ -701,6 +701,7 @@ async def run_chat(config) -> int:
         try:
             await _active_query_task
         except asyncio.CancelledError:
+            await cancel_background_subagent_tasks()
             if hasattr(agent, "_client") and agent._client:
                 with contextlib.suppress(Exception):
                     await agent._client.close()
