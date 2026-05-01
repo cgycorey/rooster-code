@@ -780,6 +780,7 @@ async def run_chat(config) -> int:
             if interrupted:
                 if _active_query_task is not None and not _active_query_task.done():
                     break
+                render_notice(console, "Cancelled", "Background tasks cancelled.", "yellow")
                 interrupted = False
             _poll_and_render_notifications()
             try:
