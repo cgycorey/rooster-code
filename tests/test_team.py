@@ -286,7 +286,50 @@ def test_agent_pool_close_all():
     assert len(pool._mailboxes) == 0
     assert len(pool._locks) == 0
     assert len(pool._unhealthy) == 0
+    assert len(pool._dispatch_tasks) == 0
     assert len(pool._message_dispatch_tasks) == 0
+
+
+def test_agent_pool_close_all_cancels_in_flight_dispatch():
+    async def _run():
+        clear_tasks()
+        pool = AgentPool()
+        fake_agent = FakeAgent(responses=["LGTM"])
+
+        pool._members["reviewer"] = fake_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+
+        cancelled_outputs: list[tuple[str, str]] = []
+
+        async def _slow_dispatch():
+            try:
+                await asyncio.sleep(9999)
+                cancelled_outputs.append(("status", "completed"))
+            except asyncio.CancelledError:
+                cancelled_outputs.append(("status", "cancelled"))
+                raise
+
+        import unittest.mock
+        with unittest.mock.patch("rooster_code.runtime._update_background_subagent_task", new_callable=unittest.mock.AsyncMock) as mock_update:
+            with unittest.mock.patch("rooster_code.runtime._track_background_task"):
+                task_handle = asyncio.create_task(_slow_dispatch())
+                task_handle.add_done_callback(pool._dispatch_tasks.discard)
+                pool._dispatch_tasks.add(task_handle)
+                pool._busy.add("reviewer")
+                await asyncio.sleep(0)
+
+                await pool.close_all()
+
+        mock_update.assert_not_called()
+        assert cancelled_outputs == [("status", "cancelled")]
+        assert len(pool._dispatch_tasks) == 0
+        assert len(pool._busy) == 0
+        assert len(pool._members) == 0
+
+        clear_tasks()
+
+    asyncio.run(_run())
 
 
 def test_agent_pool_clear_histories():

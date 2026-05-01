@@ -1048,14 +1048,23 @@ def _create_sdk_agent(
             query_task = asyncio.create_task(pump_query())
             activity_task = asyncio.create_task(tracker.next_activity())
             event_task = asyncio.create_task(event_queue.get())
+            abort_task: asyncio.Task[bool] | None = None
             try:
                 while True:
                     if _abort_signal is not None and _abort_signal.is_set():
                         break
+                    wait_tasks: set[asyncio.Task[object]] = {activity_task, event_task}
+                    if _abort_signal is not None:
+                        if abort_task is None:
+                            abort_task = asyncio.create_task(_abort_signal.wait())
+                        wait_tasks.add(abort_task)
                     done, _pending = await asyncio.wait(
-                        {activity_task, event_task},
+                        wait_tasks,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
+
+                    if abort_task is not None and abort_task in done:
+                        break
 
                     if activity_task in done:
                         activity = activity_task.result()
@@ -1093,6 +1102,10 @@ def _create_sdk_agent(
                     task.cancel()
                     with contextlib.suppress(asyncio.CancelledError, Exception):
                         await task
+                if abort_task is not None:
+                    abort_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await abort_task
 
         setattr(agent, "query", wrapped_query)
 

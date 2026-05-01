@@ -45,6 +45,7 @@ class AgentPool:
         self._locks: dict[str, asyncio.Lock] = {}
         self._unhealthy: set[str] = set()
         self._busy: set[str] = set()
+        self._dispatch_tasks: set[asyncio.Task[None]] = set()
         self._message_dispatch_tasks: set[asyncio.Task[None]] = set()
 
     @property
@@ -163,6 +164,8 @@ class AgentPool:
                 self._busy.discard(member)
 
         task_handle = asyncio.create_task(_run_member())
+        task_handle.add_done_callback(self._dispatch_tasks.discard)
+        self._dispatch_tasks.add(task_handle)
         _track_background_task(task_handle)
         return task_id
 
@@ -222,8 +225,10 @@ class AgentPool:
         return f"{header}\n\n{task}"
 
     async def close_all(self) -> None:
-        for task in list(self._message_dispatch_tasks):
+        all_tasks = list(self._dispatch_tasks) + list(self._message_dispatch_tasks)
+        for task in all_tasks:
             task.cancel()
+        for task in all_tasks:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
         for agent in self._members.values():
@@ -232,6 +237,7 @@ class AgentPool:
         self._members.clear()
         self._mailboxes.clear()
         self._locks.clear()
+        self._dispatch_tasks.clear()
         self._message_dispatch_tasks.clear()
         self._unhealthy.clear()
         self._busy.clear()
