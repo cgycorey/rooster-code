@@ -163,10 +163,14 @@ class AgentPool:
             finally:
                 self._busy.discard(member)
 
-        task_handle = asyncio.create_task(_run_member())
-        task_handle.add_done_callback(self._dispatch_tasks.discard)
-        self._dispatch_tasks.add(task_handle)
-        _track_background_task(task_handle)
+        try:
+            task_handle = asyncio.create_task(_run_member())
+            task_handle.add_done_callback(self._dispatch_tasks.discard)
+            self._dispatch_tasks.add(task_handle)
+            _track_background_task(task_handle)
+        except Exception:
+            self._busy.discard(member)
+            raise
         return task_id
 
     def send_message(self, to: str, message: dict[str, str]) -> None:
@@ -372,16 +376,30 @@ class TeamManager:
 
             previous_agent = self._pool._members.get(member_name)
             previous_mailbox = self._pool._mailboxes.get(member_name)
+            previous_lock = self._pool._locks.get(member_name)
 
             definition = self._member_definitions[member_name]
-            await self._pool.create_member(member_name, definition, self._config, self._abort_signal)
-            new_mailbox = self._pool._mailboxes.get(member_name)
-            if previous_mailbox is not None and new_mailbox is not None:
-                while not previous_mailbox.empty():
-                    new_mailbox.put_nowait(previous_mailbox.get_nowait())
-            self._configure_member(member_name)
-            # Agent is fully initialized and ready; now clear the unhealthy flag
-            # so dispatch can proceed without racing against an incompletely-recovered agent.
+            new_agent = None
+            try:
+                await self._pool.create_member(member_name, definition, self._config, self._abort_signal)
+                new_agent = self._pool._members.get(member_name)
+                new_mailbox = self._pool._mailboxes.get(member_name)
+                if previous_mailbox is not None and new_mailbox is not None:
+                    while not previous_mailbox.empty():
+                        new_mailbox.put_nowait(previous_mailbox.get_nowait())
+                self._configure_member(member_name)
+            except Exception:
+                if previous_agent is not None:
+                    self._pool._members[member_name] = previous_agent
+                if previous_mailbox is not None:
+                    self._pool._mailboxes[member_name] = previous_mailbox
+                if previous_lock is not None:
+                    self._pool._locks[member_name] = previous_lock
+                if new_agent is not None:
+                    with contextlib.suppress(Exception):
+                        await new_agent.close()
+                raise
+
             self._pool._unhealthy.discard(member_name)
             self._pool._busy.discard(member_name)
             if previous_agent is not None:
