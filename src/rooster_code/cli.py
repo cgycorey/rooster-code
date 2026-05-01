@@ -345,7 +345,7 @@ def _compact_task_output(output: str, max_chars: int = 240) -> str:
                 continue
             if line.lower().startswith("outcome:"):
                 line = line.partition(":")[2].strip()
-            if line:
+            if line and not re.match(r"(?i)(note|n\.?b\.?|tip|hint)\b", line):
                 return line if len(line) <= max_chars else f"{line[:max_chars].rstrip()}..."
     return "No useful output returned"
 
