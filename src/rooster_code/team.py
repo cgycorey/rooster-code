@@ -36,6 +36,21 @@ def get_runtime_team_bridge() -> tuple["TeamManager | None", Any | None]:
     return _runtime_team_manager, _runtime_orchestrator
 
 
+def _load_review_guidance() -> str:
+    from pathlib import Path
+
+    skill_file = Path(__file__).resolve().parent.parent.parent / "skills" / "review" / "SKILL.md"
+    try:
+        return skill_file.read_text(encoding="utf-8").strip() + "\n\n"
+    except Exception:
+        return ""
+
+
+_REVIEW_GUIDANCE = _load_review_guidance()
+
+_REVIEW_KEYWORDS = ("review", "audit", "inspect", "check", "examin", "assess", "evaluat")
+
+
 class AgentPool:
     """Manages a pool of persistent Agent instances keyed by member name."""
 
@@ -126,7 +141,10 @@ class AgentPool:
             try:
                 async with self._locks[member]:
                     agent = self._members[member]
-                    task_with_messages = self._inject_mailbox(member, task)
+                    task_text = task
+                    if any(kw in task.lower() for kw in _REVIEW_KEYWORDS):
+                        task_text = _REVIEW_GUIDANCE + task
+                    task_with_messages = self._inject_mailbox(member, task_text)
                     try:
                         query_result = await agent.prompt(task_with_messages)
                     except Exception as exc:
