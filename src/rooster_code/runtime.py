@@ -1305,10 +1305,15 @@ async def compact_current_session(agent) -> dict[str, object]:
             "reason": "Need at least two messages before compaction.",
         }
 
-    summary, compacted_history = await _compact_with_provider(agent, compactable_history)
-    agent._history = compacted_history
-    after_tokens = estimate_messages_tokens(compacted_history)
+    pre_compaction_history = list(agent._history)
+    try:
+        summary, compacted_history = await _compact_with_provider(agent, compactable_history)
+        after_tokens = estimate_messages_tokens(compacted_history)
+    except Exception:
+        agent._history = pre_compaction_history
+        raise
 
+    agent._history = compacted_history
     compacted = after_tokens < before_tokens
     return {
         "compacted": compacted,
