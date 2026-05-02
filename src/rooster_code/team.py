@@ -41,7 +41,12 @@ def _load_review_guidance() -> str:
 
     skill_file = Path(__file__).resolve().parent.parent.parent / "skills" / "review" / "SKILL.md"
     try:
-        return skill_file.read_text(encoding="utf-8").strip() + "\n\n"
+        text = skill_file.read_text(encoding="utf-8").strip()
+        if text.startswith("---"):
+            end = text.find("\n---\n", 3)
+            if end != -1:
+                text = text[end + 5:].strip()
+        return text + "\n\n"
     except Exception:
         return ""
 

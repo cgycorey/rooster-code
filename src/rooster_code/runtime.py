@@ -507,7 +507,7 @@ def _format_subagent_task_output(result_text: str, messages: list[dict[str, Any]
     raw_text = sanitize_task_output(result_text.strip())
     if raw_text:
         return raw_text
-    assistant_text = "\n\n".join(part.strip() for part in _collect_assistant_text(messages, last_only=True) if part.strip())
+    assistant_text = "\n\n".join(part.strip() for part in _collect_assistant_text(messages, last_only=False) if part.strip())
     if assistant_text:
         return sanitize_task_output(assistant_text)
     tool_result_text = "\n\n".join(part.strip() for part in _collect_tool_result_text(messages) if part.strip())
