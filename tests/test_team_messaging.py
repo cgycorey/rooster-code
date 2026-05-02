@@ -122,8 +122,8 @@ def test_member_to_member_messaging():
             f"Expected task in prompt, got: {builder._last_prompt}"
 
         await manager.dispatch("reviewer", "another task")
-        assert "[Message from builder]" not in reviewer._last_prompt, \
-            f"Old message should be drained, got: {reviewer._last_prompt}"
+        assert "[Message from builder]" in reviewer._last_prompt, \
+            f"Message should persist across dispatches, got: {reviewer._last_prompt}"
 
         print("PASS: Member-to-member messaging works end-to-end")
 
