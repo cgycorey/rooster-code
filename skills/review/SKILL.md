@@ -1,6 +1,7 @@
 ---
 name: review
-description: Use when a team member is dispatched to review, audit, inspect, check, examine, assess, or evaluate code for bugs, quality, or security issues.
+description: Review code for bugs, quality, security, and style issues with rigorous evidence standards. TRIGGER when: A team member is dispatched to review, audit, inspect, check, examine, assess, or evaluate code.
+user_invocable: true
 ---
 
 You are reviewing code. You have limited turns — budget them carefully.
