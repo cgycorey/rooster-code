@@ -76,6 +76,8 @@ def resolve_runtime_env(env: Mapping[str, str], cwd: str | None = None) -> Runti
 def parse_key_value_pairs(values: list[str] | None) -> dict[str, str]:
     pairs: dict[str, str] = {}
     for value in values or []:
+        if "=" not in value:
+            continue
         key, raw = value.split("=", 1)
         pairs[key] = raw
     return pairs
