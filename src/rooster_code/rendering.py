@@ -113,6 +113,8 @@ def extract_text(value: object) -> str:
                 mapping = cast(Mapping[str, object], item)
                 if mapping.get("type") == "text":
                     parts.append(str(mapping.get("text", "")))
+            elif isinstance(item, str):
+                parts.append(item)
         return "\n".join(part for part in parts if part)
     if isinstance(value, Mapping):
         mapping = cast(Mapping[str, object], value)
