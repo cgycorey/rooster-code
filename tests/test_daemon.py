@@ -470,3 +470,16 @@ def test_query_timeout_configured() -> None:
 
     assert dm._QUERY_TIMEOUT == 300
     assert dm._CONNECT_TIMEOUT == 5
+
+
+# -- heartbeat -----------------------------------------------------------------
+
+
+def test_heartbeat_disabled_by_default() -> None:
+    daemon = AgentDaemon()
+    assert daemon._heartbeat_interval == 0
+
+
+def test_heartbeat_enabled_with_interval() -> None:
+    daemon = AgentDaemon(heartbeat_interval=60)
+    assert daemon._heartbeat_interval == 60

@@ -122,6 +122,7 @@ class AgentDaemon:
         socket_path: str | None = None,
         db_path: str | None = None,
         max_sessions: int = 0,
+        heartbeat_interval: int = 0,
     ) -> None:
         self.socket_path = Path(socket_path) if socket_path else _SOCKET_PATH
         self.state = StateStore(db_path=db_path)
@@ -129,6 +130,7 @@ class AgentDaemon:
         self._shutdown_event = asyncio.Event()
         self._adapters: list[Any] = []
         self._max_sessions = max_sessions
+        self._heartbeat_interval = heartbeat_interval
         self._start_time: float = 0.0
         self._queries: int = 0
         self._total_latency_ms: float = 0.0
@@ -154,10 +156,16 @@ class AgentDaemon:
         for adapter in self._adapters:
             await adapter.start()
         cleanup = asyncio.create_task(self._cleanup_loop())
+        heartbeat = asyncio.create_task(self._heartbeat_loop()) if self._heartbeat_interval else None
         await self._shutdown_event.wait()
         cleanup.cancel()
+        if heartbeat:
+            heartbeat.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await cleanup
+        if heartbeat:
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat
 
     async def shutdown(self) -> None:
         log.info("shutting down...")
@@ -241,6 +249,26 @@ class AgentDaemon:
                 removed = self.state.cleanup_inactive()
             if removed:
                 log.info("cleaned %d inactive session(s)", removed)
+
+    async def _heartbeat_loop(self) -> None:
+        heartbeat_prompt = (
+            "Heartbeat: report daemon state concisely. "
+            "Sessions, queries, tokens, cost. One sentence summary. No tools needed."
+        )
+        while True:
+            await asyncio.sleep(self._heartbeat_interval)
+            try:
+                result = await self._query_handler("heartbeat", "heartbeat", heartbeat_prompt)
+                log.info(
+                    "heartbeat: sessions=%d queries=%d tokens=%d cost=$%.4f result=%s",
+                    self.state.count(),
+                    self._queries,
+                    self._total_tokens,
+                    round(self._total_cost, 4),
+                    result["text"][:200] if result["text"] else "",
+                )
+            except Exception as exc:
+                log.error("heartbeat failed: %s", exc)
 
     def _on_signal(self) -> None:
         self._shutdown_event.set()
@@ -461,9 +489,10 @@ def main() -> int:
     parser.add_argument("--telegram", help="Telegram bot token (optional)", default=None)
     parser.add_argument("--telegram-allowed", help="Comma-separated Telegram user IDs to allow", default=None)
     parser.add_argument("--max-sessions", type=int, default=0, help="Maximum concurrent sessions (0 = unlimited)")
+    parser.add_argument("--heartbeat", type=int, default=0, metavar="SECONDS", help="Self-check interval in seconds (0 = disabled, e.g. 1800 for 30 min)")
     args = parser.parse_args()
 
-    daemon = AgentDaemon(socket_path=args.socket, db_path=args.db, max_sessions=args.max_sessions)
+    daemon = AgentDaemon(socket_path=args.socket, db_path=args.db, max_sessions=args.max_sessions, heartbeat_interval=args.heartbeat)
 
     if args.telegram:
         allowed = None
