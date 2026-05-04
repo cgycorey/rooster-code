@@ -213,7 +213,23 @@ class AgentDaemon:
 
                 t0 = time.monotonic()
                 try:
-                    result = await asyncio.wait_for(agent.prompt(prompt), timeout=_QUERY_TIMEOUT)
+                    last_error: Exception | None = None
+                    result = None
+                    for attempt in range(_MAX_RETRIES):
+                        try:
+                            result = await asyncio.wait_for(agent.prompt(prompt), timeout=_QUERY_TIMEOUT)
+                            break
+                        except asyncio.TimeoutError:
+                            return {"text": "Error: query timed out after 300s", "tokens": 0, "cost": 0.0, "turns": 0}
+                        except Exception as exc:
+                            last_error = exc
+                            if not _is_retriable(exc) or attempt == _MAX_RETRIES - 1:
+                                return {"text": f"Error: {exc}", "tokens": 0, "cost": 0.0, "turns": 0}
+                            delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                            log.warning("retrying query after %ss (attempt %d/%d): %s", delay, attempt + 2, _MAX_RETRIES, exc)
+                            await asyncio.sleep(delay)
+                    if last_error is not None and result is None:
+                        return {"text": f"Error: {last_error}", "tokens": 0, "cost": 0.0, "turns": 0}
                     usage = getattr(result, "usage", None)
                     tokens = 0
                     if usage:
@@ -223,10 +239,6 @@ class AgentDaemon:
                     self_ref._total_tokens += tokens
                     self_ref._total_cost += cost
                     return {"text": result.text or "", "tokens": tokens, "cost": cost, "turns": turns}
-                except asyncio.TimeoutError:
-                    return {"text": "Error: query timed out after 300s", "tokens": 0, "cost": 0.0, "turns": 0}
-                except Exception as exc:
-                    return {"text": f"Error: {exc}", "tokens": 0, "cost": 0.0, "turns": 0}
                 finally:
                     elapsed = (time.monotonic() - t0) * 1000
                     self_ref._queries += 1
@@ -430,6 +442,21 @@ class AgentDaemon:
 
 _QUERY_TIMEOUT = 300
 _CONNECT_TIMEOUT = 5
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 1.0
+
+
+def _is_retriable(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    non_retriable = (
+        "insufficient balance",
+        "payment required",
+        "invalid api key",
+        "unauthorized",
+        "not found",
+        "model not found",
+    )
+    return not any(phrase in msg for phrase in non_retriable)
 
 
 async def _send_to_daemon(request: dict[str, Any]) -> dict[str, Any]:
