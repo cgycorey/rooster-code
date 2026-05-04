@@ -6,6 +6,7 @@ import contextlib
 import os
 import re
 import signal
+import sys
 import threading
 
 from prompt_toolkit import PromptSession
@@ -460,6 +461,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ask_parser = subparsers.add_parser("ask", help="Run a one-shot prompt")
     ask_parser.add_argument("prompt")
+    ask_parser.add_argument("--daemon", action="store_true", help="Route through daemon instead of direct execution")
     add_runtime_arguments(ask_parser)
 
     chat_parser = subparsers.add_parser("chat", help="Start an interactive chat session")
@@ -498,6 +500,14 @@ def build_parser() -> argparse.ArgumentParser:
     state_subparsers.add_parser("cron", help="Show cron store contents")
     state_subparsers.add_parser("plan", help="Show plan-mode state")
     state_subparsers.add_parser("todos", help="Show todo store contents")
+
+    daemon_parser = subparsers.add_parser("daemon", help="Control the long-running agent daemon")
+    daemon_sub = daemon_parser.add_subparsers(dest="daemon_command")
+    daemon_sub.add_parser("status", help="Show daemon health and stats")
+    daemon_sub.add_parser("sessions", help="List tracked sessions")
+    session_parser = daemon_sub.add_parser("session", help="Show session details")
+    session_parser.add_argument("session_id", help="Session ID to inspect")
+    daemon_sub.add_parser("shutdown", help="Gracefully stop the daemon")
 
     return parser
 
@@ -960,12 +970,105 @@ async def run_chat(config) -> int:
     return 130 if interrupted else 0
 
 
+def _ask_via_daemon(prompt: str, args: argparse.Namespace) -> int:
+    import asyncio
+
+    from rooster_code.daemon import daemon_query
+
+    async def _run() -> int:
+        session_id = args.resume or args.session_id or ""
+        result = await daemon_query(prompt, session_id=session_id, cwd=args.cwd or ".")
+        if result["type"] == "done":
+            print(result.get("text", ""))
+            return 0
+        print(f"Error: {result.get('message', 'unknown error')}", file=sys.stderr)
+        return 1
+
+    return asyncio.run(_run())
+
+
+def _handle_daemon_command(args: argparse.Namespace) -> int:
+    import asyncio
+    import json
+
+    from rooster_code.daemon import daemon_health, daemon_list_sessions, daemon_session_info, daemon_shutdown
+
+    async def _status() -> int:
+        try:
+            r = await daemon_health()
+        except Exception:
+            print("Error: daemon not reachable at /tmp/rooster-code.sock", file=sys.stderr)
+            return 1
+        print(f"status:       {r['status']}")
+        print(f"uptime:       {r['uptime_seconds']}s")
+        print(f"queries:      {r['queries']} (avg {r['avg_latency_ms']}ms)")
+        print(f"tokens:       {r.get('total_tokens', 0)}")
+        print(f"cost:         ${r.get('total_cost', 0):.4f}")
+        print(f"sessions:     {r['sessions']} (max {r['max_sessions']})")
+        print(f"adapters:     {json.dumps(r['adapters'])}")
+        return 0
+
+    async def _sessions() -> int:
+        try:
+            r = await daemon_list_sessions()
+        except Exception:
+            print("Error: daemon not reachable at /tmp/rooster-code.sock", file=sys.stderr)
+            return 1
+        data = r.get("data", [])
+        if not data:
+            print("No sessions tracked.")
+            return 0
+        for s in data:
+            print(f"  {s['session_id']}  (cwd={s['cwd']})")
+        return 0
+
+    async def _shutdown() -> int:
+        try:
+            await daemon_shutdown()
+            print("daemon shutdown initiated")
+            return 0
+        except Exception:
+            print("Error: daemon not reachable at /tmp/rooster-code.sock", file=sys.stderr)
+            return 1
+
+    async def _session() -> int:
+        sid = getattr(args, "session_id", "")
+        if not sid:
+            print("Error: session_id required", file=sys.stderr)
+            return 1
+        try:
+            r = await daemon_session_info(sid)
+        except Exception:
+            print("Error: daemon not reachable at /tmp/rooster-code.sock", file=sys.stderr)
+            return 1
+        local = r.get("local") or {}
+        sdk = r.get("sdk") or {}
+        print(f"session: {sid}")
+        print(f"  tracked:  created={local.get('created_at')} last_active={local.get('last_active_at')}")
+        if sdk:
+            print(f"  sdk:      title={sdk.get('title', '-')} tags={sdk.get('tags', [])} messages={sdk.get('messageCount', '-')}")
+        return 0
+
+    cmd = args.daemon_command
+    if cmd == "status":
+        return asyncio.run(_status())
+    if cmd == "sessions":
+        return asyncio.run(_sessions())
+    if cmd == "session":
+        return asyncio.run(_session())
+    if cmd == "shutdown":
+        return asyncio.run(_shutdown())
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         parser = build_parser()
         args = parser.parse_args(argv)
 
         if args.command == "ask":
+            if getattr(args, "daemon", False):
+                return _ask_via_daemon(args.prompt, args)
             config = config_from_namespace(args, os.environ)
             return run_async_with_sigint_exit(run_ask(args.prompt, config))
 
@@ -988,6 +1091,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "sessions" and args.sessions_command == "info":
             console = build_console()
             info = asyncio.run(get_session_info(args.session_id))
+            if info is None:
+                console.print(f"[red]Session '{args.session_id}' not found.[/red]")
+                return 1
             render_session_info(console, info)
             return 0
 
@@ -1025,6 +1131,9 @@ def main(argv: list[str] | None = None) -> int:
             console = build_console()
             render_state(console, args.state_command.title(), get_state_snapshot(args.state_command, getattr(args, "agent", None)))
             return 0
+
+        if args.command == "daemon":
+            return _handle_daemon_command(args)
 
         parser.print_help()
         return 0

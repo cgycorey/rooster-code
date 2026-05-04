@@ -16,9 +16,13 @@ dependencies = [
 
 [project.scripts]
 rooster-code = "rooster_code.cli:main"
+rooster-daemon = "rooster_code.daemon:main"
 
 [dependency-groups]
 dev = ["pytest>=8.3.0"]
+
+[project.optional-dependencies]
+telegram = ["aiogram>=3.20.0"]
 
 [tool.uv.sources]
 open-agent-sdk = { path = "../open-agent-sdk-python" }
