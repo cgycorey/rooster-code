@@ -198,10 +198,16 @@ class AgentDaemon:
                 config.resume = session_id
             elif session_id:
                 config.session_id = session_id
-            for key in ("model", "max_turns", "max_tokens", "permission_mode", "allowed_tools", "disallowed_tools"):
+            for key in ("model", "max_turns", "max_tokens", "permission_mode", "allowed_tools", "disallowed_tools", "thinking_budget", "max_budget_usd", "debug", "sandbox", "include_partials"):
                 val = overrides.get(key)
                 if val is not None:
                     setattr(config, key, val)
+            env_override: dict[str, str] | None = overrides.get("env")
+            if env_override is not None:
+                config.env = {**config.env, **env_override}
+            headers_override: dict[str, str] | None = overrides.get("custom_headers")
+            if headers_override is not None:
+                config.custom_headers = headers_override
             agent = create_runtime_agent(config)
             try:
                 if hasattr(agent, "_initialize") and callable(agent._initialize):
@@ -329,7 +335,7 @@ class AgentDaemon:
             await self._reply(writer, {"type": "error", "message": "prompt is required"})
             return
         overrides = {}
-        for k in ("model", "max_turns", "max_tokens", "permission_mode", "allowed_tools", "disallowed_tools"):
+        for k in ("model", "max_turns", "max_tokens", "permission_mode", "allowed_tools", "disallowed_tools", "thinking_budget", "max_budget_usd", "debug", "sandbox", "include_partials", "env", "custom_headers"):
             v = request.get(k)
             if v is not None:
                 overrides[k] = v

@@ -19,6 +19,8 @@ Rooster Code currently includes:
 - **hooks-file passthrough** into the SDK runtime configuration
 - **state inspection commands** for tasks, teams, mailboxes, config, cron, plans, and todos
 - **manual session compaction** for trimming conversation history while preserving working context
+- **long-running agent daemon** with Unix socket, session tracking, cost/token monitoring, heartbeat self-checks, and optional Telegram adapter
+- **skills and agents CLI** — list available skills and configured agents from the terminal
 
 > [!IMPORTANT]
 > `open-agent-sdk` is **not published yet**. Right now the supported source is
@@ -112,6 +114,85 @@ uv run rooster-code ask "Find the main entry point"
 uv run rooster-code chat --model claude-sonnet-4-5
 ```
 
+## Agent daemon
+
+Rooster Code can run as a long-lived daemon process that accepts queries over a
+Unix socket, tracks sessions in SQLite, monitors token usage and cost, and
+optionally runs periodic self-checks via a heartbeat loop.
+
+### Quick start
+
+```bash
+# Start the daemon (runs in foreground)
+uv run rooster-daemon
+
+# Start with a 30-minute heartbeat self-check
+uv run rooster-daemon --heartbeat 1800
+
+# Talk to the daemon from another terminal
+uv run rooster-code ask --daemon "What does this repo do?"
+uv run rooster-code daemon status
+uv run rooster-code daemon sessions
+
+# Graceful shutdown
+uv run rooster-code daemon shutdown
+```
+
+### Daemon subcommands
+
+```bash
+uv run rooster-code daemon status         # Health, uptime, queries, tokens, cost, sessions
+uv run rooster-code daemon sessions       # List tracked sessions
+uv run rooster-code daemon session <id>   # Session detail (merged local + SDK metadata)
+uv run rooster-code daemon shutdown       # Graceful stop
+```
+
+### `ask --daemon` mode
+
+When the daemon is running, `ask --daemon` sends prompts to it instead of
+creating a one-shot agent. The daemon handles session persistence, so you get
+multi-turn conversations across invocations:
+
+```bash
+uv run rooster-code ask --daemon --session-id my-session "x = 42"
+uv run rooster-code ask --daemon --session-id my-session "what is x?"
+# → 42
+```
+
+All shared runtime flags work with `--daemon` (model, max-turns,
+permission-mode, allowed-tools, thinking-budget, sandbox, debug, etc.).
+
+### Heartbeat
+
+The daemon can run periodic self-checks via `--heartbeat SECONDS`. Each pulse
+queries the LLM to review daemon state and report findings. The heartbeat
+session persists across pulses, accumulating context.
+
+```bash
+uv run rooster-daemon --heartbeat 1800   # Every 30 minutes
+```
+
+### Telegram adapter (optional)
+
+```bash
+uv sync --extra telegram
+uv run rooster-daemon --telegram YOUR_BOT_TOKEN --telegram-allowed 123456789
+```
+
+### Daemon architecture
+
+```
+┌──────────────┐     Unix socket      ┌──────────────────┐
+│  rooster-code │ ──── JSON-Lines ───→ │   AgentDaemon    │
+│  CLI client   │ ←─── JSON-Lines ──── │  (asyncio)        │
+└──────────────┘                      │                    │
+                                      │  StateStore (SQLite)│
+┌──────────────┐                      │  Health + metrics   │
+│  Telegram    │ ──── aiogram ──────→ │  Heartbeat loop     │
+│  adapter     │                      │  Cleanup loop       │
+└──────────────┘                      └────────────────────┘
+```
+
 ## Interactive chat commands
 
 Rooster Code chat has a richer slash-command surface than the basic CLI help
@@ -151,6 +232,19 @@ flowchart TD
     A --> D["sessions"]
     A --> E["state"]
     A --> F["tools"]
+    A --> G["skills"]
+    A --> H["agents"]
+    A --> DAEMON["daemon"]
+
+    B --> B1["ask --daemon"]
+    B1 --> DAEMON
+
+    DAEMON --> D1["daemon status"]
+    DAEMON --> D2["daemon sessions"]
+    DAEMON --> D3["daemon session"]
+    DAEMON --> D4["daemon shutdown"]
+    DAEMON --> D5["heartbeat loop"]
+    DAEMON --> D6["StateStore (SQLite)"]
 
     C --> C1["/help"]
     C --> C2["/model"]
@@ -203,11 +297,26 @@ flowchart TD
     CLI --> CHAT["chat mode"]
     CLI --> SESS["session commands"]
     CLI --> STATE["state commands"]
+    CLI --> SK["skills / agents CLI"]
+    CLI --> DMC["daemon client"]
+
+    ASK --> DMASK["--daemon path"]
+    DMASK --> DMC
+
+    DMC --> SOCK["Unix socket"]
+
+    SOCK --> DAEMON["AgentDaemon"]
+    DAEMON --> STORE["StateStore (SQLite)"]
+    DAEMON --> HEALTH["health / metrics"]
+    DAEMON --> HB["heartbeat loop"]
+    DAEMON --> CLEANUP["session cleanup"]
+    DAEMON --> ADAPTER["Telegram adapter"]
 
     ASK --> CFG["RuntimeConfig + env resolution"]
     CHAT --> CFG
     SESS --> RUNTIME["runtime.py"]
     STATE --> RUNTIME
+    SK --> RUNTIME
     CFG --> RUNTIME
 
     RUNTIME --> AGENT["runtime agent creation"]
@@ -264,7 +373,18 @@ uv run rooster-code sessions info <session-id>
 uv run rooster-code sessions fork <session-id> --new-id <new-session-id>
 uv run rooster-code sessions rename <session-id> "My session"
 uv run rooster-code sessions tag <session-id> alpha beta
+uv run rooster-code sessions append <session-id> "message text"
 uv run rooster-code sessions delete <session-id>
+```
+
+## Skills and agents (CLI)
+
+List available skills and configured agents without entering chat mode:
+
+```bash
+uv run rooster-code skills            # List all available skills
+uv run rooster-code skills --json      # JSON array output
+uv run rooster-code agents list        # List configured agents
 ```
 
 ## Tools and state inspection
@@ -331,6 +451,7 @@ uv run rooster-code ask "Review src" \
 
 Supported shared flags:
 
+- `--daemon` — route through long-running daemon (requires daemon running)
 - `--cwd`
 - `--model`
 - `--permission-mode`

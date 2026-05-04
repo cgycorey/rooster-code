@@ -485,10 +485,20 @@ def build_parser() -> argparse.ArgumentParser:
     tag_parser.add_argument("tags", nargs="+")
     show_parser = sessions_subparsers.add_parser("show", help="Show session transcript")
     show_parser.add_argument("session_id")
+    append_parser = sessions_subparsers.add_parser("append", help="Append a message to a session")
+    append_parser.add_argument("session_id", help="Target session ID")
+    append_parser.add_argument("message", help="Message text to append")
 
     tools_parser = subparsers.add_parser("tools", help="Inspect tool availability")
     tools_subparsers = tools_parser.add_subparsers(dest="tools_command")
     tools_subparsers.add_parser("list", help="List SDK base tools")
+
+    skills_parser = subparsers.add_parser("skills", help="List available skills")
+    skills_parser.add_argument("--json", action="store_true", help="Output skill names as JSON array")
+
+    agents_parser = subparsers.add_parser("agents", help="Manage configured agents")
+    agents_sub = agents_parser.add_subparsers(dest="agents_command")
+    agents_sub.add_parser("list", help="List configured agents")
 
     state_parser = subparsers.add_parser("state", help="Inspect exported SDK runtime state")
     state_subparsers = state_parser.add_subparsers(dest="state_command")
@@ -1125,6 +1135,43 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "tools" and args.tools_command == "list":
             console = build_console()
             render_tool_table(console, list_tool_names())
+            return 0
+
+        if args.command == "skills":
+            console = build_console()
+            from open_agent_sdk.skills.bundled import init_bundled_skills
+            from open_agent_sdk.skills.registry import register_skill
+            from rooster_code.runtime import _build_filesystem_skill_definition, _resolve_skills_dir
+            from rooster_code.config import resolve_runtime_env
+            init_bundled_skills()
+            config = resolve_runtime_env(os.environ, cwd=".")
+            skills_dir = _resolve_skills_dir(config)
+            if skills_dir and skills_dir.exists():
+                for skill_dir in sorted(skills_dir.iterdir()):
+                    if skill_dir.is_dir():
+                        skill_def = _build_filesystem_skill_definition(skill_dir)
+                        if skill_def:
+                            register_skill(skill_def)
+            skills = list_skill_names()
+            if getattr(args, "json", False):
+                import json
+                console.print(json.dumps(skills))
+            else:
+                render_state(console, "Skills", {"skills": skills})
+            return 0
+
+        if args.command == "agents" and args.agents_command == "list":
+            console = build_console()
+            from rooster_code.config import resolve_runtime_env
+            config = resolve_runtime_env(os.environ, cwd=".")
+            render_agents_list(console, config.agents)
+            return 0
+
+        if args.command == "sessions" and args.sessions_command == "append":
+            console = build_console()
+            from open_agent_sdk.session import append_to_session
+            asyncio.run(append_to_session(args.session_id, {"role": "user", "content": args.message}))
+            render_state(console, "Session Message Appended", {"session_id": args.session_id, "appended": True})
             return 0
 
         if args.command == "state" and args.state_command in {"tasks", "teams", "mailboxes", "config", "cron", "plan", "todos"}:
