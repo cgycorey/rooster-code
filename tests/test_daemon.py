@@ -14,6 +14,10 @@ from rooster_code.daemon import (
     daemon_health,
     daemon_list_sessions,
     daemon_query,
+    daemon_session_delete,
+    daemon_session_info,
+    daemon_session_rename,
+    daemon_session_tag,
 )
 
 
@@ -348,3 +352,121 @@ async def _run_daemon(daemon: AgentDaemon) -> None:
     daemon = AgentDaemon()
     daemon.add_telegram("dummy-token")
     assert len(daemon._adapters) == 1
+
+
+# -- connection failure --------------------------------------------------------
+
+
+def test_connection_timeout_when_daemon_down() -> None:
+    async def _run() -> None:
+        import rooster_code.daemon as dm
+
+        orig = dm._SOCKET_PATH
+        dm._SOCKET_PATH = Path("/tmp/nonexistent-rooster-test.sock")
+        try:
+            with __import__("pytest").raises((FileNotFoundError, ConnectionRefusedError, asyncio.TimeoutError)):
+                await daemon_health()
+        finally:
+            dm._SOCKET_PATH = orig
+
+    asyncio.run(_run())
+
+
+# -- session rename / tag / delete via daemon ----------------------------------
+
+
+def test_session_rename() -> None:
+    async def _check(_sock: str) -> None:
+        await daemon_query("hello", session_id="ren-test")
+        r = await daemon_session_rename("ren-test", "Renamed Session")
+        assert r["type"] == "session_renamed"
+        assert r["title"] == "Renamed Session"
+
+    _socket_test(_check)
+
+
+def test_session_tag() -> None:
+    async def _check(_sock: str) -> None:
+        await daemon_query("hello", session_id="tag-test")
+        r = await daemon_session_tag("tag-test", ["alpha", "beta"])
+        assert r["type"] == "session_tagged"
+        assert set(r["tags"]) == {"alpha", "beta"}
+
+    _socket_test(_check)
+
+
+def test_session_delete() -> None:
+    async def _check(_sock: str) -> None:
+        await daemon_query("hello", session_id="del-test")
+        r = await daemon_session_delete("del-test")
+        assert r["type"] == "session_deleted"
+
+        s = await daemon_list_sessions()
+        ids = {entry["session_id"] for entry in s["data"]}
+        assert "del-test" not in ids
+
+    _socket_test(_check)
+
+
+def test_session_rename_missing_params() -> None:
+    _socket_test(lambda _: _check_rename_missing())
+
+
+async def _check_rename_missing() -> None:
+    r = await _send_to_daemon({"action": "session_rename", "session_id": ""})
+    assert r["type"] == "error"
+    r2 = await _send_to_daemon({"action": "session_rename", "session_id": "x", "title": ""})
+    assert r2["type"] == "error"
+
+
+def test_session_info_merges_sdk_data() -> None:
+    async def _check(_sock: str) -> None:
+        await daemon_query("hello", session_id="info-test")
+        r = await daemon_session_info("info-test")
+        assert r["type"] == "session_info"
+        assert r["local"] is not None
+        assert r["sdk"] is not None
+
+    _socket_test(_check)
+
+
+# -- concurrent session handling -----------------------------------------------
+
+
+def test_concurrent_same_session() -> None:
+    async def _run() -> None:
+        import shutil
+        import rooster_code.daemon as dm
+
+        d = tempfile.mkdtemp(prefix="rst-")
+        sock = os.path.join(d, "r.sock")
+        db = os.path.join(d, "s.db")
+        orig = dm._SOCKET_PATH
+        dm._SOCKET_PATH = Path(sock)
+        daemon = AgentDaemon(socket_path=sock, db_path=db)
+        task = asyncio.create_task(_run_daemon(daemon))
+        await asyncio.sleep(0.1)
+        try:
+            results = await asyncio.gather(
+                daemon_query("hello", session_id="concurrent"),
+                daemon_query("hello", session_id="concurrent"),
+            )
+            assert all(r["type"] == "done" for r in results)
+        finally:
+            dm._SOCKET_PATH = orig
+            daemon._shutdown_event.set()
+            with __import__("contextlib").suppress(asyncio.CancelledError):
+                await task
+            shutil.rmtree(d, ignore_errors=True)
+
+    asyncio.run(_run())
+
+
+# -- query timeout -------------------------------------------------------------
+
+
+def test_query_timeout_configured() -> None:
+    import rooster_code.daemon as dm
+
+    assert dm._QUERY_TIMEOUT == 300
+    assert dm._CONNECT_TIMEOUT == 5

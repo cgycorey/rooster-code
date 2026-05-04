@@ -134,6 +134,7 @@ class AgentDaemon:
         self._total_latency_ms: float = 0.0
         self._total_tokens: int = 0
         self._total_cost: float = 0.0
+        self._state_lock = asyncio.Lock()
         self._query_handler = self._build_handler()
 
     def add_telegram(self, token: str, *, allowed_users: list[int] | None = None) -> None:
@@ -189,7 +190,7 @@ class AgentDaemon:
                 config.resume = session_id
             elif session_id:
                 config.session_id = session_id
-            for key in ("model", "max_turns", "max_tokens", "permission_mode"):
+            for key in ("model", "max_turns", "max_tokens", "permission_mode", "allowed_tools", "disallowed_tools"):
                 val = overrides.get(key)
                 if val is not None:
                     setattr(config, key, val)
@@ -198,11 +199,12 @@ class AgentDaemon:
                 await agent._initialize()
 
             sid = _get_agent_session_id(agent) or session_id or "default"
-            state.upsert_session(sid)
+            async with self_ref._state_lock:
+                state.upsert_session(sid, cwd=cwd)
 
             t0 = time.monotonic()
             try:
-                result = await agent.prompt(prompt)
+                result = await asyncio.wait_for(agent.prompt(prompt), timeout=_QUERY_TIMEOUT)
                 usage = getattr(result, "usage", None)
                 tokens = 0
                 if usage:
@@ -212,6 +214,8 @@ class AgentDaemon:
                 self_ref._total_tokens += tokens
                 self_ref._total_cost += cost
                 return {"text": result.text or "", "tokens": tokens, "cost": cost, "turns": turns}
+            except asyncio.TimeoutError:
+                return {"text": "Error: query timed out after 300s", "tokens": 0, "cost": 0.0, "turns": 0}
             except Exception as exc:
                 return {"text": f"Error: {exc}", "tokens": 0, "cost": 0.0, "turns": 0}
             finally:
@@ -220,7 +224,8 @@ class AgentDaemon:
                 self_ref._total_latency_ms += elapsed
                 with contextlib.suppress(Exception):
                     await agent.close()
-                state.touch_session(sid)
+                async with self_ref._state_lock:
+                    state.touch_session(sid)
 
         return handler
 
@@ -232,7 +237,8 @@ class AgentDaemon:
     async def _cleanup_loop(self) -> None:
         while True:
             await asyncio.sleep(3600)
-            removed = self.state.cleanup_inactive()
+            async with self._state_lock:
+                removed = self.state.cleanup_inactive()
             if removed:
                 log.info("cleaned %d inactive session(s)", removed)
 
@@ -275,23 +281,22 @@ class AgentDaemon:
                 await writer.wait_closed()
 
     async def _handle_query(self, request: dict[str, Any], writer: asyncio.StreamWriter) -> None:
-        session_id = str(request.get("session_id", "") or "")
-        prompt = str(request.get("prompt", "") or "")
+        session_id = str(request.get("session_id") or "")
+        prompt = str(request.get("prompt") or "")
         if not prompt:
             await self._reply(writer, {"type": "error", "message": "prompt is required"})
             return
         overrides = {}
-        for k in ("model", "max_turns", "max_tokens", "permission_mode"):
+        for k in ("model", "max_turns", "max_tokens", "permission_mode", "allowed_tools", "disallowed_tools"):
             v = request.get(k)
             if v is not None:
                 overrides[k] = v
         cwd = str(request.get("cwd", ".") or ".")
         overrides["cwd"] = cwd
         result = await self._query_handler(session_id, "unix-socket", prompt, overrides)
-        actual = session_id or "default"
         await self._reply(writer, {
             "type": "done",
-            "session_id": actual,
+            "session_id": session_id or "default",
             "text": result["text"],
             "tokens": result["tokens"],
             "cost": result["cost"],
@@ -303,7 +308,7 @@ class AgentDaemon:
         await self._reply(writer, {"type": "sessions", "data": sessions})
 
     async def _handle_session_delete(self, request: dict[str, Any], writer: asyncio.StreamWriter) -> None:
-        session_id = str(request.get("session_id", "") or "")
+        session_id = str(request.get("session_id") or "")
         if not session_id:
             await self._reply(writer, {"type": "error", "message": "session_id required"})
             return
@@ -313,11 +318,12 @@ class AgentDaemon:
         except Exception as exc:
             await self._reply(writer, {"type": "error", "message": str(exc)})
             return
-        self.state.remove_session(session_id)
+        async with self._state_lock:
+            self.state.remove_session(session_id)
         await self._reply(writer, {"type": "session_deleted", "session_id": session_id})
 
     async def _handle_session_info(self, request: dict[str, Any], writer: asyncio.StreamWriter) -> None:
-        session_id = str(request.get("session_id", "") or "")
+        session_id = str(request.get("session_id") or "")
         if not session_id:
             await self._reply(writer, {"type": "error", "message": "session_id required"})
             return
@@ -335,8 +341,8 @@ class AgentDaemon:
         })
 
     async def _handle_session_rename(self, request: dict[str, Any], writer: asyncio.StreamWriter) -> None:
-        session_id = str(request.get("session_id", "") or "")
-        title = str(request.get("title", "") or "")
+        session_id = str(request.get("session_id") or "")
+        title = str(request.get("title") or "")
         if not session_id or not title:
             await self._reply(writer, {"type": "error", "message": "session_id and title required"})
             return
@@ -349,7 +355,7 @@ class AgentDaemon:
         await self._reply(writer, {"type": "session_renamed", "session_id": session_id, "title": title})
 
     async def _handle_session_tag(self, request: dict[str, Any], writer: asyncio.StreamWriter) -> None:
-        session_id = str(request.get("session_id", "") or "")
+        session_id = str(request.get("session_id") or "")
         tags = request.get("tags", [])
         if not session_id:
             await self._reply(writer, {"type": "error", "message": "session_id required"})
@@ -392,8 +398,15 @@ class AgentDaemon:
         await writer.drain()
 
 
+_QUERY_TIMEOUT = 300
+_CONNECT_TIMEOUT = 5
+
+
 async def _send_to_daemon(request: dict[str, Any]) -> dict[str, Any]:
-    reader, writer = await asyncio.open_unix_connection(str(_SOCKET_PATH))
+    reader, writer = await asyncio.wait_for(
+        asyncio.open_unix_connection(str(_SOCKET_PATH)),
+        timeout=_CONNECT_TIMEOUT,
+    )
     try:
         writer.write((json.dumps(request) + "\n").encode("utf-8"))
         await writer.drain()
@@ -425,6 +438,18 @@ async def daemon_shutdown() -> dict[str, Any]:
 
 async def daemon_session_info(session_id: str) -> dict[str, Any]:
     return await _send_to_daemon({"action": "session_info", "session_id": session_id})
+
+
+async def daemon_session_rename(session_id: str, title: str) -> dict[str, Any]:
+    return await _send_to_daemon({"action": "session_rename", "session_id": session_id, "title": title})
+
+
+async def daemon_session_tag(session_id: str, tags: list[str]) -> dict[str, Any]:
+    return await _send_to_daemon({"action": "session_tag", "session_id": session_id, "tags": tags})
+
+
+async def daemon_session_delete(session_id: str) -> dict[str, Any]:
+    return await _send_to_daemon({"action": "session_delete", "session_id": session_id})
 
 
 def main() -> int:
