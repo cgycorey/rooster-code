@@ -203,37 +203,39 @@ class AgentDaemon:
                 if val is not None:
                     setattr(config, key, val)
             agent = create_runtime_agent(config)
-            if hasattr(agent, "_initialize") and callable(agent._initialize):
-                await agent._initialize()
-
-            sid = _get_agent_session_id(agent) or session_id or "default"
-            async with self_ref._state_lock:
-                state.upsert_session(sid, cwd=cwd)
-
-            t0 = time.monotonic()
             try:
-                result = await asyncio.wait_for(agent.prompt(prompt), timeout=_QUERY_TIMEOUT)
-                usage = getattr(result, "usage", None)
-                tokens = 0
-                if usage:
-                    tokens = (getattr(usage, "input_tokens", 0) or 0) + (getattr(usage, "output_tokens", 0) or 0)
-                cost = getattr(result, "cost", 0.0) or 0.0
-                turns = getattr(result, "num_turns", 0) or 0
-                self_ref._total_tokens += tokens
-                self_ref._total_cost += cost
-                return {"text": result.text or "", "tokens": tokens, "cost": cost, "turns": turns}
-            except asyncio.TimeoutError:
-                return {"text": "Error: query timed out after 300s", "tokens": 0, "cost": 0.0, "turns": 0}
-            except Exception as exc:
-                return {"text": f"Error: {exc}", "tokens": 0, "cost": 0.0, "turns": 0}
+                if hasattr(agent, "_initialize") and callable(agent._initialize):
+                    await agent._initialize()
+
+                sid = _get_agent_session_id(agent) or session_id or "default"
+                async with self_ref._state_lock:
+                    state.upsert_session(sid, cwd=cwd)
+
+                t0 = time.monotonic()
+                try:
+                    result = await asyncio.wait_for(agent.prompt(prompt), timeout=_QUERY_TIMEOUT)
+                    usage = getattr(result, "usage", None)
+                    tokens = 0
+                    if usage:
+                        tokens = (getattr(usage, "input_tokens", 0) or 0) + (getattr(usage, "output_tokens", 0) or 0)
+                    cost = getattr(result, "cost", 0.0) or 0.0
+                    turns = getattr(result, "num_turns", 0) or 0
+                    self_ref._total_tokens += tokens
+                    self_ref._total_cost += cost
+                    return {"text": result.text or "", "tokens": tokens, "cost": cost, "turns": turns}
+                except asyncio.TimeoutError:
+                    return {"text": "Error: query timed out after 300s", "tokens": 0, "cost": 0.0, "turns": 0}
+                except Exception as exc:
+                    return {"text": f"Error: {exc}", "tokens": 0, "cost": 0.0, "turns": 0}
+                finally:
+                    elapsed = (time.monotonic() - t0) * 1000
+                    self_ref._queries += 1
+                    self_ref._total_latency_ms += elapsed
+                    async with self_ref._state_lock:
+                        state.touch_session(sid)
             finally:
-                elapsed = (time.monotonic() - t0) * 1000
-                self_ref._queries += 1
-                self_ref._total_latency_ms += elapsed
                 with contextlib.suppress(Exception):
                     await agent.close()
-                async with self_ref._state_lock:
-                    state.touch_session(sid)
 
         return handler
 
@@ -508,6 +510,9 @@ def main() -> int:
         asyncio.run(_run())
     except KeyboardInterrupt:
         pass
+    finally:
+        if daemon.socket_path.exists():
+            daemon.socket_path.unlink()
     return 0
 
 
