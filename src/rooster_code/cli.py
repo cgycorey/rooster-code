@@ -455,6 +455,15 @@ def run_async_with_sigint_exit(coroutine) -> int:
         signal.signal(signal.SIGINT, previous_handler)
 
 
+def _daemon_is_reachable() -> bool:
+    try:
+        from rooster_code.daemon import daemon_health
+        result = asyncio.run(daemon_health())
+        return result.get("type") == "health"
+    except Exception:
+        return False
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rooster-code", description="Rich CLI wrapper for the Open Agent SDK")
     subparsers = parser.add_subparsers(dest="command")
@@ -1109,7 +1118,12 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "sessions" and args.sessions_command == "delete":
             console = build_console()
-            deleted = asyncio.run(delete_session(args.session_id))
+            if _daemon_is_reachable():
+                from rooster_code.daemon import daemon_session_delete
+                r = asyncio.run(daemon_session_delete(args.session_id))
+                deleted = r.get("type") == "session_deleted"
+            else:
+                deleted = asyncio.run(delete_session(args.session_id))
             render_state(console, "Session Deleted", {"deleted": deleted, "session_id": args.session_id})
             return 0
 
