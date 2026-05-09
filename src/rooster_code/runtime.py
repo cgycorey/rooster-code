@@ -1023,13 +1023,20 @@ def _create_sdk_agent(
     include_runtime_agent_tool: bool = True,
     system_prompt: str = "",
 ):
-    agent = create_agent(
-        build_agent_options(
-            config,
-            include_runtime_agent_tool=include_runtime_agent_tool,
-            system_prompt=system_prompt,
+    from rooster_code.mcp_transport import split_mcp_servers, connect_http_mcp
+    stdio_mcp, remote_mcp = split_mcp_servers(config.mcp_servers)
+    saved_mcp = config.mcp_servers
+    config.mcp_servers = stdio_mcp
+    try:
+        agent = create_agent(
+            build_agent_options(
+                config,
+                include_runtime_agent_tool=include_runtime_agent_tool,
+                system_prompt=system_prompt,
+            )
         )
-    )
+    finally:
+        config.mcp_servers = saved_mcp
 
     tracker = TurnTracker()
     setattr(agent, "_rooster_code_config", config)
@@ -1117,6 +1124,12 @@ def _create_sdk_agent(
 
         async def wrapped_initialize() -> None:
             await original_initialize()
+            for rname, rcfg in remote_mcp.items():
+                try:
+                    remote_tools = await connect_http_mcp(rname, rcfg)
+                    agent._tool_pool.extend(remote_tools)
+                except Exception:
+                    pass
             replaced = False
             new_pool = []
             for tool in getattr(agent, "_tool_pool", []):

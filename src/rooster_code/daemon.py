@@ -123,6 +123,7 @@ class AgentDaemon:
         db_path: str | None = None,
         max_sessions: int = 0,
         heartbeat_interval: int = 0,
+        file_configs: dict[str, Any] | None = None,
     ) -> None:
         self.socket_path = Path(socket_path) if socket_path else _SOCKET_PATH
         self.state = StateStore(db_path=db_path)
@@ -131,6 +132,7 @@ class AgentDaemon:
         self._adapters: list[Any] = []
         self._max_sessions = max_sessions
         self._heartbeat_interval = heartbeat_interval
+        self._file_configs = file_configs or {}
         self._start_time: float = 0.0
         self._queries: int = 0
         self._total_latency_ms: float = 0.0
@@ -198,6 +200,9 @@ class AgentDaemon:
                 config.resume = session_id
             elif session_id:
                 config.session_id = session_id
+            for file_key, file_val in self_ref._file_configs.items():
+                if file_val is not None and not getattr(config, file_key, None):
+                    setattr(config, file_key, file_val)
             for key in ("model", "max_turns", "max_tokens", "permission_mode", "allowed_tools", "disallowed_tools", "thinking_budget", "max_budget_usd", "debug", "sandbox", "include_partials"):
                 val = overrides.get(key)
                 if val is not None:
@@ -525,9 +530,22 @@ def main() -> int:
     parser.add_argument("--telegram-allowed", help="Comma-separated Telegram user IDs to allow", default=None)
     parser.add_argument("--max-sessions", type=int, default=0, help="Maximum concurrent sessions (0 = unlimited)")
     parser.add_argument("--heartbeat", type=int, default=0, metavar="SECONDS", help="Self-check interval in seconds (0 = disabled, e.g. 1800 for 30 min)")
+    parser.add_argument("--mcp-file", help="JSON file for MCP server configuration", default=None)
+    parser.add_argument("--hooks-file", help="JSON file for hook configuration", default=None)
+    parser.add_argument("--agents-file", help="JSON file for agent definitions", default=None)
+    parser.add_argument("--json-schema-file", help="JSON file for structured output schema", default=None)
     args = parser.parse_args()
 
-    daemon = AgentDaemon(socket_path=args.socket, db_path=args.db, max_sessions=args.max_sessions, heartbeat_interval=args.heartbeat)
+    from rooster_code.config import load_json_file
+    file_configs = {}
+    for flag, attr in [("mcp_file", "mcp_servers"), ("hooks_file", "hooks"), ("agents_file", "agents"), ("json_schema_file", "json_schema")]:
+        val = getattr(args, flag, None)
+        if val:
+            loaded = load_json_file(val)
+            if loaded is not None:
+                file_configs[attr] = loaded
+
+    daemon = AgentDaemon(socket_path=args.socket, db_path=args.db, max_sessions=args.max_sessions, heartbeat_interval=args.heartbeat, file_configs=file_configs)
 
     if args.telegram:
         allowed = None
