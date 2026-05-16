@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from dataclasses import dataclass
 from dataclasses import field
 from typing import Any, Mapping
@@ -87,8 +88,12 @@ def load_json_file(path: str | None) -> Any:
     if not path:
         return None
 
-    with open(path, "r", encoding="utf-8") as handle:
-        return json.load(handle)
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"rooster-code: cannot load {path}: {e}", file=sys.stderr)
+        return {}
 
 
 def config_from_namespace(args: argparse.Namespace, env: Mapping[str, str]) -> RuntimeConfig:

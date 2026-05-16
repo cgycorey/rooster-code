@@ -1,7 +1,7 @@
 import argparse
 import json
 
-from rooster_code.config import resolve_runtime_env
+from rooster_code.config import load_json_file, resolve_runtime_env
 
 
 def test_rooster_code_env_names_are_mapped() -> None:
@@ -225,3 +225,57 @@ def test_config_from_namespace_prefers_cli_search_url_over_dotenv(tmp_path, monk
     config = config_from_namespace(args, {})
 
     assert config.search_url == "http://127.0.0.1:8080/search"
+
+
+def test_load_json_file_returns_none_for_none_path() -> None:
+    assert load_json_file(None) is None
+
+
+def test_load_json_file_loads_valid_json(tmp_path) -> None:
+    path = tmp_path / "test.json"
+    path.write_text('{"key": "value"}', encoding="utf-8")
+    result = load_json_file(str(path))
+    assert result == {"key": "value"}
+
+
+def test_load_json_file_returns_empty_dict_for_missing_file(tmp_path, capsys) -> None:
+    path = tmp_path / "nonexistent.json"
+    result = load_json_file(str(path))
+    assert result == {}
+    captured = capsys.readouterr()
+    assert "cannot load" in captured.err
+    assert str(path) in captured.err
+    assert "not found" in captured.err.lower() or "No such file" in captured.err
+
+
+def test_load_json_file_returns_empty_dict_for_malformed_json(tmp_path, capsys) -> None:
+    path = tmp_path / "bad.json"
+    path.write_text("{invalid json content", encoding="utf-8")
+    result = load_json_file(str(path))
+    assert result == {}
+    captured = capsys.readouterr()
+    assert "cannot load" in captured.err
+    assert str(path) in captured.err
+
+
+def test_load_json_file_returns_empty_dict_for_empty_file(tmp_path, capsys) -> None:
+    path = tmp_path / "empty.json"
+    path.write_text("", encoding="utf-8")
+    result = load_json_file(str(path))
+    assert result == {}
+    captured = capsys.readouterr()
+    assert "cannot load" in captured.err
+
+
+def test_load_json_file_handles_array_json(tmp_path) -> None:
+    path = tmp_path / "array.json"
+    path.write_text('[1, 2, 3]', encoding="utf-8")
+    result = load_json_file(str(path))
+    assert result == [1, 2, 3]
+
+
+def test_load_json_file_handles_nested_json(tmp_path) -> None:
+    path = tmp_path / "nested.json"
+    path.write_text('{"mcpServers": {"fs": {"type": "stdio", "command": "echo"}}}', encoding="utf-8")
+    result = load_json_file(str(path))
+    assert result["mcpServers"]["fs"]["type"] == "stdio"
