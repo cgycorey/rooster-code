@@ -527,3 +527,119 @@ def test_handle_query_extracts_all_keys() -> None:
     merge_keys = set(dm._CONFIG_MERGE_KEYS)
     assert all_keys == simple_keys | merge_keys
     assert merge_keys - simple_keys == {"env", "custom_headers"}
+
+
+# -- PersistentCronStore -------------------------------------------------------
+
+
+def _tmp_cron_db() -> str:
+    f = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    path = f.name
+    f.close()
+    return path
+
+
+def test_cron_store_setitem_persists() -> None:
+    from rooster_code.daemon import PersistentCronStore
+    path = _tmp_cron_db()
+    try:
+        store = PersistentCronStore(path)
+        store["abc"] = {"id": "abc", "schedule": "*/10 * * * *", "command": "echo hi", "name": "test"}
+        assert "abc" in store
+        assert store["abc"]["schedule"] == "*/10 * * * *"
+        store.close()
+        store2 = PersistentCronStore(path)
+        assert "abc" in store2
+        assert store2["abc"]["name"] == "test"
+        store2.close()
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+def test_cron_store_delitem_removes() -> None:
+    from rooster_code.daemon import PersistentCronStore
+    path = _tmp_cron_db()
+    try:
+        store = PersistentCronStore(path)
+        store["abc"] = {"id": "abc", "schedule": "* * * * *", "command": "test", "name": "t"}
+        del store["abc"]
+        assert "abc" not in store
+        store.close()
+        store2 = PersistentCronStore(path)
+        assert "abc" not in store2
+        store2.close()
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+def test_cron_store_clear_empties() -> None:
+    from rooster_code.daemon import PersistentCronStore
+    path = _tmp_cron_db()
+    try:
+        store = PersistentCronStore(path)
+        store["a"] = {"id": "a", "schedule": "* * * * *", "command": "x", "name": "a"}
+        store["b"] = {"id": "b", "schedule": "* * * * *", "command": "y", "name": "b"}
+        assert len(store) == 2
+        store.clear()
+        assert len(store) == 0
+        store.close()
+        store2 = PersistentCronStore(path)
+        assert len(store2) == 0
+        store2.close()
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+def test_cron_store_values_and_iteration() -> None:
+    from rooster_code.daemon import PersistentCronStore
+    path = _tmp_cron_db()
+    try:
+        store = PersistentCronStore(path)
+        store["x1"] = {"id": "x1", "schedule": "*/5 * * * *", "command": "cmd1", "name": "job1"}
+        store["x2"] = {"id": "x2", "schedule": "0 * * * *", "command": "cmd2", "name": "job2"}
+        vals = list(store.values())
+        assert len(vals) == 2
+        names = {v["name"] for v in vals}
+        assert names == {"job1", "job2"}
+        keys = set(store.keys())
+        assert keys == {"x1", "x2"}
+        store.close()
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+def test_cron_store_mark_run() -> None:
+    from rooster_code.daemon import PersistentCronStore
+    path = _tmp_cron_db()
+    try:
+        store = PersistentCronStore(path)
+        store["r1"] = {"id": "r1", "schedule": "* * * * *", "command": "run", "name": "runner"}
+        assert store["r1"].get("last_run_at") is None
+        store.mark_run("r1")
+        assert store["r1"]["last_run_at"] is not None
+        store.close()
+        store2 = PersistentCronStore(path)
+        assert store2["r1"]["last_run_at"] is not None
+        store2.close()
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+def test_cron_is_due_every_n_minutes() -> None:
+    import rooster_code.daemon as dm
+    now = time.time()
+    assert dm._cron_is_due("*/10 * * * *", now - 601, now) is True
+    assert dm._cron_is_due("*/10 * * * *", now - 300, now) is False
+
+
+def test_cron_is_due_every_n_hours() -> None:
+    import rooster_code.daemon as dm
+    now = time.time()
+    assert dm._cron_is_due("0 */2 * * *", now - 7201, now) is True
+    assert dm._cron_is_due("0 */2 * * *", now - 3600, now) is False
+
+
+def test_cron_is_due_empty_schedule() -> None:
+    import rooster_code.daemon as dm
+    now = time.time()
+    assert dm._cron_is_due("", now - 10000, now) is False

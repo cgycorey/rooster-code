@@ -18,12 +18,24 @@ from rooster_code.runtime import create_runtime_agent
 
 log = logging.getLogger("rooster.daemon")
 
-_SCHEMA = """
+_SCHEMA_SESSIONS = """
 CREATE TABLE IF NOT EXISTS sessions (
     session_id TEXT PRIMARY KEY,
     cwd TEXT NOT NULL DEFAULT '.',
     created_at REAL NOT NULL,
     last_active_at REAL NOT NULL
+);
+"""
+
+_SCHEMA_CRON = """
+CREATE TABLE IF NOT EXISTS cron_jobs (
+    job_id TEXT PRIMARY KEY,
+    schedule TEXT NOT NULL DEFAULT '',
+    command TEXT NOT NULL DEFAULT '',
+    name TEXT NOT NULL DEFAULT '',
+    created_at REAL NOT NULL,
+    last_run_at REAL,
+    enabled INTEGER NOT NULL DEFAULT 1
 );
 """
 
@@ -37,7 +49,8 @@ class StateStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute(_SCHEMA)
+        self._conn.execute(_SCHEMA_SESSIONS)
+        self._conn.execute(_SCHEMA_CRON)
         self._conn.commit()
 
     def upsert_session(self, session_id: str, cwd: str = ".") -> None:
@@ -106,6 +119,82 @@ class StateStore:
 _SOCKET_PATH = Path("/tmp/rooster-code.sock")
 
 
+class PersistentCronStore(dict[str, dict[str, Any]]):
+    """SQLite-backed dict for cron jobs that the SDK tools use transparently.
+
+    The SDK's CronCreate/CronDelete/CronList tools do:
+        from open_agent_sdk.tools import _cron_jobs
+    at runtime inside call(). Rebinding the module attribute to an instance
+    of this class gives persistence without replacing any SDK code.
+    """
+
+    def __init__(self, db_path: str) -> None:
+        super().__init__()
+        self._conn = sqlite3.connect(db_path)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute(_SCHEMA_CRON)
+        self._conn.commit()
+        self._load_all()
+
+    def _load_all(self) -> None:
+        rows = self._conn.execute(
+            "SELECT job_id, schedule, command, name, created_at, last_run_at, enabled FROM cron_jobs"
+        ).fetchall()
+        for row in rows:
+            super().__setitem__(row[0], {
+                "id": row[0],
+                "schedule": row[1],
+                "command": row[2],
+                "name": row[3],
+                "created_at": row[4],
+                "last_run_at": row[5],
+                "enabled": bool(row[6]),
+            })
+
+    def __setitem__(self, key: str, value: dict[str, Any]) -> None:
+        super().__setitem__(key, value)
+        self._conn.execute(
+            "INSERT OR REPLACE INTO cron_jobs (job_id, schedule, command, name, created_at, last_run_at, enabled) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                key,
+                value.get("schedule", ""),
+                value.get("command", ""),
+                value.get("name", f"job_{key}"),
+                value.get("created_at", time.time()),
+                value.get("last_run_at"),
+                1 if value.get("enabled", True) else 0,
+            ),
+        )
+        self._conn.commit()
+
+    def __delitem__(self, key: str) -> None:
+        super().__delitem__(key)
+        self._conn.execute("DELETE FROM cron_jobs WHERE job_id = ?", (key,))
+        self._conn.commit()
+
+    def clear(self) -> None:
+        super().clear()
+        self._conn.execute("DELETE FROM cron_jobs")
+        self._conn.commit()
+
+    def mark_run(self, job_id: str) -> None:
+        now = time.time()
+        if job_id in self:
+            self[job_id]["last_run_at"] = now
+        self._conn.execute("UPDATE cron_jobs SET last_run_at = ? WHERE job_id = ?", (now, job_id))
+        self._conn.commit()
+
+    def update_last_run(self, job_id: str, last_run_at: float) -> None:
+        if job_id in self:
+            self[job_id]["last_run_at"] = last_run_at
+            self._conn.execute("UPDATE cron_jobs SET last_run_at = ? WHERE job_id = ?", (last_run_at, job_id))
+            self._conn.commit()
+
+    def close(self) -> None:
+        self._conn.close()
+
+
 def _get_agent_session_id(agent: Any) -> str:
     opts = getattr(agent, "_options", None)
     if opts is not None:
@@ -127,6 +216,7 @@ class AgentDaemon:
     ) -> None:
         self.socket_path = Path(socket_path) if socket_path else _SOCKET_PATH
         self.state = StateStore(db_path=db_path)
+        self.cron = PersistentCronStore(db_path=db_path or str(Path.home() / ".rooster-code" / "daemon.db"))
         self._server: asyncio.Server | None = None
         self._shutdown_event = asyncio.Event()
         self._adapters: list[Any] = []
@@ -155,16 +245,23 @@ class AgentDaemon:
             self.socket_path.unlink()
         self._server = await asyncio.start_unix_server(self._handle_client, path=str(self.socket_path))
         log.info("listening on %s", self.socket_path)
+        import open_agent_sdk.tools as sdk_tools
+        sdk_tools._cron_jobs = self.cron
+        log.info("cron store patched (%d jobs loaded)", len(self.cron))
         for adapter in self._adapters:
             await adapter.start()
         cleanup = asyncio.create_task(self._cleanup_loop())
+        cron_runner = asyncio.create_task(self._cron_runner_loop())
         heartbeat = asyncio.create_task(self._heartbeat_loop()) if self._heartbeat_interval else None
         await self._shutdown_event.wait()
         cleanup.cancel()
+        cron_runner.cancel()
         if heartbeat:
             heartbeat.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await cleanup
+        with contextlib.suppress(asyncio.CancelledError):
+            await cron_runner
         if heartbeat:
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat
@@ -178,6 +275,7 @@ class AgentDaemon:
             self._server.close()
             await self._server.wait_closed()
         self.state.close()
+        self.cron.close()
         if self.socket_path.exists():
             self.socket_path.unlink()
         log.info("shutdown complete")
@@ -277,6 +375,36 @@ class AgentDaemon:
                     log.info("cleaned %d inactive session(s)", removed)
             except Exception:
                 log.warning("session cleanup failed", exc_info=True)
+
+    async def _cron_runner_loop(self) -> None:
+        while True:
+            await asyncio.sleep(30)
+            try:
+                jobs = list(self.cron.values())
+                now = time.time()
+                for job in jobs:
+                    if not job.get("enabled", True):
+                        continue
+                    schedule = job.get("schedule", "")
+                    if not schedule:
+                        continue
+                    last_run = job.get("last_run_at")
+                    if last_run and not _cron_is_due(schedule, last_run, now):
+                        continue
+                    job_id = job["id"]
+                    job_name = job.get("name", job_id)
+                    log.info("cron: running job %s (%s)", job_name, job_id)
+                    try:
+                        result = await self._query_handler(
+                            f"cron-{job_id}", "cron", job.get("command", "")
+                        )
+                        log.info("cron: job %s completed: tokens=%d cost=$%.4f",
+                                 job_name, result["tokens"], result["cost"])
+                    except Exception as exc:
+                        log.error("cron: job %s failed: %s", job_name, exc)
+                    self.cron.mark_run(job_id)
+            except Exception:
+                log.warning("cron runner iteration failed", exc_info=True)
 
     async def _heartbeat_loop(self) -> None:
         heartbeat_prompt = (
@@ -466,6 +594,31 @@ _CONFIG_KEYS = ("model", "max_turns", "max_tokens", "permission_mode", "allowed_
 _CONFIG_MERGE_KEYS = ("env", "custom_headers")
 # All keys accepted as query overrides (setattr + merge keys)
 _CONFIG_ALL_KEYS = _CONFIG_KEYS + _CONFIG_MERGE_KEYS
+
+
+def _cron_is_due(schedule: str, last_run: float, now: float) -> bool:
+    if not schedule:
+        return False
+    import datetime
+    delta = now - last_run
+    now_dt = datetime.datetime.fromtimestamp(now, tz=datetime.timezone.utc)
+    parts = schedule.strip().split()
+    if len(parts) != 5:
+        return delta >= 3600
+    minute, hour, dom, mon, dow = parts
+    try:
+        if minute.startswith("*/"):
+            interval = int(minute[2:])
+            return delta >= interval * 60
+        if hour.startswith("*/"):
+            interval = int(hour[2:])
+            return delta >= interval * 3600
+        if minute != "*" and minute.isdigit():
+            if now_dt.minute == int(minute) and delta >= 60:
+                return True
+    except (ValueError, TypeError):
+        pass
+    return delta >= 86400
 
 
 def _is_retriable(exc: Exception) -> bool:
