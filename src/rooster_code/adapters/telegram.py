@@ -89,8 +89,8 @@ class TelegramAdapter(ChannelAdapter):
                 response = result["text"] if isinstance(result, dict) else str(result)
             except asyncio.TimeoutError:
                 response = "I'm still working on that — please wait and try again."
-            except Exception as exc:
-                response = f"Error: {exc}"
+            except Exception:
+                response = "Something went wrong. Please try again."
 
             for chunk in _split_long_message(response):
                 await message.answer(chunk)

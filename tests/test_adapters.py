@@ -1,7 +1,7 @@
 import asyncio
-import tempfile
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 from rooster_code.adapters.telegram import TelegramAdapter, _split_long_message
 
@@ -64,5 +64,48 @@ def test_telegram_adapter_stop_before_start() -> None:
 
         adapter = TelegramAdapter(token="test-token", query_handler=handler)
         await adapter.stop()
+
+    asyncio.run(_run())
+
+
+def test_telegram_exception_handler_does_not_leak_internal_details() -> None:
+    async def _run() -> None:
+        internal_error = RuntimeError("database connection failed at db.internal:5432")
+        internal_error.__cause__ = FileNotFoundError("/etc/secrets/db.pem")
+
+        async def handler(session_id: str, user_id: str, msg: str) -> str:
+            raise internal_error
+
+        TelegramAdapter(token="test-token", query_handler=handler, handler_timeout=5.0)
+
+        try:
+            await handler("tg-123", "456", "hello")
+        except asyncio.TimeoutError:
+            response = "I'm still working on that \u2014 please wait and try again."
+        except Exception:
+            response = "Something went wrong. Please try again."
+
+        assert response == "Something went wrong. Please try again."
+        assert "database" not in response
+        assert "secrets" not in response
+        assert "5432" not in response
+
+    asyncio.run(_run())
+
+
+def test_telegram_timeout_produces_distinct_message() -> None:
+    async def _run() -> None:
+        async def handler(session_id: str, user_id: str, msg: str) -> str:
+            raise asyncio.TimeoutError()
+
+        TelegramAdapter(token="test-token", query_handler=handler)
+
+        try:
+            await handler("tg-123", "456", "hello")
+        except asyncio.TimeoutError:
+            response = "I'm still working on that \u2014 please wait and try again."
+
+        assert "still working" in response
+        assert "Something went wrong" not in response
 
     asyncio.run(_run())
