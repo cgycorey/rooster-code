@@ -488,3 +488,42 @@ def test_heartbeat_disabled_by_default() -> None:
 def test_heartbeat_enabled_with_interval() -> None:
     daemon = AgentDaemon(heartbeat_interval=60)
     assert daemon._heartbeat_interval == 60
+
+
+# -- config key constants ------------------------------------------------------
+
+
+def test_config_keys_exclude_merge_keys() -> None:
+    import rooster_code.daemon as dm
+
+    assert "env" not in dm._CONFIG_KEYS
+    assert "custom_headers" not in dm._CONFIG_KEYS
+    assert "model" in dm._CONFIG_KEYS
+    assert "max_turns" in dm._CONFIG_KEYS
+    assert "sandbox" in dm._CONFIG_KEYS
+
+
+def test_config_merge_keys_only_env_and_headers() -> None:
+    import rooster_code.daemon as dm
+
+    assert dm._CONFIG_MERGE_KEYS == ("env", "custom_headers")
+
+
+def test_config_all_keys_is_union() -> None:
+    import rooster_code.daemon as dm
+
+    assert dm._CONFIG_ALL_KEYS == dm._CONFIG_KEYS + dm._CONFIG_MERGE_KEYS
+    assert "env" in dm._CONFIG_ALL_KEYS
+    assert "custom_headers" in dm._CONFIG_ALL_KEYS
+    assert "model" in dm._CONFIG_ALL_KEYS
+
+
+def test_handle_query_extracts_all_keys() -> None:
+    """_handle_query uses _CONFIG_ALL_KEYS so env/custom_headers are extracted."""
+    import rooster_code.daemon as dm
+
+    all_keys = set(dm._CONFIG_ALL_KEYS)
+    simple_keys = set(dm._CONFIG_KEYS)
+    merge_keys = set(dm._CONFIG_MERGE_KEYS)
+    assert all_keys == simple_keys | merge_keys
+    assert merge_keys - simple_keys == {"env", "custom_headers"}

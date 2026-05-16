@@ -203,7 +203,7 @@ class AgentDaemon:
             for file_key, file_val in self_ref._file_configs.items():
                 if file_val is not None and not getattr(config, file_key, None):
                     setattr(config, file_key, file_val)
-            for key in ("model", "max_turns", "max_tokens", "permission_mode", "allowed_tools", "disallowed_tools", "thinking_budget", "max_budget_usd", "debug", "sandbox", "include_partials"):
+            for key in _CONFIG_KEYS:
                 val = overrides.get(key)
                 if val is not None:
                     setattr(config, key, val)
@@ -239,8 +239,8 @@ class AgentDaemon:
                             delay = _RETRY_BASE_DELAY * (2 ** attempt)
                             log.warning("retrying query after %ss (attempt %d/%d): %s", delay, attempt + 2, _MAX_RETRIES, exc)
                             await asyncio.sleep(delay)
-                    if last_error is not None and result is None:
-                        return {"text": f"Error: {last_error}", "tokens": 0, "cost": 0.0, "turns": 0}
+                    if result is None:
+                        return {"text": f"Error: {last_error or 'no result'}", "tokens": 0, "cost": 0.0, "turns": 0}
                     usage = getattr(result, "usage", None)
                     tokens = 0
                     if usage:
@@ -340,7 +340,7 @@ class AgentDaemon:
             await self._reply(writer, {"type": "error", "message": "prompt is required"})
             return
         overrides = {}
-        for k in ("model", "max_turns", "max_tokens", "permission_mode", "allowed_tools", "disallowed_tools", "thinking_budget", "max_budget_usd", "debug", "sandbox", "include_partials", "env", "custom_headers"):
+        for k in _CONFIG_ALL_KEYS:
             v = request.get(k)
             if v is not None:
                 overrides[k] = v
@@ -455,6 +455,13 @@ _QUERY_TIMEOUT = 300
 _CONNECT_TIMEOUT = 5
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0
+
+# Config keys that can be applied directly via setattr (no merging)
+_CONFIG_KEYS = ("model", "max_turns", "max_tokens", "permission_mode", "allowed_tools", "disallowed_tools", "thinking_budget", "max_budget_usd", "debug", "sandbox", "include_partials")
+# Keys that require merge semantics (dict-on-dict) rather than simple replacement
+_CONFIG_MERGE_KEYS = ("env", "custom_headers")
+# All keys accepted as query overrides (setattr + merge keys)
+_CONFIG_ALL_KEYS = _CONFIG_KEYS + _CONFIG_MERGE_KEYS
 
 
 def _is_retriable(exc: Exception) -> bool:
