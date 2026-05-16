@@ -994,9 +994,46 @@ def _ask_via_daemon(prompt: str, args: argparse.Namespace) -> int:
 
     from rooster_code.daemon import daemon_query
 
+    overrides: dict[str, object] = {}
+    _FLAG_OVERRIDES: list[tuple[str, str]] = [
+        ("model", "model"),
+        ("max_turns", "max_turns"),
+        ("max_tokens", "max_tokens"),
+        ("permission_mode", "permission_mode"),
+        ("thinking_budget", "thinking_budget"),
+        ("max_budget_usd", "max_budget_usd"),
+        ("sandbox", "sandbox"),
+        ("debug", "debug"),
+        ("include_partials", "include_partials"),
+    ]
+    for attr, key in _FLAG_OVERRIDES:
+        val = getattr(args, attr, None)
+        if val is not None:
+            overrides[key] = val
+    if getattr(args, "allowed_tools", None):
+        overrides["allowed_tools"] = args.allowed_tools
+    if getattr(args, "disallowed_tools", None):
+        overrides["disallowed_tools"] = args.disallowed_tools
+    if getattr(args, "env", None):
+        env_dict: dict[str, str] = {}
+        for pair in args.env:
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                env_dict[k] = v
+        if env_dict:
+            overrides["env"] = env_dict
+    if getattr(args, "custom_headers", None):
+        headers_dict: dict[str, str] = {}
+        for pair in args.custom_headers:
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                headers_dict[k] = v
+        if headers_dict:
+            overrides["custom_headers"] = headers_dict
+
     async def _run() -> int:
         session_id = args.resume or args.session_id or ""
-        result = await daemon_query(prompt, session_id=session_id, cwd=args.cwd or ".")
+        result = await daemon_query(prompt, session_id=session_id, cwd=args.cwd or ".", overrides=overrides if overrides else None)
         if result["type"] == "done":
             print(result.get("text", ""))
             return 0

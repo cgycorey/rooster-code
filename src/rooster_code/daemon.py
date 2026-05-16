@@ -270,10 +270,13 @@ class AgentDaemon:
     async def _cleanup_loop(self) -> None:
         while True:
             await asyncio.sleep(3600)
-            async with self._state_lock:
-                removed = self.state.cleanup_inactive()
-            if removed:
-                log.info("cleaned %d inactive session(s)", removed)
+            try:
+                async with self._state_lock:
+                    removed = self.state.cleanup_inactive()
+                if removed:
+                    log.info("cleaned %d inactive session(s)", removed)
+            except Exception:
+                log.warning("session cleanup failed", exc_info=True)
 
     async def _heartbeat_loop(self) -> None:
         heartbeat_prompt = (
@@ -385,6 +388,7 @@ class AgentDaemon:
             from rooster_code.runtime import get_session_info as sdk_get_session_info
             sdk_info = await sdk_get_session_info(session_id)
         except Exception:
+            log.warning("failed to fetch SDK session info for %s", session_id, exc_info=True)
             sdk_info = None
         await self._reply(writer, {
             "type": "session_info",
@@ -495,8 +499,13 @@ async def _send_to_daemon(request: dict[str, Any]) -> dict[str, Any]:
             await writer.wait_closed()
 
 
-async def daemon_query(prompt: str, *, session_id: str = "", cwd: str = ".") -> dict[str, Any]:
-    return await _send_to_daemon({"action": "query", "prompt": prompt, "session_id": session_id, "cwd": cwd})
+async def daemon_query(prompt: str, *, session_id: str = "", cwd: str = ".", overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    request: dict[str, Any] = {"action": "query", "prompt": prompt, "session_id": session_id, "cwd": cwd}
+    if overrides:
+        for k, v in overrides.items():
+            if v is not None:
+                request[k] = v
+    return await _send_to_daemon(request)
 
 
 async def daemon_health() -> dict[str, Any]:
