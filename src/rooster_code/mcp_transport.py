@@ -8,9 +8,11 @@ in our daemon and CLI without touching the SDK.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from open_agent_sdk.types import BaseTool, ToolInputSchema, ToolResult
@@ -19,20 +21,16 @@ log = logging.getLogger("rooster.mcp_transport")
 
 
 class McpToolWrapper(BaseTool):
-    """Thin tool wrapper compatible with SDK BaseTool protocol."""
 
     def __init__(self, name: str, description: str, input_schema_dict: dict[str, Any],
-                 server_name: str, tool_name: str, url: str, transport: str,
-                 sse_client: "SseClient | None" = None):
+                 server_name: str, tool_name: str, transport_client: SseClient):
         self._name = name
         self._description = description
         self._input_schema = ToolInputSchema(properties=input_schema_dict.get("properties", {}),
                                              required=input_schema_dict.get("required", []))
         self.server_name = server_name
         self.tool_name = tool_name
-        self.url = url
-        self.transport = transport
-        self._sse_client = sse_client
+        self._client = transport_client
         self._next_id = 1
 
     def is_read_only(self, input: dict[str, Any] | None = None) -> bool:
@@ -50,8 +48,7 @@ class McpToolWrapper(BaseTool):
             "method": "tools/call",
             "params": {"name": self.tool_name, "arguments": input},
         }
-        client = self._sse_client or SseClient(self.url)
-        result = await client.send_request(request)
+        result = await self._client.send_request(request)
         content = result.get("content", [])
         texts = []
         for block in content:
@@ -61,17 +58,73 @@ class McpToolWrapper(BaseTool):
 
 
 class SseClient:
-    """Minimal JSON-RPC over HTTP + SSE client for MCP."""
+    """MCP SSE transport client.
+
+    Uses a single persistent GET stream to /sse for both endpoint
+    discovery and response reading. Requests are POSTed to the
+    messages endpoint; responses arrive on the GET stream
+    correlated by request ID.
+    """
 
     def __init__(self, url: str, timeout: float = 30.0):
-        self._url = url.rstrip("/")
+        self._sse_url = url.rstrip("/")
         self._timeout = timeout
         self._http = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
+        self._next_id = 1
+        self._messages_url: str | None = None
+        self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
+        self._reader_task: asyncio.Task[None] | None = None
+        self._endpoint_discovered = asyncio.Event()
+
+    async def _sse_stream_reader(self) -> None:
+        """Persistent GET /sse that discovers the endpoint then reads responses."""
+        try:
+            async with self._http.stream("GET", self._sse_url, headers={"Accept": "text/event-stream"}) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    payload = line[6:].strip()
+
+                    if self._messages_url is None:
+                        path = payload
+                        if path.startswith("/"):
+                            parsed = urlparse(self._sse_url)
+                            self._messages_url = f"{parsed.scheme}://{parsed.netloc}{path}"
+                        else:
+                            self._messages_url = path
+                        self._endpoint_discovered.set()
+                        log.debug("SSE messages endpoint: %s", self._messages_url)
+                        continue
+
+                    try:
+                        event = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+
+                    req_id = event.get("id")
+                    if req_id is not None and req_id in self._pending:
+                        fut = self._pending.pop(req_id)
+                        if not fut.done():
+                            if "result" in event:
+                                fut.set_result(event["result"])
+                            elif "error" in event:
+                                fut.set_exception(RuntimeError(f"MCP error: {event['error']}"))
+        except Exception as exc:
+            if not self._endpoint_discovered.is_set():
+                self._endpoint_discovered.set()
+            log.warning("SSE reader stopped: %s", exc)
+            for fut in self._pending.values():
+                if not fut.done():
+                    fut.set_exception(exc)
+            self._pending.clear()
 
     async def initialize(self) -> dict[str, Any]:
+        self._reader_task = asyncio.create_task(self._sse_stream_reader())
+        await asyncio.wait_for(self._endpoint_discovered.wait(), timeout=self._timeout)
         init_request = {
             "jsonrpc": "2.0",
-            "id": 1,
+            "id": self._next_id,
             "method": "initialize",
             "params": {
                 "protocolVersion": "2024-11-05",
@@ -79,37 +132,54 @@ class SseClient:
                 "clientInfo": {"name": "rooster-code", "version": "1.0"},
             },
         }
+        self._next_id += 1
         result = await self.send_request(init_request)
-        # Send initialized notification
         notif = {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
         await self.send_notification(notif)
         return result
 
     async def list_tools(self) -> list[dict[str, Any]]:
-        req = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
+        req = {"jsonrpc": "2.0", "id": self._next_id, "method": "tools/list", "params": {}}
+        self._next_id += 1
         result = await self.send_request(req)
         return result.get("tools", [])
 
     async def send_request(self, request: dict[str, Any]) -> dict[str, Any]:
-        headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
-        resp = await self._http.post(self._url, json=request, headers=headers)
-        resp.raise_for_status()
-        content_type = resp.headers.get("content-type", "")
-
-        if "text/event-stream" in content_type:
-            return await self._parse_sse_response(resp)
-        return resp.json().get("result", {})
+        assert self._messages_url is not None
+        req_id = request.get("id")
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[dict[str, Any]] = loop.create_future()
+        if req_id is not None:
+            self._pending[req_id] = fut
+        try:
+            resp = await self._http.post(self._messages_url, json=request, headers={"Content-Type": "application/json"})
+        except Exception:
+            if req_id is not None and req_id in self._pending:
+                del self._pending[req_id]
+            raise
+        if resp.status_code >= 400:
+            if req_id is not None and req_id in self._pending:
+                del self._pending[req_id]
+            resp.raise_for_status()
+        if resp.status_code == 200:
+            content_type = resp.headers.get("content-type", "")
+            if "text/event-stream" in content_type:
+                return self._parse_inline_sse(resp)
+            body = resp.json()
+            if req_id is not None and req_id in self._pending:
+                del self._pending[req_id]
+            return body.get("result", body) if isinstance(body, dict) else body
+        return await asyncio.wait_for(fut, timeout=self._timeout)
 
     async def send_notification(self, notification: dict[str, Any]) -> None:
-        headers = {"Content-Type": "application/json"}
-        await self._http.post(self._url, json=notification, headers=headers)
+        assert self._messages_url is not None
+        await self._http.post(self._messages_url, json=notification, headers={"Content-Type": "application/json"})
 
-    async def _parse_sse_response(self, resp: httpx.Response) -> dict[str, Any]:
-        async for line in resp.aiter_lines():
+    def _parse_inline_sse(self, resp: httpx.Response) -> dict[str, Any]:
+        for line in resp.text.split("\n"):
             if line.startswith("data: "):
-                data = line[6:]
                 try:
-                    event = json.loads(data)
+                    event = json.loads(line[6:])
                     if "result" in event:
                         return event["result"]
                     if "error" in event:
@@ -119,6 +189,10 @@ class SseClient:
         return {}
 
     async def close(self) -> None:
+        if self._reader_task and not self._reader_task.done():
+            self._reader_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._reader_task
         await self._http.aclose()
 
 
@@ -149,9 +223,7 @@ async def connect_http_mcp(server_name: str, config: dict[str, Any]) -> list[Any
             input_schema_dict=tool_schema,
             server_name=server_name,
             tool_name=tool_name,
-            url=url,
-            transport="sse" if "sse" in config.get("type", "") else "http",
-            sse_client=client,
+            transport_client=client,
         )
         tools.append(wrapper)
 
@@ -160,7 +232,6 @@ async def connect_http_mcp(server_name: str, config: dict[str, Any]) -> list[Any
 
 
 def split_mcp_servers(mcp_servers: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Split MCP config into stdio (handled by SDK) and http/sse (handled by us)."""
     stdio: dict[str, Any] = {}
     remote: dict[str, Any] = {}
     for name, cfg in mcp_servers.items():
