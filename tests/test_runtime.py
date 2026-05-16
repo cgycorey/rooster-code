@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import logging
 from pathlib import Path
 from typing import Coroutine, cast
 
@@ -2723,3 +2724,82 @@ def test_rehydrate_tasks_from_history_clears_stale_ids_on_reresume() -> None:
         _tasks.update(original_tasks)
         tools_mod._task_counter = original_counter
         runtime._injected_task_ids_rehydrated.clear()
+
+
+def test_remote_mcp_failure_logs_warning_and_continues(monkeypatch, caplog) -> None:
+    class PlaceholderAgentTool:
+        name = "Agent"
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = []
+
+        async def _initialize(self) -> None:
+            self._tool_pool = [PlaceholderAgentTool()]
+
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
+
+    async def failing_connect(name, cfg):
+        raise ConnectionError(f"Cannot reach MCP server {name}")
+
+    monkeypatch.setattr("rooster_code.mcp_transport.connect_http_mcp", failing_connect)
+
+    agent = create_runtime_agent(
+        RuntimeConfig(
+            api_key="test-key",
+            base_url="https://nano-gpt.com/api/v1",
+            model="test-model",
+            agents={"reviewer": {"description": "code reviewer"}},
+            mcp_servers={
+                "remote-server": {"type": "http", "url": "http://localhost:9999/sse"},
+            },
+        )
+    )
+
+    with caplog.at_level(logging.WARNING, logger="rooster.runtime"):
+        asyncio.run(agent._initialize())
+
+    assert [tool.name for tool in agent._tool_pool] == ["Agent"]
+
+    warning_messages = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("remote-server" in msg for msg in warning_messages), f"Expected warning about remote-server, got: {warning_messages}"
+    assert any("Cannot reach" in msg for msg in warning_messages), f"Expected connection error detail, got: {warning_messages}"
+
+
+def test_remote_mcp_failure_does_not_crash_agent_initialization(monkeypatch) -> None:
+    class PlaceholderAgentTool:
+        name = "Agent"
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = []
+
+        async def _initialize(self) -> None:
+            self._tool_pool = [PlaceholderAgentTool()]
+
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
+
+    async def failing_connect(name, cfg):
+        raise RuntimeError("SSE connection refused")
+
+    monkeypatch.setattr("rooster_code.mcp_transport.connect_http_mcp", failing_connect)
+
+    agent = create_runtime_agent(
+        RuntimeConfig(
+            api_key="test-key",
+            base_url="https://nano-gpt.com/api/v1",
+            model="test-model",
+            agents={"reviewer": {"description": "code reviewer"}},
+            mcp_servers={
+                "broken-mcp": {"type": "http", "url": "http://localhost:9999/sse"},
+            },
+        )
+    )
+
+    asyncio.run(agent._initialize())
+
+    tool_names = [tool.name for tool in agent._tool_pool]
+    assert "Agent" in tool_names
+    assert "broken-mcp" not in str(tool_names)

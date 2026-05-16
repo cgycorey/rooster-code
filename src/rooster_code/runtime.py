@@ -4,10 +4,13 @@ import asyncio
 from dataclasses import replace
 import contextlib
 import json
+import logging
 from pathlib import Path
 import re
 import threading
 from typing import Any, cast
+
+log = logging.getLogger("rooster.runtime")
 from open_agent_sdk import (
     AgentOptions,
     ToolContext,
@@ -1128,8 +1131,8 @@ def _create_sdk_agent(
                 try:
                     remote_tools = await connect_http_mcp(rname, rcfg)
                     agent._tool_pool.extend(remote_tools)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning("Failed to connect remote MCP server %r: %s", rname, e)
             replaced = False
             new_pool = []
             for tool in getattr(agent, "_tool_pool", []):
