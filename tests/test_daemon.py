@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import pytest
 import sqlite3
 import tempfile
 import time
@@ -9,6 +10,7 @@ from typing import Any
 
 from rooster_code.daemon import (
     AgentDaemon,
+    PersistentCronStore,
     StateStore,
     _send_to_daemon,
     daemon_health,
@@ -643,3 +645,60 @@ def test_cron_is_due_empty_schedule() -> None:
     import rooster_code.daemon as dm
     now = time.time()
     assert dm._cron_is_due("", now - 10000, now) is False
+
+
+# -- DB init hardening ---------------------------------------------------------
+
+
+def test_state_store_unwritable_directory() -> None:
+    """StateStore should raise SystemExit when the DB directory is not writable."""
+    bad_path = "/proc/nonexistent/impossible/daemon.db"
+    with pytest.raises(SystemExit) as exc_info:
+        StateStore(db_path=bad_path)
+    assert "Cannot open state database" in str(exc_info.value)
+    assert bad_path in str(exc_info.value)
+
+
+def test_state_store_corrupt_db_file() -> None:
+    """StateStore should raise SystemExit when the DB file is corrupt (not valid SQLite)."""
+    f = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    f.write(b"this is not a valid sqlite database file at all")
+    f.close()
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            StateStore(db_path=f.name)
+        assert "Cannot open state database" in str(exc_info.value)
+    finally:
+        Path(f.name).unlink(missing_ok=True)
+
+
+def test_cron_store_unwritable_directory() -> None:
+    """PersistentCronStore should raise SystemExit when the DB directory is not writable."""
+    bad_path = "/proc/nonexistent/impossible/cron.db"
+    with pytest.raises(SystemExit) as exc_info:
+        PersistentCronStore(db_path=bad_path)
+    assert "Cannot open cron database" in str(exc_info.value)
+    assert bad_path in str(exc_info.value)
+
+
+def test_cron_store_corrupt_db_file() -> None:
+    """PersistentCronStore should raise SystemExit when the DB file is corrupt (not valid SQLite)."""
+    f = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    f.write(b"garbage data not a sqlite file for cron")
+    f.close()
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            PersistentCronStore(db_path=f.name)
+        assert "Cannot open cron database" in str(exc_info.value)
+    finally:
+        Path(f.name).unlink(missing_ok=True)
+
+
+def test_main_returns_1_on_db_error() -> None:
+    """main() should return 1 when the daemon cannot open its database."""
+    from unittest.mock import patch
+    with patch("rooster_code.daemon.AgentDaemon", side_effect=SystemExit("Cannot open state database")), \
+         patch("sys.argv", ["rooster-daemon"]):
+        from rooster_code.daemon import main
+        result = main()
+    assert result == 1

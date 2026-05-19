@@ -46,12 +46,16 @@ class StateStore:
         if db_path is None:
             db_path = str(Path.home() / ".rooster-code" / "daemon.db")
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self.db_path))
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute(_SCHEMA_SESSIONS)
-        self._conn.execute(_SCHEMA_CRON)
-        self._conn.commit()
+        try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._conn = sqlite3.connect(str(self.db_path))
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute(_SCHEMA_SESSIONS)
+            self._conn.execute(_SCHEMA_CRON)
+            self._conn.commit()
+        except (sqlite3.OperationalError, sqlite3.DatabaseError, OSError) as e:
+            log.error("Cannot open state database at %s: %s", self.db_path, e)
+            raise SystemExit(f"Cannot open state database at {self.db_path}: {e}") from e
 
     def upsert_session(self, session_id: str, cwd: str = ".") -> None:
         now = time.time()
@@ -130,11 +134,15 @@ class PersistentCronStore(dict[str, dict[str, Any]]):
 
     def __init__(self, db_path: str) -> None:
         super().__init__()
-        self._conn = sqlite3.connect(db_path)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute(_SCHEMA_CRON)
-        self._conn.commit()
-        self._load_all()
+        try:
+            self._conn = sqlite3.connect(db_path)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute(_SCHEMA_CRON)
+            self._conn.commit()
+            self._load_all()
+        except (sqlite3.OperationalError, sqlite3.DatabaseError, OSError) as e:
+            log.error("Cannot open cron database at %s: %s", db_path, e)
+            raise SystemExit(f"Cannot open cron database at {db_path}: {e}") from e
 
     def _load_all(self) -> None:
         rows = self._conn.execute(
@@ -714,7 +722,10 @@ def main() -> int:
             if loaded is not None:
                 file_configs[attr] = loaded
 
-    daemon = AgentDaemon(socket_path=args.socket, db_path=args.db, max_sessions=args.max_sessions, heartbeat_interval=args.heartbeat, file_configs=file_configs)
+    try:
+        daemon = AgentDaemon(socket_path=args.socket, db_path=args.db, max_sessions=args.max_sessions, heartbeat_interval=args.heartbeat, file_configs=file_configs)
+    except SystemExit:
+        return 1
 
     if args.telegram:
         allowed = None
