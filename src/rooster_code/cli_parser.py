@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+import argparse
+
+
+def add_runtime_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--cwd", help="Working directory for the agent")
+    parser.add_argument("--model", help="Override ROOSTER_CODE_MODEL for this run")
+    parser.add_argument("--permission-mode", help="SDK permission mode")
+    parser.add_argument("--search-url", help="SearXNG search endpoint URL")
+    parser.add_argument("--max-turns", type=int, help="Maximum SDK turns")
+    parser.add_argument("--max-budget-usd", type=float, help="Maximum spend for this run")
+    parser.add_argument("--max-tokens", type=int, help="Maximum output tokens")
+    parser.add_argument("--thinking-budget", type=int, help="Extended thinking token budget")
+    parser.add_argument("--allowed-tool", dest="allowed_tools", action="append", help="Allow a tool by name")
+    parser.add_argument("--disallowed-tool", dest="disallowed_tools", action="append", help="Block a tool by name")
+    parser.add_argument("--session-id", help="Explicit session id")
+    parser.add_argument("--resume", help="Resume a specific session id")
+    parser.add_argument("--continue-session", action="store_true", help="Continue the last session")
+    parser.add_argument("--fork-session", help="Fork a source session before running")
+    parser.add_argument("--persist-session", dest="persist_session", action="store_true", help="Persist session on close")
+    parser.add_argument("--no-persist-session", dest="persist_session", action="store_false", help="Do not persist session on close")
+    parser.add_argument("--sandbox", action="store_true", help="Enable SDK sandbox mode")
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    parser.add_argument("--include-partials", action="store_true", help="Include partial SDK stream events")
+    parser.add_argument("--env", action="append", help="Pass KEY=VALUE into the tool environment")
+    parser.add_argument("--custom-header", dest="custom_headers", action="append", help="Pass KEY=VALUE as an API header")
+    parser.add_argument("--extra-args-file", help="JSON file for SDK extra_args")
+    parser.add_argument("--json-schema-file", help="JSON file for structured output schema")
+    parser.add_argument("--agents-file", help="JSON file for subagent definitions")
+    parser.add_argument("--hooks-file", help="JSON file for hook configuration")
+    parser.add_argument("--mcp-file", help="JSON file for MCP server configuration")
+    parser.add_argument("--skills-dir", help="Directory containing local SKILL.md bundles")
+    parser.set_defaults(persist_session=True)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="rooster-code", description="Rich CLI wrapper for the Open Agent SDK")
+    subparsers = parser.add_subparsers(dest="command")
+
+    ask_parser = subparsers.add_parser("ask", help="Run a one-shot prompt")
+    ask_parser.add_argument("prompt")
+    ask_parser.add_argument("--daemon", action="store_true", help="Route through daemon instead of direct execution")
+    add_runtime_arguments(ask_parser)
+
+    chat_parser = subparsers.add_parser("chat", help="Start an interactive chat session")
+    add_runtime_arguments(chat_parser)
+
+    sessions_parser = subparsers.add_parser("sessions", help="Inspect and manage persisted sessions")
+    sessions_subparsers = sessions_parser.add_subparsers(dest="sessions_command")
+    sessions_subparsers.add_parser("list", help="List saved sessions")
+    info_parser = sessions_subparsers.add_parser("info", help="Show session metadata")
+    info_parser.add_argument("session_id")
+    delete_parser = sessions_subparsers.add_parser("delete", help="Delete a saved session")
+    delete_parser.add_argument("session_id")
+    fork_parser = sessions_subparsers.add_parser("fork", help="Fork a session into a new id")
+    fork_parser.add_argument("session_id")
+    fork_parser.add_argument("--new-id")
+    rename_parser = sessions_subparsers.add_parser("rename", help="Rename a session")
+    rename_parser.add_argument("session_id")
+    rename_parser.add_argument("title")
+    tag_parser = sessions_subparsers.add_parser("tag", help="Attach tags to a session")
+    tag_parser.add_argument("session_id")
+    tag_parser.add_argument("tags", nargs="+")
+    show_parser = sessions_subparsers.add_parser("show", help="Show session transcript")
+    show_parser.add_argument("session_id")
+    append_parser = sessions_subparsers.add_parser("append", help="Append a message to a session")
+    append_parser.add_argument("session_id", help="Target session ID")
+    append_parser.add_argument("message", help="Message text to append")
+    append_parser.add_argument("--role", help="Message role (default: user)", default="user")
+
+    tools_parser = subparsers.add_parser("tools", help="Inspect tool availability")
+    tools_subparsers = tools_parser.add_subparsers(dest="tools_command")
+    tools_subparsers.add_parser("list", help="List SDK base tools")
+
+    skills_parser = subparsers.add_parser("skills", help="List available skills")
+    skills_parser.add_argument("--json", action="store_true", help="Output skill names as JSON array")
+
+    agents_parser = subparsers.add_parser("agents", help="Manage configured agents")
+    agents_sub = agents_parser.add_subparsers(dest="agents_command")
+    agents_sub.add_parser("list", help="List configured agents")
+
+    state_parser = subparsers.add_parser("state", help="Inspect exported SDK runtime state")
+    state_subparsers = state_parser.add_subparsers(dest="state_command")
+    state_subparsers.add_parser("tasks", help="Show task store contents")
+    state_subparsers.add_parser("teams", help="Show team store contents")
+    mailboxes_parser = state_subparsers.add_parser("mailboxes", help="Show mailbox contents")
+    mailboxes_parser.add_argument("--agent")
+    state_subparsers.add_parser("config", help="Show config store contents")
+    state_subparsers.add_parser("cron", help="Show cron store contents")
+    state_subparsers.add_parser("plan", help="Show plan-mode state")
+    state_subparsers.add_parser("todos", help="Show todo store contents")
+
+    daemon_parser = subparsers.add_parser("daemon", help="Control the long-running agent daemon")
+    daemon_sub = daemon_parser.add_subparsers(dest="daemon_command")
+    daemon_sub.add_parser("status", help="Show daemon health and stats")
+    daemon_sub.add_parser("sessions", help="List tracked sessions")
+    session_parser = daemon_sub.add_parser("session", help="Show session details")
+    session_parser.add_argument("session_id", help="Session ID to inspect")
+    daemon_sub.add_parser("shutdown", help="Gracefully stop the daemon")
+
+    return parser
