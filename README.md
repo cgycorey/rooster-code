@@ -373,9 +373,12 @@ uv run rooster-code sessions info <session-id>
 uv run rooster-code sessions fork <session-id> --new-id <new-session-id>
 uv run rooster-code sessions rename <session-id> "My session"
 uv run rooster-code sessions tag <session-id> alpha beta
-uv run rooster-code sessions append <session-id> "message text"
+uv run rooster-code sessions append <session-id> "message text" [--role <role>]
 uv run rooster-code sessions delete <session-id>
 ```
+
+Supported roles: `user` (default), `system`, `assistant`, `tool`. Unknown roles
+are accepted and stored as-is.
 
 ## Skills and agents (CLI)
 

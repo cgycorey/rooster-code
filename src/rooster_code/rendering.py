@@ -111,11 +111,25 @@ def extract_text(value: object) -> str:
         for item in value:
             if isinstance(item, Mapping):
                 mapping = cast(Mapping[str, object], item)
-                if mapping.get("type") == "text":
+                block_type = mapping.get("type", "")
+                if block_type == "text":
                     parts.append(str(mapping.get("text", "")))
+                elif block_type == "tool_use":
+                    tool_name = str(mapping.get("name", "tool"))
+                    parts.append(f"[Using tool: {tool_name}]")
+                elif block_type == "tool_result":
+                    result = mapping.get("content", "")
+                    if isinstance(result, str):
+                        parts.append(result)
+                    elif isinstance(result, list):
+                        for rc in result:
+                            if isinstance(rc, Mapping) and rc.get("type") == "text":
+                                parts.append(str(rc.get("text", "")))
+                    elif result:
+                        parts.append(str(result))
             elif isinstance(item, str):
                 parts.append(item)
-        return "\n".join(part for part in parts if part)
+        return "\n".join(part for part in parts if part.strip())
     if isinstance(value, Mapping):
         mapping = cast(Mapping[str, object], value)
         if mapping.get("type") == "text":
