@@ -497,6 +497,7 @@ def build_parser() -> argparse.ArgumentParser:
     append_parser = sessions_subparsers.add_parser("append", help="Append a message to a session")
     append_parser.add_argument("session_id", help="Target session ID")
     append_parser.add_argument("message", help="Message text to append")
+    append_parser.add_argument("--role", help="Message role (default: user)", default="user")
 
     tools_parser = subparsers.add_parser("tools", help="Inspect tool availability")
     tools_subparsers = tools_parser.add_subparsers(dest="tools_command")
@@ -1221,7 +1222,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "sessions" and args.sessions_command == "append":
             console = build_console()
             from open_agent_sdk.session import append_to_session
-            asyncio.run(append_to_session(args.session_id, {"role": "user", "content": args.message}))
+            asyncio.run(append_to_session(args.session_id, {"role": args.role, "content": args.message}))
             render_state(console, "Session Message Appended", {"session_id": args.session_id, "appended": True})
             return 0
 
