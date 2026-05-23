@@ -1221,7 +1221,11 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "sessions" and args.sessions_command == "append":
             console = build_console()
-            from open_agent_sdk.session import append_to_session
+            from open_agent_sdk.session import append_to_session, load_session
+            existing = asyncio.run(load_session(args.session_id))
+            if existing is None:
+                console.print(f"[red]Error:[/red] session [bold]{args.session_id}[/bold] does not exist")
+                return 1
             asyncio.run(append_to_session(args.session_id, {"role": args.role, "content": args.message}))
             render_state(console, "Session Message Appended", {"session_id": args.session_id, "appended": True})
             return 0
