@@ -1787,3 +1787,194 @@ def test_dispatch_tool_busy_member_returns_error():
         assert "busy" in str(result.content).lower()
 
     asyncio.run(_run())
+
+
+def test_agent_pool_dispatch_async_clears_busy_after_completion():
+    """After a normal dispatch_async run completes, the member is no longer busy."""
+    async def _run():
+        import unittest.mock
+        pool = AgentPool()
+        fake_agent = FakeAgent(responses=["all done"])
+        pool._members["reviewer"] = fake_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+
+        with unittest.mock.patch("rooster_code.runtime._track_background_task"):
+            with unittest.mock.patch("rooster_code.runtime._update_background_subagent_task", new_callable=unittest.mock.AsyncMock):
+                await pool.dispatch_async("reviewer", "review code", "task-ok", ".", {})
+
+        # The dispatch_async spawns a background task; await all of them
+        for t in list(pool._dispatch_tasks):
+            await t
+
+        assert pool._busy == set()
+        assert not pool.is_busy("reviewer")
+
+    asyncio.run(_run())
+
+
+def test_agent_pool_dispatch_async_clears_busy_after_failure():
+    """After a dispatch_async run crashes, busy is still cleared in the finally block."""
+    async def _run():
+        import unittest.mock
+        pool = AgentPool()
+        # Agent that raises on prompt to simulate failure
+        fake_agent = FakeAgent()  # no responses set → KeyError on prompt
+        pool._members["reviewer"] = fake_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+
+        with unittest.mock.patch("rooster_code.runtime._track_background_task"):
+            with unittest.mock.patch("rooster_code.runtime._update_background_subagent_task", new_callable=unittest.mock.AsyncMock):
+                await pool.dispatch_async("reviewer", "review code", "task-fail", ".", {})
+
+        for t in list(pool._dispatch_tasks):
+            with __import__("contextlib").suppress(Exception):
+                await t
+
+        assert pool._busy == set()
+        assert not pool.is_busy("reviewer")
+
+    asyncio.run(_run())
+
+
+def test_dispatch_tool_task_creation_failure_reports_error():
+    """TeamDispatch returns an error tool result when background-task creation fails."""
+    async def _run():
+        import unittest.mock
+        from rooster_code.team import TeamDispatchTool, TeamManager
+        from open_agent_sdk import ToolContext
+
+        manager = TeamManager()
+        manager._active = True
+        manager._team_id = "t123"
+        manager._team_name = "test-team"
+        manager._member_definitions = {"reviewer": {"description": "reviews"}}
+        manager._config = _make_config()
+
+        pool = AgentPool()
+        fake_agent = FakeAgent()
+        pool._members["reviewer"] = fake_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+        manager._pool = pool
+
+        tool = TeamDispatchTool(manager)
+
+        with unittest.mock.patch("rooster_code.runtime._create_background_subagent_task", new_callable=unittest.mock.AsyncMock) as mock_create:
+            mock_create.side_effect = RuntimeError("simulated task creation failure")
+            with unittest.mock.patch("rooster_code.runtime._update_background_subagent_task", new_callable=unittest.mock.AsyncMock):
+                result = await tool.call({"member": "reviewer", "task": "test"}, ToolContext(cwd=".", env={}))
+
+        assert result.is_error
+        assert "simulated task creation failure" in str(result.content)
+
+    asyncio.run(_run())
+
+
+def test_wake_member_for_messages_inactive_team():
+    """_wake_member_for_messages returns inactive when team is not active."""
+    async def _run():
+        manager = TeamManager()
+        result = await manager._wake_member_for_messages("reviewer", ".", {})
+        assert result == {"status": "inactive"}
+    asyncio.run(_run())
+
+
+def test_wake_member_for_messages_no_messages():
+    """_wake_member_for_messages returns no_messages when mailbox is empty."""
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        manager._team_id = "t1"
+        manager._team_name = "test"
+        manager._config = _make_config()
+
+        pool = AgentPool()
+        fake_agent = FakeAgent()
+        pool._members["reviewer"] = fake_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()  # empty
+        pool._locks["reviewer"] = asyncio.Lock()
+        manager._pool = pool
+
+        result = await manager._wake_member_for_messages("reviewer", ".", {})
+        assert result == {"status": "no_messages"}
+    asyncio.run(_run())
+
+
+def test_wake_member_for_messages_queued_busy():
+    """_wake_member_for_messages returns queued_busy when member is busy."""
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        manager._team_id = "t2"
+        manager._team_name = "test"
+        manager._config = _make_config()
+
+        pool = AgentPool()
+        fake_agent = FakeAgent()
+        pool._members["reviewer"] = fake_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._mailboxes["reviewer"].put_nowait({"type": "text", "from": "alpha", "content": "hi"})
+        pool._locks["reviewer"] = asyncio.Lock()
+        pool._busy.add("reviewer")
+        manager._pool = pool
+
+        result = await manager._wake_member_for_messages("reviewer", ".", {})
+        assert result == {"status": "queued_busy"}
+    asyncio.run(_run())
+
+
+def test_wake_member_for_messages_queued_unhealthy():
+    """When unhealthy and recovery fails, _wake_member_for_messages returns queued_unhealthy."""
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        manager._team_id = "t3"
+        manager._team_name = "test"
+        # No _member_definitions → recovery will raise RuntimeError
+        manager._member_definitions = {}
+        manager._config = _make_config()
+
+        pool = AgentPool()
+        fake_agent = FakeAgent()
+        pool._members["reviewer"] = fake_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._mailboxes["reviewer"].put_nowait({"type": "text", "from": "alpha", "content": "hi"})
+        pool._locks["reviewer"] = asyncio.Lock()
+        pool._unhealthy.add("reviewer")
+        manager._pool = pool
+
+        result = await manager._wake_member_for_messages("reviewer", ".", {})
+        assert result == {"status": "queued_unhealthy"}
+    asyncio.run(_run())
+
+
+def test_wake_member_for_messages_recovers_unhealthy():
+    """When unhealthy but recovery succeeds, _wake_member_for_messages recovers and dispatches."""
+    async def _run():
+        import unittest.mock
+        manager = TeamManager()
+        manager._active = True
+        manager._team_id = "t4"
+        manager._team_name = "test"
+        manager._member_definitions = {"reviewer": {"description": "reviews"}}
+        manager._config = _make_config()
+
+        pool = AgentPool()
+        fake_agent = FakeAgent(responses=["recovered"])
+        pool._members["reviewer"] = fake_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._mailboxes["reviewer"].put_nowait({"type": "text", "from": "alpha", "content": "hi"})
+        pool._locks["reviewer"] = asyncio.Lock()
+        pool._unhealthy.add("reviewer")
+        manager._pool = pool
+
+        with unittest.mock.patch("rooster_code.runtime._create_background_subagent_task", return_value="task-recovered"):
+            with unittest.mock.patch("rooster_code.runtime._track_background_task"):
+                with unittest.mock.patch("rooster_code.runtime._update_background_subagent_task", new_callable=unittest.mock.AsyncMock):
+                    result = await manager._wake_member_for_messages("reviewer", ".", {})
+
+        assert result["status"] == "dispatched"
+        assert "reviewer" not in pool._unhealthy  # recovery cleared unhealthy flag
+    asyncio.run(_run())

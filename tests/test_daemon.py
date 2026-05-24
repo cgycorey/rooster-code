@@ -72,12 +72,17 @@ def test_upsert_updates_last_active_only() -> None:
     path = _tmp_db()
     try:
         store = _mk_store(path)
-        first: float = store.get_session("a")["last_active_at"]  # type: ignore[index, assignment]
+        first_row = store.get_session("a")
+        assert first_row is not None
+        first: float = first_row["last_active_at"]
+        created_at = first_row["created_at"]
         time.sleep(0.01)
         store.upsert_session("a")
-        second: float = store.get_session("a")["last_active_at"]  # type: ignore[index, assignment]
+        second_row = store.get_session("a")
+        assert second_row is not None
+        second: float = second_row["last_active_at"]
         assert second > first
-        assert store.get_session("a")["created_at"] == store.get_session("a")["created_at"]  # type: ignore[index]
+        assert second_row["created_at"] == created_at
         store.close()
     finally:
         Path(path).unlink(missing_ok=True)
@@ -87,10 +92,14 @@ def test_touch_updates_last_active() -> None:
     path = _tmp_db()
     try:
         store = _mk_store(path)
-        first: float = store.get_session("a")["last_active_at"]  # type: ignore[index, assignment]
+        first_row = store.get_session("a")
+        assert first_row is not None
+        first: float = first_row["last_active_at"]
         time.sleep(0.01)
         store.touch_session("a")
-        second: float = store.get_session("a")["last_active_at"]  # type: ignore[index, assignment]
+        second_row = store.get_session("a")
+        assert second_row is not None
+        second: float = second_row["last_active_at"]
         assert second > first
         store.close()
     finally:
@@ -625,6 +634,47 @@ def test_cron_store_mark_run() -> None:
         store2.close()
     finally:
         Path(path).unlink(missing_ok=True)
+
+
+def test_daemon_cron_list_and_delete_actions() -> None:
+    async def _run() -> None:
+        import shutil
+        import rooster_code.daemon as dm
+
+        d = tempfile.mkdtemp(prefix="cron-actions-")
+        sock = os.path.join(d, "daemon.sock")
+        db = os.path.join(d, "daemon.db")
+        orig = dm._SOCKET_PATH
+        dm._SOCKET_PATH = Path(sock)
+        daemon = AgentDaemon(socket_path=sock, db_path=db)
+        daemon.cron["cron-1"] = {
+            "id": "cron-1",
+            "schedule": "*/1 * * * *",
+            "command": "say hi",
+            "name": "hello",
+        }
+        task = asyncio.create_task(_run_daemon(daemon))
+        await asyncio.sleep(0.1)
+        try:
+            listed = await _send_to_daemon({"action": "cron_list"})
+            assert listed["type"] == "cron_list"
+            assert listed["jobs"][0]["id"] == "cron-1"
+
+            deleted = await _send_to_daemon({"action": "cron_delete", "job_id": "cron-1"})
+            assert deleted == {"type": "cron_deleted", "job_id": "cron-1"}
+            assert "cron-1" not in daemon.cron
+
+            missing = await _send_to_daemon({"action": "cron_delete", "job_id": "cron-1"})
+            assert missing["type"] == "error"
+            assert "not found" in missing["message"]
+        finally:
+            dm._SOCKET_PATH = orig
+            daemon._shutdown_event.set()
+            with __import__("contextlib").suppress(asyncio.CancelledError):
+                await task
+            shutil.rmtree(d, ignore_errors=True)
+
+    asyncio.run(_run())
 
 
 def test_cron_is_due_every_n_minutes() -> None:

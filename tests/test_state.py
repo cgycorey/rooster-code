@@ -1,10 +1,13 @@
 import asyncio
+from pathlib import Path
 
 import rooster_code.cli as cli
 import pytest
 from open_agent_sdk.tools import clear_mailboxes, clear_teams, write_to_mailbox
 
+from rooster_code.daemon import PersistentCronStore
 from rooster_code.runtime import get_state_snapshot
+from rooster_code.runtime_session import _read_cron_jobs
 from rooster_code.team import AgentPool, TeamManager, set_runtime_team_bridge
 
 
@@ -56,6 +59,50 @@ def test_get_state_snapshot_merges_runtime_team_state() -> None:
     assert builder_mailbox == []
 
 
+def test_read_cron_jobs_reads_daemon_sqlite_store(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    db_path = tmp_path / ".rooster-code" / "daemon.db"
+    db_path.parent.mkdir()
+    store = PersistentCronStore(str(db_path))
+    try:
+        store["cron-1"] = {
+            "id": "cron-1",
+            "schedule": "*/5 * * * *",
+            "command": "say hi",
+            "name": "hello",
+        }
+
+        jobs = _read_cron_jobs()
+
+        assert jobs["cron-1"]["job_id"] == "cron-1"
+        assert jobs["cron-1"]["schedule"] == "*/5 * * * *"
+        assert jobs["cron-1"]["command"] == "say hi"
+        assert jobs["cron-1"]["name"] == "hello"
+    finally:
+        store.close()
+
+
+def test_get_state_snapshot_cron_uses_daemon_sqlite_store(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    db_path = tmp_path / ".rooster-code" / "daemon.db"
+    db_path.parent.mkdir()
+    store = PersistentCronStore(str(db_path))
+    try:
+        store["cron-2"] = {
+            "id": "cron-2",
+            "schedule": "*/10 * * * *",
+            "command": "check status",
+            "name": "status",
+        }
+
+        snapshot = get_state_snapshot("cron")
+
+        assert snapshot["cron-2"]["job_id"] == "cron-2"
+        assert snapshot["cron-2"]["name"] == "status"
+    finally:
+        store.close()
+
+
 def test_main_dispatches_state_todos(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -88,6 +135,89 @@ def test_main_dispatches_tools_list(monkeypatch) -> None:
 
     assert exit_code == 0
     assert captured == {"tools": ["Read", "Write"]}
+
+
+def test_main_dispatches_cron_list(monkeypatch) -> None:
+    import rooster_code.runtime_session as runtime_session
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(runtime_session, "_read_cron_jobs", lambda: {"cron-1": {"job_id": "cron-1", "name": "daily"}})
+    monkeypatch.setattr(cli, "build_console", lambda: object())
+    monkeypatch.setattr(
+        cli,
+        "render_state",
+        lambda console, title, data: captured.update({"title": title, "data": data}),
+    )
+
+    exit_code = cli.main(["cron", "list"])
+
+    assert exit_code == 0
+    assert captured == {"title": "Cron Jobs", "data": [{"job_id": "cron-1", "name": "daily"}]}
+
+
+def test_main_dispatches_cron_show(monkeypatch) -> None:
+    import rooster_code.runtime_session as runtime_session
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(runtime_session, "_read_cron_jobs", lambda: {"cron-1": {"job_id": "cron-1", "name": "daily"}})
+    monkeypatch.setattr(cli, "build_console", lambda: object())
+    monkeypatch.setattr(
+        cli,
+        "render_state",
+        lambda console, title, data: captured.update({"title": title, "data": data}),
+    )
+
+    exit_code = cli.main(["cron", "show", "cron-1"])
+
+    assert exit_code == 0
+    assert captured == {"title": "Cron Job cron-1", "data": {"job_id": "cron-1", "name": "daily"}}
+
+
+def test_main_cron_show_missing_returns_1(monkeypatch) -> None:
+    import rooster_code.runtime_session as runtime_session
+
+    messages: list[str] = []
+    monkeypatch.setattr(runtime_session, "_read_cron_jobs", lambda: {})
+    monkeypatch.setattr(cli, "build_console", lambda: type("Console", (), {"print": lambda self, msg: messages.append(str(msg))})())
+
+    exit_code = cli.main(["cron", "show", "missing"])
+
+    assert exit_code == 1
+    assert "missing" in messages[0]
+
+
+def test_main_dispatches_cron_delete(monkeypatch) -> None:
+    import rooster_code.daemon as daemon
+
+    messages: list[str] = []
+
+    async def fake_delete(job_id: str) -> dict[str, object]:
+        return {"type": "cron_deleted", "job_id": job_id}
+
+    monkeypatch.setattr(daemon, "daemon_cron_delete", fake_delete)
+    monkeypatch.setattr(cli, "build_console", lambda: type("Console", (), {"print": lambda self, msg: messages.append(str(msg))})())
+
+    exit_code = cli.main(["cron", "delete", "cron-1"])
+
+    assert exit_code == 0
+    assert "cron-1" in messages[0]
+
+
+def test_main_cron_delete_daemon_error_returns_1(monkeypatch) -> None:
+    import rooster_code.daemon as daemon
+
+    messages: list[str] = []
+
+    async def fake_delete(job_id: str) -> dict[str, object]:
+        return {"type": "error", "message": f"cron job '{job_id}' not found"}
+
+    monkeypatch.setattr(daemon, "daemon_cron_delete", fake_delete)
+    monkeypatch.setattr(cli, "build_console", lambda: type("Console", (), {"print": lambda self, msg: messages.append(str(msg))})())
+
+    exit_code = cli.main(["cron", "delete", "missing"])
+
+    assert exit_code == 1
+    assert "not found" in messages[0]
 
 
 def test_main_dispatches_mailboxes_with_agent_filter(monkeypatch) -> None:

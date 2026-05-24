@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import re
+from pathlib import Path
 from typing import Any, cast
 
 from open_agent_sdk import (
@@ -18,6 +20,25 @@ from open_agent_sdk.providers import CreateMessageParams
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 _TOOL_CALL_ARTIFACT_RE = re.compile(r"^[a-z][\w-]*:tool_call\b.*$", re.MULTILINE | re.IGNORECASE)
+
+_log = logging.getLogger("rooster.session")
+
+
+def _read_cron_jobs() -> dict[str, dict[str, Any]]:
+    """Read cron jobs from the daemon SQLite store, falling back to the SDK in-memory dict."""
+    db_path = Path.home() / ".rooster-code" / "daemon.db"
+    if db_path.exists():
+        try:
+            import sqlite3
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM cron_jobs").fetchall()
+            conn.close()
+            if rows:
+                return {row["job_id"]: dict(row) for row in rows}
+        except Exception:
+            pass
+    return get_all_cron_jobs()
 
 
 def _sdk():
@@ -436,7 +457,7 @@ def get_state_snapshot(name: str, agent_name: str | None = None):
     if name == "config":
         return get_config()
     if name == "cron":
-        return get_all_cron_jobs()
+        return _read_cron_jobs()
     if name == "plan":
         return {
             "active": is_plan_mode_active(),

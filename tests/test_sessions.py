@@ -80,6 +80,7 @@ def test_main_dispatches_sessions_delete(monkeypatch) -> None:
     monkeypatch.setattr(cli, "delete_session", fake_delete_session)
     monkeypatch.setattr(cli, "build_console", lambda: object())
     monkeypatch.setattr(cli, "render_state", fake_render_state)
+    monkeypatch.setattr(cli, "_daemon_is_reachable", lambda: False)
 
     exit_code = cli.main(["sessions", "delete", "sess-3"])
 

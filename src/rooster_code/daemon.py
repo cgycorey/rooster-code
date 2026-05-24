@@ -237,6 +237,7 @@ class AgentDaemon:
         self._total_tokens: int = 0
         self._total_cost: float = 0.0
         self._state_lock = asyncio.Lock()
+        self._running_cron: set[str] = set()
         self._query_handler = self._build_handler()
 
     def add_telegram(self, token: str, *, allowed_users: list[int] | None = None) -> None:
@@ -387,6 +388,8 @@ class AgentDaemon:
     async def _cron_runner_loop(self) -> None:
         while True:
             await asyncio.sleep(30)
+            if not self.cron:
+                continue
             try:
                 jobs = list(self.cron.values())
                 now = time.time()
@@ -396,11 +399,17 @@ class AgentDaemon:
                     schedule = job.get("schedule", "")
                     if not schedule:
                         continue
-                    last_run = job.get("last_run_at")
-                    if last_run and not _cron_is_due(schedule, last_run, now):
-                        continue
                     job_id = job["id"]
+                    if job_id in self._running_cron:
+                        continue
+                    last_run = job.get("last_run_at")
+                    if last_run is None:
+                        self.cron.mark_run(job_id)
+                        continue
+                    if not _cron_is_due(schedule, last_run, now, job_id=job_id):
+                        continue
                     job_name = job.get("name", job_id)
+                    self._running_cron.add(job_id)
                     log.info("cron: running job %s (%s)", job_name, job_id)
                     try:
                         result = await self._query_handler(
@@ -411,6 +420,7 @@ class AgentDaemon:
                     except Exception as exc:
                         log.error("cron: job %s failed: %s", job_name, exc)
                     self.cron.mark_run(job_id)
+                    self._running_cron.discard(job_id)
             except Exception:
                 log.warning("cron runner iteration failed", exc_info=True)
 
@@ -461,6 +471,10 @@ class AgentDaemon:
             elif action == "shutdown":
                 self._shutdown_event.set()
                 await self._reply(writer, {"type": "shutdown", "status": "ok"})
+            elif action == "cron_list":
+                await self._handle_cron_list(writer)
+            elif action == "cron_delete":
+                await self._handle_cron_delete(request, writer)
             else:
                 await self._reply(writer, {"type": "error", "message": f"unknown action: {action}"})
         except json.JSONDecodeError:
@@ -585,6 +599,23 @@ class AgentDaemon:
             "adapters": adapter_status,
         })
 
+    async def _handle_cron_list(self, writer: asyncio.StreamWriter) -> None:
+        await self._reply(writer, {
+            "type": "cron_list",
+            "jobs": [dict(job) for job in self.cron.values()],
+        })
+
+    async def _handle_cron_delete(self, request: dict[str, Any], writer: asyncio.StreamWriter) -> None:
+        job_id = str(request.get("job_id") or "")
+        if not job_id:
+            await self._reply(writer, {"type": "error", "message": "job_id required"})
+            return
+        if job_id not in self.cron:
+            await self._reply(writer, {"type": "error", "message": f"cron job '{job_id}' not found"})
+            return
+        del self.cron[job_id]
+        await self._reply(writer, {"type": "cron_deleted", "job_id": job_id})
+
     @staticmethod
     async def _reply(writer: asyncio.StreamWriter, data: dict[str, Any]) -> None:
         writer.write((json.dumps(data, default=str) + "\n").encode("utf-8"))
@@ -604,7 +635,7 @@ _CONFIG_MERGE_KEYS = ("env", "custom_headers")
 _CONFIG_ALL_KEYS = _CONFIG_KEYS + _CONFIG_MERGE_KEYS
 
 
-def _cron_is_due(schedule: str, last_run: float, now: float) -> bool:
+def _cron_is_due(schedule: str, last_run: float, now: float, *, job_id: str = "") -> bool:
     if not schedule:
         return False
     import datetime
@@ -612,7 +643,8 @@ def _cron_is_due(schedule: str, last_run: float, now: float) -> bool:
     now_dt = datetime.datetime.fromtimestamp(now, tz=datetime.timezone.utc)
     parts = schedule.strip().split()
     if len(parts) != 5:
-        return delta >= 3600
+        log.warning("cron: job %s has unparseable schedule '%s', defaulting to 24h", job_id, schedule)
+        return delta >= 86400
     minute, hour, dom, mon, dow = parts
     try:
         if minute.startswith("*/"):
@@ -625,7 +657,9 @@ def _cron_is_due(schedule: str, last_run: float, now: float) -> bool:
             if now_dt.minute == int(minute) and delta >= 60:
                 return True
     except (ValueError, TypeError):
-        pass
+        log.warning("cron: job %s schedule '%s' not recognized, defaulting to 24h", job_id, schedule)
+        return delta >= 86400
+    log.warning("cron: job %s schedule '%s' not recognized, defaulting to 24h", job_id, schedule)
     return delta >= 86400
 
 
@@ -695,6 +729,14 @@ async def daemon_session_tag(session_id: str, tags: list[str]) -> dict[str, Any]
 
 async def daemon_session_delete(session_id: str) -> dict[str, Any]:
     return await _send_to_daemon({"action": "session_delete", "session_id": session_id})
+
+
+async def daemon_cron_list() -> dict[str, Any]:
+    return await _send_to_daemon({"action": "cron_list"})
+
+
+async def daemon_cron_delete(job_id: str) -> dict[str, Any]:
+    return await _send_to_daemon({"action": "cron_delete", "job_id": job_id})
 
 
 def main() -> int:

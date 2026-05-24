@@ -1004,6 +1004,36 @@ def main(argv: list[str] | None = None) -> int:
             render_state(console, "Session Message Appended", {"session_id": args.session_id, "appended": True})
             return 0
 
+        if args.command == "cron" and args.cron_command == "list":
+            console = build_console()
+            from rooster_code.runtime_session import _read_cron_jobs
+            render_state(console, "Cron Jobs", list(_read_cron_jobs().values()))
+            return 0
+
+        if args.command == "cron" and args.cron_command == "show":
+            console = build_console()
+            from rooster_code.runtime_session import _read_cron_jobs
+            jobs = _read_cron_jobs()
+            if args.job_id not in jobs:
+                console.print(f"[red]Error:[/red] cron job [bold]{args.job_id}[/bold] not found")
+                return 1
+            render_state(console, f"Cron Job {args.job_id}", jobs[args.job_id])
+            return 0
+
+        if args.command == "cron" and args.cron_command == "delete":
+            console = build_console()
+            from rooster_code.daemon import daemon_cron_delete
+            try:
+                result = asyncio.run(daemon_cron_delete(args.job_id))
+            except Exception:
+                console.print("[red]Error:[/red] daemon not reachable (start with `rooster-daemon`)")
+                return 1
+            if result.get("type") == "error":
+                console.print(f"[red]Error:[/red] {result['message']}")
+                return 1
+            console.print(f"[green]Deleted[/green] cron job [bold]{args.job_id}[/bold]")
+            return 0
+
         if args.command == "state" and args.state_command in {"tasks", "teams", "mailboxes", "config", "cron", "plan", "todos"}:
             console = build_console()
             render_state(console, args.state_command.title(), get_state_snapshot(args.state_command, getattr(args, "agent", None)))

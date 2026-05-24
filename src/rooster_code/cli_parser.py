@@ -80,6 +80,14 @@ def build_parser() -> argparse.ArgumentParser:
     agents_sub = agents_parser.add_subparsers(dest="agents_command")
     agents_sub.add_parser("list", help="List configured agents")
 
+    cron_parser = subparsers.add_parser("cron", help="Manage cron jobs")
+    cron_sub = cron_parser.add_subparsers(dest="cron_command")
+    cron_sub.add_parser("list", help="List all cron jobs")
+    cron_show = cron_sub.add_parser("show", help="Show cron job details")
+    cron_show.add_argument("job_id", help="Cron job ID")
+    cron_delete = cron_sub.add_parser("delete", help="Delete a cron job")
+    cron_delete.add_argument("job_id", help="Cron job ID to delete")
+
     state_parser = subparsers.add_parser("state", help="Inspect exported SDK runtime state")
     state_subparsers = state_parser.add_subparsers(dest="state_command")
     state_subparsers.add_parser("tasks", help="Show task store contents")
