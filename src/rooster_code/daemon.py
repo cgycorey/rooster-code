@@ -39,6 +39,15 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
 );
 """
 
+_SCHEMA_TEAMS = """
+CREATE TABLE IF NOT EXISTS team_snapshots (
+    team_id TEXT PRIMARY KEY,
+    team_name TEXT NOT NULL DEFAULT '',
+    members TEXT NOT NULL DEFAULT '{}',
+    created_at REAL NOT NULL
+);
+"""
+
 
 class StateStore:
 
@@ -118,6 +127,91 @@ class StateStore:
         cursor = self._conn.execute("DELETE FROM sessions WHERE last_active_at < ?", (cutoff,))
         self._conn.commit()
         return cursor.rowcount
+
+
+class TeamSnapshotStore:
+
+    def __init__(self, db_path: str | None = None) -> None:
+        if db_path is None:
+            db_path = str(Path.home() / ".rooster-code" / "daemon.db")
+        self.db_path = Path(db_path)
+        try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._conn = sqlite3.connect(str(self.db_path))
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute(_SCHEMA_TEAMS)
+            self._conn.commit()
+        except (sqlite3.OperationalError, sqlite3.DatabaseError, OSError) as e:
+            log.error("Cannot open team snapshot database at %s: %s", self.db_path, e)
+            raise SystemExit(f"Cannot open team snapshot database at {self.db_path}: {e}") from e
+
+    def upsert_team(self, team_id: str, team_name: str, members: str) -> None:
+        now = time.time()
+        self._conn.execute(
+            "INSERT OR REPLACE INTO team_snapshots (team_id, team_name, members, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (team_id, team_name, members, now),
+        )
+        self._conn.commit()
+
+    def get_team(self, team_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT team_id, team_name, members, created_at FROM team_snapshots WHERE team_id = ?",
+            (team_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "team_id": row[0],
+            "team_name": row[1],
+            "members": row[2],
+            "created_at": row[3],
+        }
+
+    def list_teams(self) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT team_id, team_name, members, created_at FROM team_snapshots"
+        ).fetchall()
+        return [
+            {"team_id": r[0], "team_name": r[1], "members": r[2], "created_at": r[3]}
+            for r in rows
+        ]
+
+    def remove_team(self, team_id: str) -> None:
+        self._conn.execute("DELETE FROM team_snapshots WHERE team_id = ?", (team_id,))
+        self._conn.commit()
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+def save_team_snapshot(
+    team_id: str, team_name: str, members: str, db_path: str | None = None
+) -> None:
+    """Persist a team snapshot to the daemon SQLite database."""
+    store = TeamSnapshotStore(db_path=db_path)
+    try:
+        store.upsert_team(team_id, team_name, members)
+    finally:
+        store.close()
+
+
+def drop_team_snapshot(team_id: str, db_path: str | None = None) -> None:
+    """Remove a team snapshot from the daemon SQLite database."""
+    store = TeamSnapshotStore(db_path=db_path)
+    try:
+        store.remove_team(team_id)
+    finally:
+        store.close()
+
+
+def read_team_snapshots(db_path: str | None = None) -> list[dict[str, Any]]:
+    """Read all team snapshots from the daemon SQLite database."""
+    store = TeamSnapshotStore(db_path=db_path)
+    try:
+        return store.list_teams()
+    finally:
+        store.close()
 
 
 _SOCKET_PATH = Path("/tmp/rooster-code.sock")

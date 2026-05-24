@@ -752,3 +752,30 @@ def test_main_returns_1_on_db_error() -> None:
         from rooster_code.daemon import main
         result = main()
     assert result == 1
+
+
+def test_team_snapshot_store_write_read_delete() -> None:
+    """TeamSnapshotStore persists and removes team snapshots across close/reopen."""
+    from rooster_code.daemon import TeamSnapshotStore
+
+    db_path = _tmp_db()
+    try:
+        store = TeamSnapshotStore(db_path=db_path)
+        store.upsert_team("t1", "dev-team", '{"alpha": {"description": "desc1"}}')
+        snap = store.get_team("t1")
+        assert snap is not None
+        assert snap["team_id"] == "t1"
+        assert snap["team_name"] == "dev-team"
+        assert snap["members"] == '{"alpha": {"description": "desc1"}}'
+        assert isinstance(snap["created_at"], float)
+        store.close()
+
+        store2 = TeamSnapshotStore(db_path=db_path)
+        snap2 = store2.get_team("t1")
+        assert snap2 is not None
+        assert snap2["team_name"] == "dev-team"
+        store2.remove_team("t1")
+        assert store2.get_team("t1") is None
+        store2.close()
+    finally:
+        Path(db_path).unlink(missing_ok=True)

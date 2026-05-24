@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import logging
 import uuid
 from typing import Any
 
@@ -11,6 +13,7 @@ from open_agent_sdk.types import BaseTool, ToolContext, ToolInputSchema, ToolRes
 
 
 MAX_TEAM_MEMBERS = 5
+log = logging.getLogger("rooster.team")
 MAILBOX_DISPATCH_TASK = (
     "Check your queued team messages, respond if needed, then continue your current responsibilities "
     "without duplicating already-assigned work."
@@ -291,12 +294,39 @@ class TeamManager:
         self._config: Any | None = None
         self._abort_signal: asyncio.Event | None = None
         self._recovery_locks: dict[str, asyncio.Lock] = {}
+        self._snapshot_db_path: str | None = None
         self._original_append_prompt: str = ""
         self._original_tool_pool: list[Any] | None = None
         self._active = False
 
     def is_active(self) -> bool:
         return self._active
+
+    def enable_snapshot_persistence(self, db_path: str | None = None) -> None:
+        self._snapshot_db_path = db_path
+
+    def _persist_snapshot(self) -> None:
+        if not self._team_id:
+            return
+        try:
+            from rooster_code.daemon import save_team_snapshot
+            save_team_snapshot(
+                self._team_id,
+                self._team_name,
+                json.dumps(self._member_definitions),
+                db_path=self._snapshot_db_path,
+            )
+        except (Exception, SystemExit) as exc:
+            log.warning("Could not persist team snapshot for %s: %s", self._team_id, exc)
+
+    def _drop_snapshot(self, team_id: str) -> None:
+        if not team_id:
+            return
+        try:
+            from rooster_code.daemon import drop_team_snapshot
+            drop_team_snapshot(team_id, db_path=self._snapshot_db_path)
+        except (Exception, SystemExit) as exc:
+            log.warning("Could not drop team snapshot for %s: %s", team_id, exc)
 
     def _team_prompt(self) -> str:
         original = self._original_append_prompt
@@ -510,6 +540,7 @@ class TeamManager:
                 self._configure_member(member_name)
             self._active = True
             await self.ensure_orchestrator_team_state(orchestrator)
+            self._persist_snapshot()
         except Exception:
             with contextlib.suppress(Exception):
                 await pool.close_all()
@@ -633,6 +664,8 @@ class TeamManager:
         if not self._active:
             return
 
+        team_id = self._team_id
+
         if self._pool is not None:
             await self._pool.close_all()
 
@@ -657,6 +690,7 @@ class TeamManager:
         self._recovery_locks = {}
         self._original_tool_pool = None
         self._active = False
+        self._drop_snapshot(team_id)
 
     def info(self) -> dict[str, Any]:
         if not self._active:

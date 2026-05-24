@@ -440,9 +440,13 @@ def get_state_snapshot(name: str, agent_name: str | None = None):
         return get_all_tasks()
     if name == "teams":
         team_manager, _ = get_runtime_team_bridge()
-        snapshot = dict(get_all_teams())
+        snapshot: dict[str, Any] = dict(get_all_teams())
         if team_manager is not None:
             snapshot.update(team_manager.sdk_team_snapshot())
+        from rooster_code.daemon import read_team_snapshots
+        persisted = read_team_snapshots()
+        if persisted:
+            snapshot["_snapshots"] = persisted
         return snapshot
     if name == "mailboxes":
         from open_agent_sdk.tools import _mailboxes as _sdk_mailboxes

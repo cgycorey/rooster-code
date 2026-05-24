@@ -1,6 +1,9 @@
 """Tests for rooster_code.team — AgentPool, TeamManager, TeamDispatchTool, TeamSendMessageTool, patch_tool_pool."""
 
 import asyncio
+import json
+import tempfile
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -656,8 +659,13 @@ def test_send_message_tool_errors_for_unknown_member():
 
 
 def test_sdk_team_create_bridge_tool_creates_persistent_team():
+    from rooster_code.daemon import TeamSnapshotStore
+
+    db_path = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+
     async def _run():
         manager = TeamManager()
+        manager.enable_snapshot_persistence(db_path)
         config = _make_config({"reviewer": {"description": "code reviewer", "prompt": "You are a reviewer."}})
         fake_agent = FakeAgent()
         abort_signal = asyncio.Event()
@@ -689,7 +697,18 @@ def test_sdk_team_create_bridge_tool_creates_persistent_team():
         assert manager.info()["team_name"] == "dev-team"
         assert abort_signal.is_set() is False
 
-    asyncio.run(_run())
+        store = TeamSnapshotStore(db_path=db_path)
+        try:
+            snap = store.get_team(manager.active_team_id())
+        finally:
+            store.close()
+        assert snap is not None
+        assert snap["team_name"] == "dev-team"
+
+    try:
+        asyncio.run(_run())
+    finally:
+        Path(db_path).unlink(missing_ok=True)
 
 
 def test_sdk_team_create_bridge_tool_materializes_missing_agent_definitions():
@@ -1978,3 +1997,171 @@ def test_wake_member_for_messages_recovers_unhealthy():
         assert result["status"] == "dispatched"
         assert "reviewer" not in pool._unhealthy  # recovery cleared unhealthy flag
     asyncio.run(_run())
+
+
+def test_send_message_maintains_fifo_under_concurrent_dispatch():
+    """send_message (sync) + _inject_mailbox (sync) are atomic under asyncio cooperative model."""
+    async def _run():
+        import unittest.mock
+        pool = AgentPool()
+        prompt_started = asyncio.Event()
+        release = asyncio.Event()
+
+        class SlowAgent(FakeAgent):
+            async def prompt(self, text, overrides=None):
+                prompt_started.set()
+                await release.wait()
+                return await super().prompt(text, overrides)
+
+        pool._members["reviewer"] = SlowAgent(responses=["done"])
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+
+        pool.send_message("reviewer", {"from": "a", "content": "M1"})
+        pool.send_message("reviewer", {"from": "a", "content": "M2"})
+
+        with unittest.mock.patch("rooster_code.runtime._track_background_task"):
+            with unittest.mock.patch("rooster_code.runtime._update_background_subagent_task", new_callable=unittest.mock.AsyncMock):
+                dispatch_task = asyncio.create_task(
+                    pool.dispatch_async("reviewer", "check", "task-fifo", ".", {})
+                )
+                await prompt_started.wait()
+
+                pool.send_message("reviewer", {"from": "b", "content": "M3"})
+
+                release.set()
+                await asyncio.gather(*list(pool._dispatch_tasks))
+
+        drained = []
+        while not pool._mailboxes["reviewer"].empty():
+            drained.append(pool._mailboxes["reviewer"].get_nowait())
+        assert len(drained) == 3
+        assert drained[0]["content"] == "M1"
+        assert drained[1]["content"] == "M2"
+        assert drained[2]["content"] == "M3"
+
+    asyncio.run(_run())
+
+
+def test_wake_member_for_messages_queued_unavailable():
+    """_wake_member_for_messages returns queued_unavailable when agent has no callable prompt."""
+    async def _run():
+        manager = TeamManager()
+        manager._active = True
+        manager._team_id = "t5"
+        manager._team_name = "test"
+        manager._config = _make_config()
+
+        pool = AgentPool()
+        agent_without_prompt = object()  # no prompt attribute
+        pool._members["worker"] = agent_without_prompt
+        pool._mailboxes["worker"] = asyncio.Queue()
+        pool._mailboxes["worker"].put_nowait({"type": "text", "from": "alpha", "content": "hi"})
+        pool._locks["worker"] = asyncio.Lock()
+        manager._pool = pool
+
+        result = await manager._wake_member_for_messages("worker", ".", {})
+        assert result == {"status": "queued_unavailable"}
+    asyncio.run(_run())
+
+
+def test_create_team_persists_snapshot_to_daemon_db():
+    """After create_team succeeds, TeamSnapshotStore has the team entry."""
+    from rooster_code.daemon import TeamSnapshotStore
+
+    db_path = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+    _team_id = None
+    try:
+        async def _run():
+            nonlocal _team_id
+            manager = TeamManager()
+            manager.enable_snapshot_persistence(db_path)
+            config = _make_config()
+            fake_agent = FakeAgent()
+            orchestrator = MagicMock()
+            orchestrator._options.append_system_prompt = "original"
+            orchestrator._tool_pool = []
+
+            import unittest.mock
+            async def fake_create_member(self, name, definition, config, abort_signal=None):
+                self._members[name] = fake_agent
+                self._mailboxes[name] = asyncio.Queue()
+                self._locks[name] = asyncio.Lock()
+            with unittest.mock.patch.object(AgentPool, "create_member", fake_create_member):
+                await manager.create_team("dev-team", ["reviewer"], config, orchestrator)
+
+            assert manager.is_active()
+            _team_id = manager._team_id
+
+        asyncio.run(_run())
+
+        assert _team_id is not None
+        store = TeamSnapshotStore(db_path=db_path)
+        snap = store.get_team(_team_id)
+        assert snap is not None, "Expected team snapshot in daemon DB after create_team + save_team_snapshot"
+        assert snap["team_name"] == "dev-team"
+        store.close()
+    finally:
+        Path(db_path).unlink(missing_ok=True)
+
+
+def test_close_team_removes_snapshot_from_daemon_db():
+    """After close_team + drop_team_snapshot, TeamSnapshotStore has no entry."""
+    from rooster_code.daemon import TeamSnapshotStore
+
+    db_path = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+    _team_id = None
+    try:
+        async def _run():
+            nonlocal _team_id
+            manager = TeamManager()
+            manager.enable_snapshot_persistence(db_path)
+            config = _make_config()
+            fake_agent = FakeAgent()
+            orchestrator = MagicMock()
+            orchestrator._options.append_system_prompt = "original"
+            orchestrator._tool_pool = []
+
+            import unittest.mock
+            async def fake_create_member(self, name, definition, config, abort_signal=None):
+                self._members[name] = fake_agent
+                self._mailboxes[name] = asyncio.Queue()
+                self._locks[name] = asyncio.Lock()
+            with unittest.mock.patch.object(AgentPool, "create_member", fake_create_member):
+                await manager.create_team("temp-team", ["reviewer"], config, orchestrator)
+
+            assert manager.is_active()
+            _team_id = manager._team_id
+            await manager.close_team(orchestrator)
+
+        asyncio.run(_run())
+
+        assert _team_id is not None
+        store = TeamSnapshotStore(db_path=db_path)
+        snap = store.get_team(_team_id)
+        assert snap is None, "Expected NO team snapshot after close_team + drop_team_snapshot"
+        store.close()
+    finally:
+        Path(db_path).unlink(missing_ok=True)
+
+
+def test_read_team_snapshots_returns_persisted_teams():
+    """read_team_snapshots returns all persisted team snapshots."""
+    from rooster_code.daemon import save_team_snapshot, drop_team_snapshot, read_team_snapshots
+
+    db_path = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+    try:
+        save_team_snapshot("t1", "alpha", '{"a": 1}', db_path=db_path)
+        save_team_snapshot("t2", "beta", '{"b": 2}', db_path=db_path)
+
+        snaps = read_team_snapshots(db_path=db_path)
+        assert len(snaps) == 2
+        names = {s["team_name"] for s in snaps}
+        assert names == {"alpha", "beta"}
+
+        drop_team_snapshot("t1", db_path=db_path)
+        snaps = read_team_snapshots(db_path=db_path)
+        assert len(snaps) == 1
+        assert snaps[0]["team_name"] == "beta"
+    finally:
+        Path(db_path).unlink(missing_ok=True)
