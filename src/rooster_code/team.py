@@ -773,6 +773,14 @@ class TeamDispatchTool(BaseTool):
             return ToolResult(tool_use_id="", content="Error: 'member' is required", is_error=True)
         if not task:
             return ToolResult(tool_use_id="", content="Error: 'task' is required", is_error=True)
+
+        # Pre-validate before creating a background task so we don't leave strays
+        if not self._team_manager.is_active():
+            return ToolResult(tool_use_id="", content="Error: no team is active", is_error=True)
+        pool = self._team_manager._pool
+        if pool is None or not pool.has_member(member):
+            return ToolResult(tool_use_id="", content=f"Error: unknown team member '{member}'", is_error=True)
+
         try:
             task_id = await _create_background_subagent_task(
                 f"team-{member}",

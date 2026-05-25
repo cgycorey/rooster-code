@@ -2165,3 +2165,56 @@ def test_read_team_snapshots_returns_persisted_teams():
         assert snaps[0]["team_name"] == "beta"
     finally:
         Path(db_path).unlink(missing_ok=True)
+
+
+def test_dispatch_tool_skips_task_creation_for_unknown_member():
+    """TeamDispatch does NOT create a background task when member is unknown."""
+    async def _run():
+        import unittest.mock
+        from open_agent_sdk import ToolContext
+
+        manager = TeamManager()
+        manager._active = True
+        manager._team_id = "t42"
+        manager._pool = AgentPool()
+
+        tool = TeamDispatchTool(manager)
+
+        create_called = False
+        async def fake_create_task(name, task_spec, cwd, env):
+            nonlocal create_called
+            create_called = True
+            return "task-123"
+
+        with unittest.mock.patch("rooster_code.runtime._create_background_subagent_task", fake_create_task):
+            result = await tool.call({"member": "nonexistent", "task": "do stuff"}, ToolContext(cwd=".", env={}))
+
+        assert result.is_error
+        assert not create_called, "Should not have created a background task for unknown member"
+
+    asyncio.run(_run())
+
+
+def test_dispatch_tool_skips_task_creation_for_inactive_team():
+    """TeamDispatch does NOT create a background task when no team is active."""
+    async def _run():
+        import unittest.mock
+        from open_agent_sdk import ToolContext
+
+        manager = TeamManager()
+
+        tool = TeamDispatchTool(manager)
+
+        create_called = False
+        async def fake_create_task(name, task_spec, cwd, env):
+            nonlocal create_called
+            create_called = True
+            return "task-123"
+
+        with unittest.mock.patch("rooster_code.runtime._create_background_subagent_task", fake_create_task):
+            result = await tool.call({"member": "reviewer", "task": "do stuff"}, ToolContext(cwd=".", env={}))
+
+        assert result.is_error
+        assert not create_called, "Should not have created a background task for inactive team"
+
+    asyncio.run(_run())
