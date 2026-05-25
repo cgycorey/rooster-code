@@ -184,9 +184,11 @@ def summarize_thinking(text: str, max_chars: int = 280) -> str:
 
 
 def extract_thinking(message: object) -> str:
-    if not hasattr(message, "content"):
-        return ""
-    content = getattr(message, "content")
+    content: object = None
+    if isinstance(message, Mapping):
+        content = message.get("content")
+    elif hasattr(message, "content"):
+        content = getattr(message, "content")
     if not isinstance(content, list):
         return ""
     parts: list[str] = []

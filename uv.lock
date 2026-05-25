@@ -565,24 +565,11 @@ wheels = [
 [[package]]
 name = "open-agent-sdk"
 version = "0.1.0"
-source = { directory = "../open-agent-sdk-python" }
+source = { git = "https://github.com/cgycorey/open-agent-sdk-python.git#710d79dc2d79521589b97e1d22bcc15273f9ad71" }
 dependencies = [
     { name = "anthropic" },
     { name = "pydantic" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "anthropic", specifier = ">=0.40.0" },
-    { name = "mcp", marker = "extra == 'all'", specifier = ">=1.0.0" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0.0" },
-    { name = "pydantic", specifier = ">=2.0.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5.0" },
-]
-provides-extras = ["mcp", "all", "dev"]
 
 [[package]]
 name = "packaging"
@@ -845,7 +832,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiogram", marker = "extra == 'telegram'", specifier = ">=3.20.0" },
-    { name = "open-agent-sdk", directory = "../open-agent-sdk-python" },
+    { name = "open-agent-sdk", git = "https://github.com/cgycorey/open-agent-sdk-python.git" },
     { name = "prompt-toolkit", specifier = ">=3.0.0" },
     { name = "rich", specifier = ">=13.9.0" },
 ]
