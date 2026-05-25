@@ -37,7 +37,7 @@ def _read_cron_jobs() -> dict[str, dict[str, Any]]:
             if rows:
                 return {row["job_id"]: dict(row) for row in rows}
         except Exception:
-            pass
+            _log.warning("Could not read cron jobs from daemon DB, falling back to in-memory state", exc_info=True)
     return get_all_cron_jobs()
 
 

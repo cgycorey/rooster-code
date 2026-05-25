@@ -513,8 +513,12 @@ class AgentDaemon:
                                  job_name, result["tokens"], result["cost"])
                     except Exception as exc:
                         log.error("cron: job %s failed: %s", job_name, exc)
-                    self.cron.mark_run(job_id)
-                    self._running_cron.discard(job_id)
+                    finally:
+                        try:
+                            self.cron.mark_run(job_id)
+                        except Exception:
+                            log.warning("cron: failed to mark run for job %s", job_id, exc_info=True)
+                        self._running_cron.discard(job_id)
             except Exception:
                 log.warning("cron runner iteration failed", exc_info=True)
 
@@ -750,6 +754,8 @@ def _cron_is_due(schedule: str, last_run: float, now: float, *, job_id: str = ""
         if minute != "*" and minute.isdigit():
             if now_dt.minute == int(minute) and delta >= 60:
                 return True
+        if minute == "*" and hour == "*" and dom == "*" and mon == "*" and dow == "*":
+            return delta >= 60
     except (ValueError, TypeError):
         log.warning("cron: job %s schedule '%s' not recognized, defaulting to 24h", job_id, schedule)
         return delta >= 86400

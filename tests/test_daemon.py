@@ -697,6 +697,13 @@ def test_cron_is_due_empty_schedule() -> None:
     assert dm._cron_is_due("", now - 10000, now) is False
 
 
+def test_cron_is_due_all_wildcards_fires_every_minute() -> None:
+    import rooster_code.daemon as dm
+    now = time.time()
+    assert dm._cron_is_due("* * * * *", now - 61, now) is True
+    assert dm._cron_is_due("* * * * *", now - 30, now) is False
+
+
 # -- DB init hardening ---------------------------------------------------------
 
 

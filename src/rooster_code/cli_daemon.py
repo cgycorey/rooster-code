@@ -5,15 +5,26 @@ import asyncio
 import json
 import sys
 
-from rooster_code.daemon import daemon_health, daemon_list_sessions, daemon_session_info, daemon_shutdown, daemon_query
+from rooster_code.daemon import (
+    daemon_health, daemon_list_sessions, daemon_session_info, daemon_shutdown,
+    daemon_query, _SOCKET_PATH,
+)
+
+_CONNECTION_ERRORS = (ConnectionRefusedError, FileNotFoundError, OSError)
 
 
 def _daemon_is_reachable() -> bool:
     try:
         result = asyncio.run(daemon_health())
         return result.get("type") == "health"
+    except _CONNECTION_ERRORS:
+        return False
     except Exception:
         return False
+
+
+def _print_error(msg: str) -> None:
+    print(f"Error: {msg}", file=sys.stderr)
 
 
 def _ask_via_daemon(prompt: str, args: argparse.Namespace) -> int:
@@ -70,8 +81,11 @@ def _handle_daemon_command(args: argparse.Namespace) -> int:
     async def _status() -> int:
         try:
             r = await daemon_health()
-        except Exception:
-            print("Error: daemon not reachable at /tmp/rooster-code.sock", file=sys.stderr)
+        except _CONNECTION_ERRORS:
+            _print_error(f"daemon not reachable at {_SOCKET_PATH}")
+            return 1
+        except Exception as exc:
+            _print_error(f"daemon health check failed: {exc}")
             return 1
         print(f"status:       {r['status']}")
         print(f"uptime:       {r['uptime_seconds']}s")
@@ -85,8 +99,11 @@ def _handle_daemon_command(args: argparse.Namespace) -> int:
     async def _sessions() -> int:
         try:
             r = await daemon_list_sessions()
-        except Exception:
-            print("Error: daemon not reachable at /tmp/rooster-code.sock", file=sys.stderr)
+        except _CONNECTION_ERRORS:
+            _print_error(f"daemon not reachable at {_SOCKET_PATH}")
+            return 1
+        except Exception as exc:
+            _print_error(f"failed to list sessions: {exc}")
             return 1
         data = r.get("data", [])
         if not data:
@@ -101,8 +118,11 @@ def _handle_daemon_command(args: argparse.Namespace) -> int:
             await daemon_shutdown()
             print("daemon shutdown initiated")
             return 0
-        except Exception:
-            print("Error: daemon not reachable at /tmp/rooster-code.sock", file=sys.stderr)
+        except _CONNECTION_ERRORS:
+            _print_error(f"daemon not reachable at {_SOCKET_PATH}")
+            return 1
+        except Exception as exc:
+            _print_error(f"failed to shutdown daemon: {exc}")
             return 1
 
     async def _session() -> int:
@@ -112,8 +132,11 @@ def _handle_daemon_command(args: argparse.Namespace) -> int:
             return 1
         try:
             r = await daemon_session_info(sid)
-        except Exception:
-            print("Error: daemon not reachable at /tmp/rooster-code.sock", file=sys.stderr)
+        except _CONNECTION_ERRORS:
+            _print_error(f"daemon not reachable at {_SOCKET_PATH}")
+            return 1
+        except Exception as exc:
+            _print_error(f"failed to get session info: {exc}")
             return 1
         local = r.get("local") or {}
         sdk = r.get("sdk") or {}
