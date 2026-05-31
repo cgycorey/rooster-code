@@ -67,7 +67,14 @@ def _ask_via_daemon(prompt: str, args: argparse.Namespace) -> int:
 
     async def _run() -> int:
         session_id = args.resume or args.session_id or ""
-        result = await daemon_query(prompt, session_id=session_id, cwd=args.cwd or ".", overrides=overrides if overrides else None)
+        try:
+            result = await daemon_query(prompt, session_id=session_id, cwd=args.cwd or ".", overrides=overrides if overrides else None)
+        except TimeoutError:
+            _print_error("daemon request timed out")
+            return 1
+        except Exception as exc:
+            _print_error(str(exc))
+            return 1
         if result["type"] == "done":
             print(result.get("text", ""))
             return 0

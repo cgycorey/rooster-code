@@ -254,7 +254,6 @@ class PersistentCronStore(dict[str, dict[str, Any]]):
             })
 
     def __setitem__(self, key: str, value: dict[str, Any]) -> None:
-        super().__setitem__(key, value)
         self._conn.execute(
             "INSERT OR REPLACE INTO cron_jobs (job_id, schedule, command, name, created_at, last_run_at, enabled) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -269,29 +268,30 @@ class PersistentCronStore(dict[str, dict[str, Any]]):
             ),
         )
         self._conn.commit()
+        super().__setitem__(key, value)
 
     def __delitem__(self, key: str) -> None:
-        super().__delitem__(key)
         self._conn.execute("DELETE FROM cron_jobs WHERE job_id = ?", (key,))
         self._conn.commit()
+        super().__delitem__(key)
 
     def clear(self) -> None:
-        super().clear()
         self._conn.execute("DELETE FROM cron_jobs")
         self._conn.commit()
+        super().clear()
 
     def mark_run(self, job_id: str) -> None:
         now = time.time()
-        if job_id in self:
-            self[job_id]["last_run_at"] = now
         self._conn.execute("UPDATE cron_jobs SET last_run_at = ? WHERE job_id = ?", (now, job_id))
         self._conn.commit()
+        if job_id in self:
+            self[job_id]["last_run_at"] = now
 
     def update_last_run(self, job_id: str, last_run_at: float) -> None:
+        self._conn.execute("UPDATE cron_jobs SET last_run_at = ? WHERE job_id = ?", (last_run_at, job_id))
+        self._conn.commit()
         if job_id in self:
             self[job_id]["last_run_at"] = last_run_at
-            self._conn.execute("UPDATE cron_jobs SET last_run_at = ? WHERE job_id = ?", (last_run_at, job_id))
-            self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
@@ -546,6 +546,7 @@ class AgentDaemon:
         self._shutdown_event.set()
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        action = ""
         try:
             raw = await reader.readline()
             if not raw:
@@ -578,6 +579,7 @@ class AgentDaemon:
         except json.JSONDecodeError:
             await self._reply(writer, {"type": "error", "message": "invalid JSON"})
         except Exception as exc:
+            log.exception("unhandled client error for action %s", action)
             await self._reply(writer, {"type": "error", "message": str(exc)})
         finally:
             writer.close()
@@ -784,7 +786,7 @@ async def _send_to_daemon(request: dict[str, Any]) -> dict[str, Any]:
     try:
         writer.write((json.dumps(request) + "\n").encode("utf-8"))
         await writer.drain()
-        raw = await reader.readline()
+        raw = await asyncio.wait_for(reader.readline(), timeout=_QUERY_TIMEOUT)
         if not raw:
             return {"type": "error", "message": "no response from daemon"}
         return json.loads(raw.decode("utf-8"))
@@ -876,8 +878,10 @@ def main() -> int:
         daemon.add_telegram(args.telegram, allowed_users=allowed)
 
     async def _run() -> None:
-        await daemon.start()
-        await daemon.shutdown()
+        try:
+            await daemon.start()
+        finally:
+            await daemon.shutdown()
 
     try:
         asyncio.run(_run())

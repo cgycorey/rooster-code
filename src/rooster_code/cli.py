@@ -558,8 +558,13 @@ def _handle_agents_command(console, command, config, team_manager):
         if name in config.agents:
             render_notice(console, "Error", f"Agent '{name}' already exists. Use /agents remove {name} first.", "red")
             return
-        config.agents[name] = {"description": description, "prompt": description}
-        save_agents_file(config.agents)
+        try:
+            new_agents = {**config.agents, name: {"description": description, "prompt": description}}
+            save_agents_file(new_agents)
+            config.agents = new_agents
+        except Exception as exc:
+            render_notice(console, "Error", f"Could not save agent: {exc}", "red")
+            return
         render_notice(console, "Agent Added", f"Agent '{name}' added.", "green")
         return
 
@@ -569,8 +574,13 @@ def _handle_agents_command(console, command, config, team_manager):
             if team_manager.is_active() and name in (team_manager.info().get("members", {}) or {}):
                 render_notice(console, "Error", f"Agent '{name}' is in an active team. Use /team stop first.", "red")
                 return
-            del config.agents[name]
-            save_agents_file(config.agents)
+            try:
+                new_agents = {k: v for k, v in config.agents.items() if k != name}
+                save_agents_file(new_agents)
+                config.agents = new_agents
+            except Exception as exc:
+                render_notice(console, "Error", f"Could not save agent: {exc}", "red")
+                return
             render_notice(console, "Agent Removed", f"Agent '{name}' removed.", "green")
         else:
             render_notice(console, "Error", f"Agent '{name}' not found.", "red")
