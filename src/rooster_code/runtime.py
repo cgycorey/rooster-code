@@ -1011,6 +1011,10 @@ def _create_sdk_agent(
             if not replaced:
                 new_pool.append(RuntimeAgentTool(lambda input, context: _run_subagent(config, input, context), tracker))
             agent._tool_pool = new_pool
+            engine = getattr(agent, "_engine", None)
+            if engine is not None:
+                engine._config.tools = agent._tool_pool
+                engine._tool_map = {tool.name: tool for tool in agent._tool_pool}
 
         setattr(agent, "_initialize", wrapped_initialize)
     elif hasattr(agent, "_initialize"):
@@ -1033,6 +1037,10 @@ def _create_sdk_agent(
                 elif getattr(tool, "name", "") != "Agent":
                     new_pool.append(RuntimeTraceTool(tool, tracker))
             agent._tool_pool = new_pool
+            engine = getattr(agent, "_engine", None)
+            if engine is not None:
+                engine._config.tools = agent._tool_pool
+                engine._tool_map = {tool.name: tool for tool in agent._tool_pool}
 
         setattr(agent, "_initialize", wrapped_initialize_without_agent)
     return agent

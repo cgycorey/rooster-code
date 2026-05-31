@@ -2803,3 +2803,160 @@ def test_remote_mcp_failure_does_not_crash_agent_initialization(monkeypatch) -> 
     tool_names = [tool.name for tool in agent._tool_pool]
     assert "Agent" in tool_names
     assert "broken-mcp" not in str(tool_names)
+
+
+def test_wrapped_initialize_syncs_engine_tool_state(monkeypatch) -> None:
+    """After _initialize(), the engine's _config.tools and _tool_map must match agent._tool_pool."""
+    import dataclasses
+
+    class FakeConfig:
+        tools = None
+        tool_map = None
+
+    class FakeEngine:
+        def __init__(self) -> None:
+            self._config = FakeConfig()
+
+    class FakeAgentTool:
+        name = "Agent"
+
+    class FakeReadTool:
+        name = "Read"
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = [FakeAgentTool(), FakeReadTool()]
+            self._engine = FakeEngine()
+            self._initialized = False
+
+        async def _initialize(self) -> None:
+            self._tool_pool = [FakeAgentTool(), FakeReadTool()]
+            self._initialized = True
+
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
+
+    agent = create_runtime_agent(
+        RuntimeConfig(
+            api_key="test-key",
+            base_url="https://nano-gpt.com/api/v1",
+            model="test-model",
+            agents={"reviewer": {"description": "code reviewer"}},
+        )
+    )
+
+    asyncio.run(agent._initialize())
+
+    # Engine must reference the same list object as agent._tool_pool
+    assert agent._engine._config.tools is agent._tool_pool, (
+        "engine._config.tools must point to agent._tool_pool after _initialize()"
+    )
+
+    # Engine's tool_map must contain all tools from the pool
+    assert agent._engine._tool_map is not None, "engine._tool_map must be populated"
+    pool_names = {t.name for t in agent._tool_pool}
+    map_names = set(agent._engine._tool_map.keys())
+    assert pool_names == map_names, (
+        f"engine._tool_map keys {map_names} must match tool_pool names {pool_names}"
+    )
+
+    # Verify wrapped tools are present (Agent should be RuntimeAgentTool, Read should be RuntimeReadTool)
+    assert "Agent" in agent._engine._tool_map
+    assert "Read" in agent._engine._tool_map
+
+
+def test_wrapped_initialize_syncs_engine_after_double_init(monkeypatch) -> None:
+    """After two _initialize() calls (simulating interrupt recovery), the engine must stay synced."""
+    import dataclasses
+
+    class FakeConfig:
+        tools = None
+        tool_map = None
+
+    class FakeEngine:
+        def __init__(self) -> None:
+            self._config = FakeConfig()
+
+    class FakeAgentTool:
+        name = "Agent"
+
+    class FakeReadTool:
+        name = "Read"
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = []
+            self._engine = None
+            self._initialized = False
+
+        async def _initialize(self) -> None:
+            self._tool_pool = [FakeAgentTool(), FakeReadTool()]
+            self._engine = FakeEngine()
+            self._initialized = True
+
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
+
+    agent = create_runtime_agent(
+        RuntimeConfig(
+            api_key="test-key",
+            base_url="https://nano-gpt.com/api/v1",
+            model="test-model",
+            agents={"reviewer": {"description": "code reviewer"}},
+        )
+    )
+
+    # First init
+    asyncio.run(agent._initialize())
+    assert agent._engine._config.tools is agent._tool_pool
+    first_pool_id = id(agent._tool_pool)
+
+    # Simulate interrupt: clear engine, set _initialized=False
+    agent._engine = FakeEngine()
+    agent._initialized = False
+
+    # Second init (simulating recovery)
+    asyncio.run(agent._initialize())
+    assert agent._engine._config.tools is agent._tool_pool, (
+        "engine must sync to new pool after second _initialize()"
+    )
+    assert "Agent" in agent._engine._tool_map
+    assert "Read" in agent._engine._tool_map
+
+
+def test_wrapped_initialize_syncs_engine_with_empty_pool(monkeypatch) -> None:
+    """Empty tool pool after _initialize() should not crash engine sync."""
+    class FakeConfig:
+        tools = None
+        tool_map = None
+
+    class FakeEngine:
+        def __init__(self) -> None:
+            self._config = FakeConfig()
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = []
+            self._engine = FakeEngine()
+            self._initialized = False
+
+        async def _initialize(self) -> None:
+            self._tool_pool = []
+            self._engine = FakeEngine()
+            self._initialized = True
+
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
+
+    agent = create_runtime_agent(
+        RuntimeConfig(
+            api_key="test-key",
+            base_url="https://nano-gpt.com/api/v1",
+            model="test-model",
+        )
+    )
+
+    asyncio.run(agent._initialize())
+    assert agent._engine._config.tools is agent._tool_pool
+    assert isinstance(agent._engine._tool_map, dict)
+    assert len(agent._engine._tool_map) >= 0
