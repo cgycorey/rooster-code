@@ -330,12 +330,14 @@ class TeamManager:
 
     def _team_prompt(self) -> str:
         original = self._original_append_prompt
+        members_list = ", ".join(self._member_definitions.keys())
         lines = [
             f"# Team: {self._team_name}",
-            f"You are the orchestrator for team '{self._team_name}'. Members: {', '.join(self._member_definitions.keys())}.",
-            "Use TeamDispatch to assign tasks to members. TeamDispatch starts the work in the background and the result appears when complete.",
+            f"You are the orchestrator for team '{self._team_name}'. Members: {members_list}.",
+            f"When a team is active, you MUST delegate work to team members via TeamDispatch. Do NOT use Read, Bash, Glob, Grep, or other tools to do the work yourself — always dispatch to a team member instead.",
+            "TeamDispatch starts the work in the background and the result appears when complete.",
             "Use SendMessage for informational teammate coordination; it may wake an idle teammate to process queued mail, but it does NOT replace TeamDispatch for explicit task assignment.",
-            f"If the user wants to leave team mode or use the Agent tool directly, call TeamDelete with team_id '{self._team_id}' first.",
+            f"If the user wants to leave team mode or use tools directly, call TeamDelete with team_id '{self._team_id}' first.",
             "Do NOT use the Agent tool — it is not available while a team is active. Always use TeamDispatch instead.",
             "When you assign work with TeamDispatch, the member processes it in the background. The result will appear when complete.",
             "Do not also perform the same work yourself unless the member fails, stops, or you are explicitly taking over.",
@@ -472,7 +474,7 @@ class TeamManager:
         patch_tool_pool(
             orchestrator,
             add_tools=[TeamDispatchTool(self), TeamSendMessageTool(self, sender_name="orchestrator"), TeamStatusTool(self), SDKTeamDeleteBridgeTool()],
-            remove_names=["TeamCreate", "TeamDelete", "Agent", "SendMessage", "TeamDispatch", "Read"],
+            remove_names=["TeamCreate", "TeamDelete", "Agent", "SendMessage", "TeamDispatch", "TeamStatus", "Read", "Bash", "Write", "Edit", "Glob", "Grep"],
         )
         if hasattr(orchestrator, "_options"):
             orchestrator._options.append_system_prompt = self._team_prompt()
@@ -527,7 +529,7 @@ class TeamManager:
             patch_tool_pool(
                 orchestrator,
                 add_tools=[dispatch_tool, send_tool, status_tool, delete_tool],
-                remove_names=["TeamCreate", "TeamDelete", "Agent", "SendMessage", "Read"],
+                remove_names=["TeamCreate", "TeamDelete", "Agent", "SendMessage", "Read", "Bash", "Write", "Edit", "Glob", "Grep"],
             )
 
             self._pool = pool

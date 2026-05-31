@@ -21,7 +21,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 import httpx
 
 from rooster_code.chat import parse_chat_command
-from rooster_code.config import config_from_namespace
+from rooster_code.config import config_from_namespace, save_agents_file
 from rooster_code.team import TeamManager, set_runtime_team_bridge
 from rooster_code.rendering import (
     build_console,
@@ -290,7 +290,7 @@ def _prompt_box(title: str, lines: list[str], style: str) -> FormattedText:
         return text.ljust(width)
 
     top = f"╭─ {title} {'─' * max(width - len(title) - 1, 0)}╮"
-    bottom = f"╰{'─' * (width + 3)}╯"
+    bottom = f"╰{'─' * (width + 2)}╯"
 
     fragments: list[tuple[str, str]] = []
     if border_style:
@@ -388,6 +388,23 @@ def append_task_result_to_context(agent, task_id: str, task_result: dict[str, ob
             }
         )
 
+
+
+def _pending_dispatch_notice() -> str:
+    """Return a notice about in-flight tasks (team dispatches and /bg), or empty string if none."""
+    from open_agent_sdk import get_all_tasks
+    tasks = get_all_tasks()
+    in_flight = [
+        (tid, t.get("subject", tid))
+        for tid, t in tasks.items()
+        if str(t.get("status", "")).lower() == "in_progress"
+    ]
+    if not in_flight:
+        return ""
+    lines = ["[System notice: the following dispatched tasks are still in progress and their results are NOT yet available. Do not answer questions that depend on these results until they complete:]"]
+    for tid, subject in in_flight:
+        lines.append(f"  - {tid}: {subject}")
+    return "\n".join(lines) + "\n\n"
 
 
 def read_background_notifications() -> list[dict[str, object]]:
@@ -542,6 +559,7 @@ def _handle_agents_command(console, command, config, team_manager):
             render_notice(console, "Error", f"Agent '{name}' already exists. Use /agents remove {name} first.", "red")
             return
         config.agents[name] = {"description": description, "prompt": description}
+        save_agents_file(config.agents)
         render_notice(console, "Agent Added", f"Agent '{name}' added.", "green")
         return
 
@@ -552,6 +570,7 @@ def _handle_agents_command(console, command, config, team_manager):
                 render_notice(console, "Error", f"Agent '{name}' is in an active team. Use /team stop first.", "red")
                 return
             del config.agents[name]
+            save_agents_file(config.agents)
             render_notice(console, "Agent Removed", f"Agent '{name}' removed.", "green")
         else:
             render_notice(console, "Error", f"Agent '{name}' not found.", "red")
@@ -864,8 +883,11 @@ async def run_chat(config) -> int:
             if team_manager.is_active():
                 await team_manager.ensure_orchestrator_team_state(agent)
 
+            pending_notice = _pending_dispatch_notice()
+            effective_input = f"{pending_notice}{user_input}" if pending_notice else user_input
+
             await _run_query_with_interrupt(
-                agent.query(user_input),
+                agent.query(effective_input),
                 omit_duplicate_result=True,
                 show_activity_trace=True,
             )
