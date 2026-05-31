@@ -162,13 +162,16 @@ class AgentPool:
                     query_result.text or "",
                     getattr(query_result, "messages", []),
                 )
-                await _update_background_subagent_task(
-                    task_id,
-                    status="completed",
-                    output=sanitize_task_output(result),
-                    cwd=cwd,
-                    env=env,
-                )
+                try:
+                    await _update_background_subagent_task(
+                        task_id,
+                        status="completed",
+                        output=sanitize_task_output(result),
+                        cwd=cwd,
+                        env=env,
+                    )
+                except Exception:
+                    log.exception("Failed to update background task %s status", task_id)
             except asyncio.CancelledError:
                 await _update_background_subagent_task(
                     task_id,
@@ -179,13 +182,16 @@ class AgentPool:
                 )
                 raise
             except Exception as exc:
-                await _update_background_subagent_task(
-                    task_id,
-                    status="cancelled",
-                    output=f"Error: {exc}",
-                    cwd=cwd,
-                    env=env,
-                )
+                try:
+                    await _update_background_subagent_task(
+                        task_id,
+                        status="cancelled",
+                        output=f"Error: {exc}",
+                        cwd=cwd,
+                        env=env,
+                    )
+                except Exception:
+                    log.exception("Failed to update background task %s status", task_id)
             finally:
                 self._busy.discard(member)
 
@@ -680,6 +686,20 @@ class TeamManager:
                 add_tools=[],
                 remove_names=["TeamDispatch", "SendMessage", "TeamStatus", "TeamDelete"],
             )
+            log.warning(
+                "close_team: original tool pool was None — team tools removed "
+                "but orchestrator may be missing base tools. Forcing re-initialization."
+            )
+            if hasattr(orchestrator, "_client") and orchestrator._client:
+                with contextlib.suppress(Exception):
+                    await orchestrator._client.close()
+                orchestrator._client = None
+            if hasattr(orchestrator, "_provider"):
+                orchestrator._provider = None
+            if hasattr(orchestrator, "_engine"):
+                orchestrator._engine = None
+            if hasattr(orchestrator, "_initialized"):
+                orchestrator._initialized = False
 
         orchestrator._options.append_system_prompt = self._original_append_prompt
 

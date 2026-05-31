@@ -387,13 +387,22 @@ def _build_subagent_config(
     tools = definition.get("tools")
     disallowed_tools = definition.get("disallowed_tools")
     max_turns = definition.get("max_turns")
+    _max_turns = config.max_turns
+    if max_turns is not None:
+        try:
+            _max_turns = int(max_turns)
+        except (ValueError, TypeError):
+            agent_name = definition.get("name") or definition.get("description") or "unknown"
+            raise RuntimeError(
+                f"Agent '{agent_name}' has invalid max_turns: {max_turns!r}. Must be an integer."
+            )
     return replace(
         config,
         model=str(input.get("model") or definition.get("model") or config.model or ""),
         cwd=context.cwd or config.cwd,
         allowed_tools=tools if isinstance(tools, list) else config.allowed_tools,
         disallowed_tools=disallowed_tools if isinstance(disallowed_tools, list) else config.disallowed_tools,
-        max_turns=int(max_turns) if max_turns is not None else config.max_turns,
+        max_turns=_max_turns,
         persist_session=False,
     )
 
@@ -538,10 +547,13 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
         async def run_background() -> None:
             try:
                 if effective_def is None:
-                    await _update_background_subagent_task(
-                        task_id, status="cancelled", output="Error: no agent definition resolved",
-                        cwd=context.cwd, env=context.env,
-                    )
+                    try:
+                        await _update_background_subagent_task(
+                            task_id, status="cancelled", output="Error: no agent definition resolved",
+                            cwd=context.cwd, env=context.env,
+                        )
+                    except Exception:
+                        log.exception("Failed to update background task %s status", task_id)
                     return
                 child_config = _build_subagent_config(config, effective_def, input, context)
                 system_prompt = str(effective_def.get("prompt") or effective_def.get("system_prompt") or effective_def.get("description") or "")
@@ -554,10 +566,13 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
                 output = _format_subagent_task_output(raw_text, query_result.messages)
                 if not output or output == "Agent completed with no text output.":
                     output = raw_text or "Agent completed with no text output."
-                await _update_background_subagent_task(
-                    task_id, status="completed", output=output,
-                    cwd=context.cwd, env=context.env,
-                )
+                try:
+                    await _update_background_subagent_task(
+                        task_id, status="completed", output=output,
+                        cwd=context.cwd, env=context.env,
+                    )
+                except Exception:
+                    log.exception("Failed to update background task %s status", task_id)
             except asyncio.CancelledError:
                 await _update_background_subagent_task(
                     task_id, status="cancelled", output="Error: Cancelled by shutdown",
@@ -565,10 +580,13 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
                 )
                 raise
             except Exception as exc:
-                await _update_background_subagent_task(
-                    task_id, status="cancelled", output=f"Error: {exc}",
-                    cwd=context.cwd, env=context.env,
-                )
+                try:
+                    await _update_background_subagent_task(
+                        task_id, status="cancelled", output=f"Error: {exc}",
+                        cwd=context.cwd, env=context.env,
+                    )
+                except Exception:
+                    log.exception("Failed to update background task %s status", task_id)
 
         task = asyncio.create_task(run_background())
         _track_background_task(task)

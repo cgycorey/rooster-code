@@ -550,6 +550,10 @@ def _handle_agents_command(console, command, config, team_manager):
         render_agents_list(console, agents)
         return
 
+    if subcmd == "add" and team_manager.is_active():
+        render_notice(console, "Error", "Cannot add agents while a team is active. Use /team stop first.", "red")
+        return
+
     if subcmd == "add" and len(command.args) >= 3:
         name = command.args[1]
         description = " ".join(command.args[2:])
