@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
+import tempfile
 from dataclasses import dataclass
 from dataclasses import field
+from pathlib import Path
 from typing import Any, Mapping
+
+DEFAULT_AGENTS_PATH = Path.home() / ".rooster-code" / "agents.json"
 
 
 @dataclass(slots=True)
@@ -96,6 +101,35 @@ def load_json_file(path: str | None) -> Any:
         return {}
 
 
+def save_json_file(path: str, data: Any) -> None:
+    """Save data as JSON to a file atomically, creating parent directories as needed."""
+    file_path = Path(path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=str(file_path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+        os.replace(tmp_path, file_path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+
+
+def save_agents_file(agents: dict[str, Any]) -> None:
+    """Persist agent definitions to the default agents file."""
+    save_json_file(str(DEFAULT_AGENTS_PATH), agents)
+
+
+def _resolve_agents(agents_file: str | None) -> dict[str, Any]:
+    """Resolve agent definitions, preferring explicit --agents-file over default."""
+    if agents_file:
+        return load_json_file(agents_file) or {}
+    if DEFAULT_AGENTS_PATH.exists():
+        return load_json_file(str(DEFAULT_AGENTS_PATH)) or {}
+    return {}
+
+
 def config_from_namespace(args: argparse.Namespace, env: Mapping[str, str]) -> RuntimeConfig:
     resolved = resolve_runtime_env(env, cwd=getattr(args, "cwd", None))
     return RuntimeConfig(
@@ -122,7 +156,7 @@ def config_from_namespace(args: argparse.Namespace, env: Mapping[str, str]) -> R
         include_partials=getattr(args, "include_partials", False),
         env=parse_key_value_pairs(getattr(args, "env", None)),
         custom_headers=parse_key_value_pairs(getattr(args, "custom_headers", None)),
-        agents=load_json_file(getattr(args, "agents_file", None)) or {},
+        agents=_resolve_agents(getattr(args, "agents_file", None)),
         hooks=load_json_file(getattr(args, "hooks_file", None)) or {},
         json_schema=load_json_file(getattr(args, "json_schema_file", None)),
         mcp_servers=load_json_file(getattr(args, "mcp_file", None)) or {},
