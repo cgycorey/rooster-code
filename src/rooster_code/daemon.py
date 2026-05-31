@@ -421,6 +421,9 @@ class AgentDaemon:
 
                 sid = _get_agent_session_id(agent) or session_id or "default"
                 async with self_ref._state_lock:
+                    if self_ref._max_sessions and not state.get_session(session_id):
+                        if state.count() >= self_ref._max_sessions:
+                            return {"text": "Error: maximum sessions reached. Try again later or specify an existing session_id.", "tokens": 0, "cost": 0.0, "turns": 0}
                     state.upsert_session(sid, cwd=cwd)
 
                 t0 = time.monotonic()
@@ -499,7 +502,7 @@ class AgentDaemon:
                     last_run = job.get("last_run_at")
                     if last_run is None:
                         self.cron.mark_run(job_id)
-                        continue
+                        last_run = job.get("last_run_at")
                     if not _cron_is_due(schedule, last_run, now, job_id=job_id):
                         continue
                     job_name = job.get("name", job_id)
@@ -754,8 +757,13 @@ def _cron_is_due(schedule: str, last_run: float, now: float, *, job_id: str = ""
             interval = int(hour[2:])
             return delta >= interval * 3600
         if minute != "*" and minute.isdigit():
-            if now_dt.minute == int(minute) and delta >= 60:
+            hour_ok = hour == "*" or (hour.isdigit() and now_dt.hour == int(hour))
+            dom_ok = dom == "*" or (dom.isdigit() and now_dt.day == int(dom))
+            mon_ok = mon == "*" or (mon.isdigit() and now_dt.month == int(mon))
+            dow_ok = dow == "*" or (dow.isdigit() and now_dt.isoweekday() == int(dow))
+            if now_dt.minute == int(minute) and hour_ok and dom_ok and mon_ok and dow_ok and delta >= 60:
                 return True
+            return False
         if minute == "*" and hour == "*" and dom == "*" and mon == "*" and dow == "*":
             return delta >= 60
     except (ValueError, TypeError):

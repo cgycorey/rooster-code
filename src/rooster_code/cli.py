@@ -1061,8 +1061,12 @@ def main(argv: list[str] | None = None) -> int:
             from rooster_code.daemon import daemon_cron_delete
             try:
                 result = asyncio.run(daemon_cron_delete(args.job_id))
-            except Exception:
-                console.print("[red]Error:[/red] daemon not reachable (start with `rooster-daemon`)")
+            except (ConnectionRefusedError, FileNotFoundError, OSError):
+                from rooster_code.daemon import _SOCKET_PATH
+                console.print(f"[red]Error:[/red] daemon not reachable at {_SOCKET_PATH} (start with `rooster-daemon`)")
+                return 1
+            except Exception as exc:
+                console.print(f"[red]Error:[/red] {exc}")
                 return 1
             if result.get("type") == "error":
                 console.print(f"[red]Error:[/red] {result['message']}")

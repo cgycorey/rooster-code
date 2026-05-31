@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 from typing import Any
 
 from rooster_code.adapters import ChannelAdapter, MessageHandler
+
+log = logging.getLogger("rooster.telegram")
 
 
 class TelegramAdapter(ChannelAdapter):
@@ -90,6 +93,7 @@ class TelegramAdapter(ChannelAdapter):
             except asyncio.TimeoutError:
                 response = "I'm still working on that — please wait and try again."
             except Exception:
+                log.exception("telegram handler failed for user %s", user_id)
                 response = "Something went wrong. Please try again."
 
             for chunk in _split_long_message(response):
