@@ -346,13 +346,22 @@ def _compact_task_output(output: str, max_chars: int = 240) -> str:
 
     for line in reversed(output.splitlines()):
         line = line.strip()
-        if line and line not in {"---", "***"} and not re.fullmatch(r"#+", line):
-            if re.fullmatch(r"</?\w[\w-]*>", line):
-                continue
-            if line.lower().startswith("outcome:"):
-                line = line.partition(":")[2].strip()
-            if line and not re.match(r"(?i)(note|n\.?b\.?|tip|hint)\b", line):
-                return line if len(line) <= max_chars else f"{line[:max_chars].rstrip()}..."
+        if not line:
+            continue
+        if line in {"---", "***"}:
+            continue
+        if re.fullmatch(r"#+", line):
+            continue
+        if re.fullmatch(r"</?\w[\w-]*>", line):
+            continue
+        if line == "```" or line.startswith("```"):
+            continue
+        if line.startswith("|") and line.endswith("|"):
+            continue
+        if line.lower().startswith("outcome:"):
+            line = line.partition(":")[2].strip()
+        if line and not re.match(r"(?i)(note|n\.?b\.?|tip|hint)\b", line):
+            return line if len(line) <= max_chars else f"{line[:max_chars].rstrip()}..."
     return "No useful output returned"
 
 
