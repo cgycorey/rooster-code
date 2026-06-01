@@ -96,8 +96,11 @@ class TelegramAdapter(ChannelAdapter):
                 log.exception("telegram handler failed for user %s", user_id)
                 response = "Something went wrong. Please try again."
 
-            for chunk in _split_long_message(response):
-                await message.answer(chunk)
+            try:
+                for chunk in _split_long_message(response):
+                    await message.answer(chunk)
+            except Exception:
+                log.exception("telegram: failed to send response to user %s", user_id)
 
         self._task = asyncio.create_task(self._dp.start_polling(self._bot))
         print(f"[telegram] @{bot_username} listening", flush=True)

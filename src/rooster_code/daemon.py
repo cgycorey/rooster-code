@@ -512,8 +512,12 @@ class AgentDaemon:
                         result = await self._query_handler(
                             f"cron-{job_id}", "cron", job.get("command", "")
                         )
-                        log.info("cron: job %s completed: tokens=%d cost=$%.4f",
-                                 job_name, result["tokens"], result["cost"])
+                        result_text = str(result.get("text", ""))
+                        if result_text.startswith("Error:"):
+                            log.error("cron: job %s returned error: %s", job_name, result_text)
+                        else:
+                            log.info("cron: job %s completed: tokens=%d cost=$%.4f",
+                                     job_name, result["tokens"], result["cost"])
                     except Exception as exc:
                         log.error("cron: job %s failed: %s", job_name, exc)
                     finally:
