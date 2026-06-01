@@ -86,7 +86,7 @@ def _expand_paths(refs: list[str], cwd: str) -> list[Path]:
     return result
 
 
-_MAX_FILE_SIZE = 100 * 1024  # 100 KB
+_MAX_FILE_SIZE = 512 * 1024  # 512 KB
 
 
 def _read_file_safe(path: Path) -> str:

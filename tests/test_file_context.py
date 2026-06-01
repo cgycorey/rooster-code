@@ -113,6 +113,12 @@ class TestReadFileSafe:
         with pytest.raises(FileTooLargeError, match="big.log"):
             _read_file_safe(p)
 
+    def test_file_under_limit_ok(self, tmp_path):
+        p = tmp_path / "ok.log"
+        p.write_text("x" * 400_000)
+        content = _read_file_safe(p)
+        assert len(content) == 400_000
+
     def test_permission_error(self, tmp_path):
         p = tmp_path / "nope.txt"
         p.write_text("secret")
