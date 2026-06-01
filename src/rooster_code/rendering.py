@@ -271,7 +271,7 @@ async def render_event_stream(
                     render_notice(console, "Edit", event.result_content, "green")
                 continue
             if event.tool_name == "TodoWrite" and event.result_content:
-                render_notice(console, "TodoWrite", compact_tool_result(event.result_content), "blue")
+                render_text_panel(console, "Todo", event.result_content, "blue")
                 continue
 
         text = extract_text(event.text).strip()
