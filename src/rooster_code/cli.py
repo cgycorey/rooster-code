@@ -22,6 +22,12 @@ import httpx
 
 from rooster_code.chat import parse_chat_command
 from rooster_code.config import config_from_namespace, save_agents_file
+from rooster_code.file_context import (
+    resolve_at_references,
+    _build_context_block,
+    AtFileCompleter,
+    AtFileError,
+)
 from rooster_code.team import TeamManager, set_runtime_team_bridge
 from rooster_code.rendering import (
     build_console,
@@ -657,7 +663,10 @@ async def run_chat(config) -> int:
     set_runtime_team_bridge(team_manager, agent)
     history_path = Path.home() / ".rooster-code" / "history"
     history_path.parent.mkdir(parents=True, exist_ok=True)
-    prompt_session: PromptSession[str] = PromptSession(history=FileHistory(str(history_path)))
+    prompt_session: PromptSession[str] = PromptSession(
+        history=FileHistory(str(history_path)),
+        completer=AtFileCompleter(cwd=config.cwd or "."),
+    )
     question_session: PromptSession[str] = PromptSession()
     _MAX_HISTORY = 50
 
@@ -906,8 +915,26 @@ async def run_chat(config) -> int:
             if team_manager.is_active():
                 await team_manager.ensure_orchestrator_team_state(agent)
 
+            # Resolve @file references in user input
+            try:
+                cleaned_input, files = resolve_at_references(
+                    user_input, config.cwd or "."
+                )
+            except (AtFileError, OSError) as e:
+                render_notice(console, "@ Error", str(e), "red")
+                continue
+
+            # Build effective input with context block and pending notices
             pending_notice = _pending_dispatch_notice()
-            effective_input = f"{pending_notice}{user_input}" if pending_notice else user_input
+            parts: list[str] = []
+            if pending_notice:
+                parts.append(pending_notice)
+            if files:
+                parts.append(_build_context_block(files))
+                parts.append(f"[User message:]\n{cleaned_input}")
+            else:
+                parts.append(cleaned_input)
+            effective_input = "".join(parts)
 
             await _run_query_with_interrupt(
                 agent.query(effective_input),
