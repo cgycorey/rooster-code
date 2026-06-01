@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import NamedTuple
 
 from prompt_toolkit.completion import Completer, Completion
@@ -43,11 +44,15 @@ _BACKTICK_SPLIT = re.compile(r'(```[\s\S]*?```|`[^`\n]+`)')
 # Matches @ followed by one or more non-whitespace chars
 _AT_REF = re.compile(r'@(\S+)')
 
+# Sentence punctuation that commonly trails @ references
+_TRAILING_PUNCTUATION = re.compile(r'[,;:!.…]+$')
+
 
 def _scan_for_at_refs(text: str) -> list[str]:
     """Find @path references in text, ignoring any inside backtick blocks."""
     safe = _BACKTICK_BLOCK.sub('', text)
-    return [m.group(1) for m in _AT_REF.finditer(safe)]
+    tokens = [m.group(1) for m in _AT_REF.finditer(safe)]
+    return [_TRAILING_PUNCTUATION.sub('', t) for t in tokens]
 
 
 from pathlib import Path
@@ -68,44 +73,73 @@ def _expand_paths(refs: list[str], cwd: str) -> list[Path]:
 
         if _GLOB_CHARS.intersection(ref):
             matches = sorted(base.glob(ref))
+            matches = [m for m in matches
+                       if m.resolve(strict=False).is_relative_to(base)]
             if not matches:
                 raise GlobNoMatchError(f"@{ref}: no files matched")
+            if len(matches) > _MAX_GLOB_FILES:
+                raise FileTooLargeError(
+                    f"@{ref}: too many files matched "
+                    f"({len(matches)}, limit {_MAX_GLOB_FILES})"
+                )
             for m in matches:
                 if m.is_file() and m not in seen:
                     seen.add(m)
                     result.append(m)
         else:
-            if not p.exists():
+            resolved = p.resolve(strict=False)
+            if not resolved.is_relative_to(base):
+                raise FileNotFoundAtError(
+                    f"@{ref}: path outside working directory"
+                )
+            if not resolved.exists():
                 raise FileNotFoundAtError(f"@{ref}: file not found")
-            if not p.is_file():
+            if not resolved.is_file():
                 raise FileNotFoundAtError(f"@{ref}: not a file")
-            if p not in seen:
-                seen.add(p)
-                result.append(p)
+            if resolved not in seen:
+                seen.add(resolved)
+                result.append(resolved)
 
     return result
 
 
 _MAX_FILE_SIZE = 512 * 1024  # 512 KB
+_MAX_GLOB_FILES = 200
 
 
 def _read_file_safe(path: Path) -> str:
     """Read file as UTF-8 text. Raises on binary, too-large, or permission errors."""
-    size = path.stat().st_size
-    if size > _MAX_FILE_SIZE:
-        size_mb = size / (1024 * 1024)
-        limit_kb = _MAX_FILE_SIZE // 1024
-        raise FileTooLargeError(
-            f"@{path.name}: file too large ({size_mb:.1f}MB, limit {limit_kb}KB)"
-        )
-
     try:
-        raw = path.read_bytes()
+        fd = os.open(str(path), os.O_RDONLY)
     except PermissionError:
         raise PermissionError(f"@{path.name}: permission denied")
+    except OSError as exc:
+        raise OSError(f"@{path.name}: {exc}")
 
     try:
-        return raw.decode('utf-8')
+        stat = os.fstat(fd)
+        size = stat.st_size
+        if size > _MAX_FILE_SIZE:
+            size_mb = size / (1024 * 1024)
+            limit_kb = _MAX_FILE_SIZE // 1024
+            raise FileTooLargeError(
+                f"@{path.name}: file too large ({size_mb:.1f}MB, limit {limit_kb}KB)"
+            )
+
+        chunks: list[bytes] = []
+        remaining = size
+        while remaining > 0:
+            chunk = os.read(fd, min(remaining, 65536))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+    finally:
+        os.close(fd)
+
+    try:
+        return raw.decode("utf-8")
     except UnicodeDecodeError:
         raise BinaryFileError(f"@{path.name}: binary file not supported")
 
@@ -149,7 +183,9 @@ def resolve_at_references(text: str, cwd: str) -> tuple[str, list[FileContext]]:
     for i in range(0, len(parts), 2):
         for ref_path in refs:
             parts[i] = parts[i].replace(f'@{ref_path}', '', 1)
-    cleaned = ' '.join(''.join(parts).split())
+    cleaned = ''.join(parts).strip()
+    cleaned = re.sub(r' {2,}', ' ', cleaned)
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
 
     return cleaned, file_contexts
 

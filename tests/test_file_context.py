@@ -1,5 +1,6 @@
 """Tests for rooster_code.file_context — @ reference resolution and AtFileCompleter."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -51,6 +52,26 @@ class TestScanForAtRefs:
         refs = _scan_for_at_refs("check @src/**/*.py")
         assert refs == ["src/**/*.py"]
 
+    def test_trailing_comma_stripped(self):
+        refs = _scan_for_at_refs("check @foo.py, and more")
+        assert refs == ["foo.py"]
+
+    def test_trailing_period_stripped(self):
+        refs = _scan_for_at_refs("read @bar.py.")
+        assert refs == ["bar.py"]
+
+    def test_trailing_semicolon_stripped(self):
+        refs = _scan_for_at_refs("@baz.py; next")
+        assert refs == ["baz.py"]
+
+    def test_trailing_multiple_punctuation(self):
+        refs = _scan_for_at_refs("@file.py,... check")
+        assert refs == ["file.py"]
+
+    def test_glob_question_mark_not_stripped(self):
+        refs = _scan_for_at_refs("check @file?.py")
+        assert refs == ["file?.py"]
+
 
 class TestExpandPaths:
     def test_single_file(self, tmp_path):
@@ -89,6 +110,45 @@ class TestExpandPaths:
         (tmp_path / "b.py").write_text("b")
         paths = _expand_paths(["a.py", "b.py"], str(tmp_path))
         assert sorted(paths) == sorted([tmp_path / "a.py", tmp_path / "b.py"])
+
+    def test_path_traversal_rejected(self, tmp_path):
+        with pytest.raises(FileNotFoundAtError, match="outside working directory"):
+            _expand_paths(["../outside.py"], str(tmp_path))
+
+    def test_absolute_outside_rejected(self, tmp_path):
+        with pytest.raises(FileNotFoundAtError, match="outside working directory"):
+            _expand_paths(["/etc/passwd"], str(tmp_path))
+
+    def test_absolute_inside_accepted(self, tmp_path):
+        (tmp_path / "ok.py").write_text("ok")
+        paths = _expand_paths([str(tmp_path / "ok.py")], str(tmp_path))
+        assert paths == [tmp_path / "ok.py"]
+
+    def test_symlink_inside_accepted(self, tmp_path):
+        (tmp_path / "real.py").write_text("real")
+        os.symlink(str(tmp_path / "real.py"), str(tmp_path / "link.py"))
+        paths = _expand_paths(["link.py"], str(tmp_path))
+        assert len(paths) == 1
+        assert paths[0] == (tmp_path / "real.py")
+
+    def test_symlink_outside_rejected(self, tmp_path):
+        os.symlink("/etc/passwd", str(tmp_path / "escape_link.py"))
+        with pytest.raises(FileNotFoundAtError, match="outside working directory"):
+            _expand_paths(["escape_link.py"], str(tmp_path))
+
+    def test_glob_limit_exceeded(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("rooster_code.file_context._MAX_GLOB_FILES", 2)
+        for i in range(10):
+            (tmp_path / f"file_{i}.py").write_text("x")
+        with pytest.raises(FileTooLargeError, match="too many files matched"):
+            _expand_paths(["*.py"], str(tmp_path))
+
+    def test_glob_limit_not_exceeded(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("rooster_code.file_context._MAX_GLOB_FILES", 10)
+        for i in range(3):
+            (tmp_path / f"file_{i}.py").write_text("x")
+        paths = _expand_paths(["*.py"], str(tmp_path))
+        assert len(paths) == 3
 
 
 class TestReadFileSafe:
@@ -189,6 +249,31 @@ class TestResolveAtReferences:
         cleaned, files = resolve_at_references("@foo.py", str(tmp_path))
         assert cleaned == ""
         assert len(files) == 1
+
+    def test_trailing_comma_resolves(self, tmp_path):
+        (tmp_path / "foo.py").write_text("x = 1")
+        cleaned, files = resolve_at_references("@foo.py, check", str(tmp_path))
+        assert len(files) == 1
+        assert files[0].content == "x = 1"
+
+    def test_trailing_period_resolves(self, tmp_path):
+        (tmp_path / "bar.py").write_text("bar")
+        cleaned, files = resolve_at_references("see @bar.py.", str(tmp_path))
+        assert len(files) == 1
+        assert files[0].content == "bar"
+
+    def test_path_traversal_rejected_integration(self, tmp_path):
+        with pytest.raises(FileNotFoundAtError, match="outside"):
+            resolve_at_references("@../secret.txt check", str(tmp_path))
+
+    def test_newlines_preserved(self, tmp_path):
+        (tmp_path / "foo.py").write_text("x = 1")
+        cleaned, files = resolve_at_references(
+            "line one\n\n@foo.py\n\nline two", str(tmp_path)
+        )
+        assert "line one" in cleaned
+        assert "line two" in cleaned
+        assert "\n" in cleaned
 
 
 class TestBuildContextBlock:
