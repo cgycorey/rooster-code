@@ -72,6 +72,14 @@ class TestScanForAtRefs:
         refs = _scan_for_at_refs("check @file?.py")
         assert refs == ["file?.py"]
 
+    def test_email_at_not_captured(self):
+        refs = _scan_for_at_refs("email user@host.com for help")
+        assert refs == []
+
+    def test_email_and_file_mixed(self):
+        refs = _scan_for_at_refs("mail user@host.com re @file.py")
+        assert refs == ["file.py"]
+
 
 class TestExpandPaths:
     def test_single_file(self, tmp_path):

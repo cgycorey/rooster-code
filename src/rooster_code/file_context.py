@@ -41,8 +41,7 @@ _BACKTICK_BLOCK = re.compile(r'```[\s\S]*?```|`[^`\n]+`')
 # Same pattern but capturing for re.split to include matched blocks in result
 _BACKTICK_SPLIT = re.compile(r'(```[\s\S]*?```|`[^`\n]+`)')
 
-# Matches @ followed by one or more non-whitespace chars
-_AT_REF = re.compile(r'@(\S+)')
+_AT_REF = re.compile(r'(?<!\w)@(\S+)')
 
 # Sentence punctuation that commonly trails @ references
 _TRAILING_PUNCTUATION = re.compile(r'[,;:!.…]+$')
