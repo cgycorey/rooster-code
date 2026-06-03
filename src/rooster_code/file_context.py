@@ -82,9 +82,10 @@ def _expand_paths(refs: list[str], cwd: str) -> list[Path]:
                     f"({len(matches)}, limit {_MAX_GLOB_FILES})"
                 )
             for m in matches:
-                if m.is_file() and m not in seen:
-                    seen.add(m)
-                    result.append(m)
+                resolved = m.resolve(strict=False)
+                if resolved.is_file() and resolved not in seen:
+                    seen.add(resolved)
+                    result.append(resolved)
         else:
             resolved = p.resolve(strict=False)
             if not resolved.is_relative_to(base):
@@ -109,7 +110,7 @@ _MAX_GLOB_FILES = 200
 def _read_file_safe(path: Path) -> str:
     """Read file as UTF-8 text. Raises on binary, too-large, or permission errors."""
     try:
-        fd = os.open(str(path), os.O_RDONLY)
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
     except PermissionError:
         raise PermissionError(f"@{path.name}: permission denied")
     except OSError as exc:
