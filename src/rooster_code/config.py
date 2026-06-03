@@ -50,23 +50,27 @@ class RuntimeConfig:
 
 def load_dotenv_env(cwd: str | None = None) -> dict[str, str]:
     path = os.path.join(cwd, ".env") if cwd else ".env"
-    if not os.path.exists(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
         return {}
 
-    values: dict[str, str] = {}
-    with open(path, "r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
+    try:
+        values: dict[str, str] = {}
+        with open(fd, "r", encoding="utf-8", closefd=False) as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
 
-            key, value = line.split("=", 1)
-            parsed = value.strip()
-            if len(parsed) >= 2 and parsed[0] == parsed[-1] and parsed[0] in {'"', "'"}:
-                parsed = parsed[1:-1]
-            values[key.strip()] = parsed
-
-    return values
+                key, value = line.split("=", 1)
+                parsed = value.strip()
+                if len(parsed) >= 2 and parsed[0] == parsed[-1] and parsed[0] in {'"', "'"}:
+                    parsed = parsed[1:-1]
+                values[key.strip()] = parsed
+        return values
+    finally:
+        os.close(fd)
 
 
 def resolve_runtime_env(env: Mapping[str, str], cwd: str | None = None) -> RuntimeConfig:

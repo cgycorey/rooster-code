@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import logging
 import os
 import re
 import signal
@@ -44,6 +45,8 @@ from rooster_code.rendering import (
     render_transcript,
 )
 from rooster_code.cli_daemon import _ask_via_daemon, _daemon_is_reachable, _handle_daemon_command
+
+log = logging.getLogger("rooster.cli")
 
 
 def set_question_handler(handler):
@@ -496,6 +499,7 @@ async def run_ask(prompt: str, config) -> int:
             render_notice(console, "Interrupted", "Query cancelled.", "yellow")
             return 130
         except Exception as exc:
+            log.exception("ask agent query failed: %s", exc)
             render_notice(console, "Error", str(exc), "red")
             return 1
         finally:
@@ -521,6 +525,7 @@ async def run_ask(prompt: str, config) -> int:
         render_notice(console, "Interrupted", "Query cancelled.", "yellow")
         return 130
     except Exception as exc:
+        log.exception("ask query failed: %s", exc)
         render_notice(console, "Error", str(exc), "red")
         return 1
     finally:
@@ -699,6 +704,7 @@ async def run_chat(config) -> int:
             aborted = True
             interrupted = False
         except Exception as exc:
+            log.exception("chat query failed: %s", exc)
             render_notice(console, "Error", str(exc), "red")
         finally:
             if aborted or abort_signal.is_set():
