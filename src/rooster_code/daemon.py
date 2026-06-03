@@ -18,6 +18,15 @@ from rooster_code.runtime import create_runtime_agent
 
 log = logging.getLogger("rooster.daemon")
 
+
+def _async_exception_handler(loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+    """Log unhandled asyncio task exceptions at ERROR so they are not silently dropped."""
+    exception = context.get("exception")
+    if exception is not None:
+        log.error("unhandled async exception in %s: %s", context.get("future") or context.get("task", "unknown task"), exception, exc_info=exception)
+    else:
+        log.error("unhandled async exception: %s", context.get("message", "no details"))
+
 _SCHEMA_SESSIONS = """
 CREATE TABLE IF NOT EXISTS sessions (
     session_id TEXT PRIMARY KEY,
@@ -391,16 +400,8 @@ class AgentDaemon:
             overrides = overrides or {}
             cwd = str(overrides.pop("cwd", ".") or ".")
 
-            if self_ref._max_sessions and not state.get_session(session_id):
-                if state.count() >= self_ref._max_sessions:
-                    return {"text": "Error: maximum sessions reached. Try again later or specify an existing session_id.", "tokens": 0, "cost": 0.0, "turns": 0}
-
             config = resolve_runtime_env(os.environ, cwd=cwd)
             config.persist_session = True
-            if session_id and state.get_session(session_id):
-                config.resume = session_id
-            elif session_id:
-                config.session_id = session_id
             for file_key, file_val in self_ref._file_configs.items():
                 if file_val is not None and not getattr(config, file_key, None):
                     setattr(config, file_key, file_val)
@@ -414,6 +415,16 @@ class AgentDaemon:
             headers_override: dict[str, str] | None = overrides.get("custom_headers")
             if headers_override is not None:
                 config.custom_headers = headers_override
+
+            async with self_ref._state_lock:
+                if self_ref._max_sessions and not state.get_session(session_id):
+                    if state.count() >= self_ref._max_sessions:
+                        return {"text": "Error: maximum sessions reached. Try again later or specify an existing session_id.", "tokens": 0, "cost": 0.0, "turns": 0}
+                if session_id and state.get_session(session_id):
+                    config.resume = session_id
+                elif session_id:
+                    config.session_id = session_id
+
             agent = create_runtime_agent(config)
             try:
                 if hasattr(agent, "_initialize") and callable(agent._initialize):
@@ -506,6 +517,8 @@ class AgentDaemon:
                     if not _cron_is_due(schedule, last_run, now, job_id=job_id):
                         continue
                     job_name = job.get("name", job_id)
+                    if job_id not in self.cron:
+                        continue
                     self._running_cron.add(job_id)
                     log.info("cron: running job %s (%s)", job_name, job_id)
                     try:
@@ -720,6 +733,9 @@ class AgentDaemon:
         if job_id not in self.cron:
             await self._reply(writer, {"type": "error", "message": f"cron job '{job_id}' not found"})
             return
+        if job_id in self._running_cron:
+            await self._reply(writer, {"type": "error", "message": f"cron job '{job_id}' is currently running; wait for it to complete before deleting"})
+            return
         del self.cron[job_id]
         await self._reply(writer, {"type": "cron_deleted", "job_id": job_id})
 
@@ -890,6 +906,7 @@ def main() -> int:
         daemon.add_telegram(args.telegram, allowed_users=allowed)
 
     async def _run() -> None:
+        asyncio.get_running_loop().set_exception_handler(_async_exception_handler)
         try:
             await daemon.start()
         finally:
