@@ -568,7 +568,7 @@ class AgentDaemon:
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         action = ""
         try:
-            raw = await reader.readline()
+            raw = await asyncio.wait_for(reader.readline(), timeout=_READLINE_TIMEOUT)
             if not raw:
                 return
             request: dict[str, Any] = json.loads(raw.decode("utf-8"))
@@ -598,6 +598,8 @@ class AgentDaemon:
                 await self._reply(writer, {"type": "error", "message": f"unknown action: {action}"})
         except json.JSONDecodeError:
             await self._reply(writer, {"type": "error", "message": "invalid JSON"})
+        except asyncio.TimeoutError:
+            await self._reply(writer, {"type": "error", "message": "read timeout"})
         except Exception as exc:
             log.exception("unhandled client error for action %s", action)
             await self._reply(writer, {"type": "error", "message": str(exc)})
@@ -747,6 +749,7 @@ class AgentDaemon:
 
 _QUERY_TIMEOUT = 300
 _CONNECT_TIMEOUT = 5
+_READLINE_TIMEOUT = 30
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0
 

@@ -99,11 +99,20 @@ def load_json_file(path: str | None) -> Any:
         return None
 
     try:
-        with open(path, "r", encoding="utf-8") as handle:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError as e:
+        print(f"rooster-code: cannot load {path}: {e}", file=sys.stderr)
+        return {}
+    except OSError:
+        return {}
+    try:
+        with open(fd, "r", encoding="utf-8", closefd=False) as handle:
             return json.load(handle)
     except (FileNotFoundError, json.JSONDecodeError) as e:
         print(f"rooster-code: cannot load {path}: {e}", file=sys.stderr)
         return {}
+    finally:
+        os.close(fd)
 
 
 def save_json_file(path: str, data: Any) -> None:
