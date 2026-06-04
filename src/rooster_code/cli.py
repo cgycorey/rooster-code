@@ -499,7 +499,7 @@ async def run_ask(prompt: str, config) -> int:
             render_notice(console, "Interrupted", "Query cancelled.", "yellow")
             return 130
         except Exception as exc:
-            log.exception("ask agent query failed: %s", exc)
+            log.exception("ask agent query failed [agent=%s session=%s]: %s", requested_agent, config.resume or config.session_id or "new", exc)
             render_notice(console, "Error", str(exc), "red")
             return 1
         finally:
@@ -525,7 +525,7 @@ async def run_ask(prompt: str, config) -> int:
         render_notice(console, "Interrupted", "Query cancelled.", "yellow")
         return 130
     except Exception as exc:
-        log.exception("ask query failed: %s", exc)
+        log.exception("ask query failed [session=%s model=%s]: %s", config.resume or config.session_id or "new", config.model or "default", exc)
         render_notice(console, "Error", str(exc), "red")
         return 1
     finally:
@@ -704,7 +704,7 @@ async def run_chat(config) -> int:
             aborted = True
             interrupted = False
         except Exception as exc:
-            log.exception("chat query failed: %s", exc)
+            log.exception("chat query failed [session=%s model=%s]: %s", config.resume or config.session_id or "new", config.model or "default", exc)
             render_notice(console, "Error", str(exc), "red")
         finally:
             if aborted or abort_signal.is_set():

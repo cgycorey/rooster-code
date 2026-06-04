@@ -113,7 +113,7 @@ def save_json_file(path: str, data: Any) -> None:
     fd, tmp_path = tempfile.mkstemp(dir=str(file_path.parent), suffix=".tmp")
     try:
         # Acquire exclusive advisory lock to prevent concurrent writes
-        lock_file = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+        lock_file = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o644)
         try:
             fcntl.flock(lock_file, fcntl.LOCK_EX)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:

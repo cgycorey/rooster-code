@@ -419,7 +419,7 @@ class AgentDaemon:
             async with self_ref._state_lock:
                 if self_ref._max_sessions and not state.get_session(session_id):
                     if state.count() >= self_ref._max_sessions:
-                        return {"text": "Error: maximum sessions reached. Try again later or specify an existing session_id.", "tokens": 0, "cost": 0.0, "turns": 0}
+                        return {"text": "Error: maximum sessions reached. Try again later or specify an existing session_id.", "tokens": 0, "cost": 0.0, "turns": 0, "session_id": session_id or "default"}
                 if session_id and state.get_session(session_id):
                     config.resume = session_id
                 elif session_id:
@@ -432,9 +432,9 @@ class AgentDaemon:
 
                 sid = _get_agent_session_id(agent) or session_id or "default"
                 async with self_ref._state_lock:
-                    if self_ref._max_sessions and not state.get_session(session_id):
+                    if self_ref._max_sessions and not state.get_session(sid):
                         if state.count() >= self_ref._max_sessions:
-                            return {"text": "Error: maximum sessions reached. Try again later or specify an existing session_id.", "tokens": 0, "cost": 0.0, "turns": 0}
+                            return {"text": "Error: maximum sessions reached. Try again later or specify an existing session_id.", "tokens": 0, "cost": 0.0, "turns": 0, "session_id": sid}
                     state.upsert_session(sid, cwd=cwd)
 
                 t0 = time.monotonic()
@@ -446,16 +446,16 @@ class AgentDaemon:
                             result = await asyncio.wait_for(agent.prompt(prompt), timeout=_QUERY_TIMEOUT)
                             break
                         except asyncio.TimeoutError:
-                            return {"text": "Error: query timed out after 300s", "tokens": 0, "cost": 0.0, "turns": 0}
+                            return {"text": "Error: query timed out after 300s", "tokens": 0, "cost": 0.0, "turns": 0, "session_id": sid}
                         except Exception as exc:
                             last_error = exc
                             if not _is_retriable(exc) or attempt == _MAX_RETRIES - 1:
-                                return {"text": f"Error: {exc}", "tokens": 0, "cost": 0.0, "turns": 0}
+                                return {"text": f"Error: {exc}", "tokens": 0, "cost": 0.0, "turns": 0, "session_id": sid}
                             delay = _RETRY_BASE_DELAY * (2 ** attempt)
                             log.warning("retrying query after %ss (attempt %d/%d): %s", delay, attempt + 2, _MAX_RETRIES, exc)
                             await asyncio.sleep(delay)
                     if result is None:
-                        return {"text": f"Error: {last_error or 'no result'}", "tokens": 0, "cost": 0.0, "turns": 0}
+                        return {"text": f"Error: {last_error or 'no result'}", "tokens": 0, "cost": 0.0, "turns": 0, "session_id": sid}
                     usage = getattr(result, "usage", None)
                     tokens = 0
                     if usage:
@@ -464,7 +464,7 @@ class AgentDaemon:
                     turns = getattr(result, "num_turns", 0) or 0
                     self_ref._total_tokens += tokens
                     self_ref._total_cost += cost
-                    return {"text": result.text or "", "tokens": tokens, "cost": cost, "turns": turns}
+                    return {"text": result.text or "", "tokens": tokens, "cost": cost, "turns": turns, "session_id": sid}
                 finally:
                     elapsed = (time.monotonic() - t0) * 1000
                     self_ref._queries += 1
@@ -622,7 +622,7 @@ class AgentDaemon:
         result = await self._query_handler(session_id, "unix-socket", prompt, overrides)
         await self._reply(writer, {
             "type": "done",
-            "session_id": session_id or "default",
+            "session_id": result.get("session_id") or session_id or "default",
             "text": result["text"],
             "tokens": result["tokens"],
             "cost": result["cost"],
