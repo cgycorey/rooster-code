@@ -202,15 +202,23 @@ class RuntimeEditTool(BaseTool):
 
         self._tracker.record_activity("Editing file", self.name, target_path)
 
-        with open(target_path, "r", encoding="utf-8", errors="replace") as handle:
-            before = handle.read()
+        fd_before = os.open(target_path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            with open(fd_before, "r", encoding="utf-8", errors="replace", closefd=False) as handle:
+                before = handle.read()
+        finally:
+            os.close(fd_before)
 
         result = await self._delegate.call(input, context)
         if result.is_error:
             return result
 
-        with open(target_path, "r", encoding="utf-8", errors="replace") as handle:
-            after = handle.read()
+        fd_after = os.open(target_path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            with open(fd_after, "r", encoding="utf-8", errors="replace", closefd=False) as handle:
+                after = handle.read()
+        finally:
+            os.close(fd_after)
 
         diff = "\n".join(
             unified_diff(
