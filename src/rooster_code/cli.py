@@ -438,6 +438,21 @@ def _clear_goal_context(agent) -> None:
     _update_agent_goal_prompt(agent, None)
 
 
+def _check_goal_met(agent) -> bool:
+    history = getattr(agent, "_history", None)
+    if not isinstance(history, list):
+        return False
+    for msg in reversed(history):
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content", [])
+        for block in content if isinstance(content, list) else []:
+            if isinstance(block, dict) and block.get("type") == "text":
+                if "GOAL_MET" in str(block.get("text", "")):
+                    return True
+    return False
+
+
 def _update_agent_goal_prompt(agent, goal_text: str | None) -> None:
     """Update append_system_prompt to reflect the current goal."""
     opts = getattr(agent, "_options", None)
@@ -719,6 +734,9 @@ async def run_chat(config) -> int:
     install_search_backend(config)
     _injected_task_ids.clear()
     _rehydrated = False
+    _goal_loop_active = False
+    _goal_loop_turns = 0
+    _MAX_GOAL_TURNS = 20
     agent = create_runtime_agent(config)
     interrupted = False
     abort_signal = asyncio.Event()
@@ -837,15 +855,42 @@ async def run_chat(config) -> int:
                 render_notice(console, "Cancelled", "Background tasks cancelled.", "yellow")
                 interrupted = False
             _poll_and_render_notifications()
-            try:
-                user_input = await prompt_once(prompt_session)
-                if user_input is None:
+            if _goal_loop_active:
+                if interrupted or _goal_loop_turns >= _MAX_GOAL_TURNS:
+                    if _goal_loop_turns >= _MAX_GOAL_TURNS:
+                        render_notice(console, "Goal Loop", f"Stopped after {_MAX_GOAL_TURNS} turns.", "yellow")
+                    _goal_loop_active = False
+                    _goal_loop_turns = 0
                     continue
-            except KeyboardInterrupt:
-                continue
-            except EOFError:
-                interrupted = True
-                break
+                if _goal_loop_turns > 0 and _check_goal_met(agent):
+                    render_notice(console, "Goal Loop", "Goal met! Loop stopped.", "green")
+                    _goal_loop_active = False
+                    _goal_loop_turns = 0
+                    continue
+                _goal_loop_turns += 1
+                from rooster_code.goal import get_active_goal as _loop_goal
+                active = _loop_goal()
+                if active is None:
+                    render_notice(console, "Goal Loop", "No active goal. Loop stopped.", "yellow")
+                    _goal_loop_active = False
+                    _goal_loop_turns = 0
+                    continue
+                goal_text = active.text
+                user_input = (
+                    f"Continue working toward the goal: {goal_text}. "
+                    f"If the goal is completely met, start your response with GOAL_MET."
+                )
+                render_notice(console, "Goal Loop", f"Turn {_goal_loop_turns}/{_MAX_GOAL_TURNS}", "blue")
+            else:
+                try:
+                    user_input = await prompt_once(prompt_session)
+                    if user_input is None:
+                        continue
+                except KeyboardInterrupt:
+                    continue
+                except EOFError:
+                    interrupted = True
+                    break
             _poll_and_render_notifications()
             command = parse_chat_command(user_input)
             if command.name == "exit":
@@ -991,6 +1036,18 @@ async def run_chat(config) -> int:
                             omit_duplicate_result=True,
                             show_activity_trace=True,
                         )
+                elif subcmd == "work":
+                    active = get_active_goal()
+                    if active is None:
+                        render_notice(console, "Goal", "No active goal. Set one with /goal set first.", "yellow")
+                    else:
+                        _goal_loop_active = True
+                        _goal_loop_turns = 0
+                        render_notice(console, "Goal Loop", f"Working on: {active.text}\nCtrl+C to stop, max {_MAX_GOAL_TURNS} turns.", "blue")
+                elif subcmd == "stop":
+                    _goal_loop_active = False
+                    _goal_loop_turns = 0
+                    render_notice(console, "Goal Loop", "Stopped.", "yellow")
                 else:
                     render_notice(console, "Error", f"Unknown /goal subcommand: {subcmd}", "red")
                 continue
