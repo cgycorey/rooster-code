@@ -23,6 +23,7 @@ import httpx
 
 from rooster_code.chat import parse_chat_command
 from rooster_code.config import config_from_namespace, save_agents_file
+from rooster_code.goal import set_goal, clear_goal, list_goals, get_active_goal, get_goal_check_prompt
 from rooster_code.file_context import (
     resolve_at_references,
     _build_context_block,
@@ -405,6 +406,63 @@ def append_task_result_to_context(agent, task_id: str, task_result: dict[str, ob
                 "content": [{"type": "text", "text": assistant_text}],
             }
         )
+
+
+def _inject_goal_context(agent, goal_text: str) -> None:
+    history = getattr(agent, "_history", None)
+    if not isinstance(history, list):
+        return
+    history.append({
+        "role": "user",
+        "content": [{"type": "text", "text": f"[System: active goal — {goal_text}]"}],
+    })
+    history.append({
+        "role": "assistant",
+        "content": [{"type": "text", "text": f"Acknowledged. Working toward: {goal_text}"}],
+    })
+    _update_agent_goal_prompt(agent, goal_text)
+
+
+def _clear_goal_context(agent) -> None:
+    history = getattr(agent, "_history", None)
+    if not isinstance(history, list):
+        return
+    history.append({
+        "role": "user",
+        "content": [{"type": "text", "text": "[System: goal cleared]"}],
+    })
+    history.append({
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Understood. No active goal."}],
+    })
+    _update_agent_goal_prompt(agent, None)
+
+
+def _update_agent_goal_prompt(agent, goal_text: str | None) -> None:
+    """Update append_system_prompt to reflect the current goal."""
+    opts = getattr(agent, "_options", None)
+    if opts is None:
+        return
+    try:
+        from rooster_code.goal import get_active_goal as _get_active
+    except ImportError:
+        return
+    active = _get_active()
+    # Rebuild the goal section that _agent_context_prompt would produce
+    goal_section = ""
+    if active:
+        goal_section = (
+            f"\n\n# Current Goal\n"
+            f"You are working toward the following goal: {active.text}\n"
+            f"Use /goal check to assess progress. Do not autonomously loop; wait for the user to check."
+        )
+    # Strip any previous goal section and append the current one
+    current = getattr(opts, "append_system_prompt", "") or ""
+    # Remove any existing "# Current Goal" section
+    import re
+    current = re.sub(r"\n*# Current Goal\n.*?(?=\n# |\Z)", "", current, flags=re.DOTALL)
+    opts.append_system_prompt = (current + goal_section).strip()
+
 
 
 
@@ -892,6 +950,49 @@ async def run_chat(config) -> int:
                 continue
             if command.name == "team" and command.args:
                 await _handle_team_command(console, command, config, team_manager, agent, abort_signal)
+                continue
+            if command.name == "goal" and command.args:
+                subcmd = command.args[0]
+                if subcmd == "set":
+                    if len(command.args) < 2:
+                        render_notice(console, "Error", "Usage: /goal set <text>", "red")
+                        continue
+                    text = " ".join(command.args[1:])
+                    g = set_goal(text)
+                    render_notice(console, "Goal Set", f"[bold]Goal:[/bold] {g.text}\n[dim]ID: {g.id}[/dim]", "green")
+                    _inject_goal_context(agent, g.text)
+                elif subcmd == "show":
+                    active = get_active_goal()
+                    if active:
+                        render_state(console, "Active Goal", {"id": active.id, "text": active.text, "status": active.status})
+                    else:
+                        render_notice(console, "Goal", "No active goal.", "yellow")
+                elif subcmd == "clear":
+                    cleared = clear_goal()
+                    if cleared:
+                        render_notice(console, "Goal Cleared", f"[bold]{cleared.text}[/bold]\n[dim]Marked as completed.[/dim]", "green")
+                        _clear_goal_context(agent)
+                    else:
+                        render_notice(console, "Goal", "No active goal to clear.", "yellow")
+                elif subcmd == "list":
+                    goals = list_goals()
+                    if goals:
+                        render_state(console, "Goals", {g.id: f"[{g.status.upper()}] {g.text}" for g in goals})
+                    else:
+                        render_notice(console, "Goals", "No goals found.", "yellow")
+                elif subcmd == "check":
+                    prompt = get_goal_check_prompt()
+                    if prompt is None:
+                        render_notice(console, "Goal", "No active goal to check.", "yellow")
+                    else:
+                        render_notice(console, "Goal Check", "Assessing goal progress...", "blue")
+                        await _run_query_with_interrupt(
+                            agent.query(prompt),
+                            omit_duplicate_result=True,
+                            show_activity_trace=True,
+                        )
+                else:
+                    render_notice(console, "Error", f"Unknown /goal subcommand: {subcmd}", "red")
                 continue
             available_skills = set(list_skill_names())
             if command.name in available_skills:
