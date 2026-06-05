@@ -117,7 +117,7 @@ def load_json_file(path: str | None) -> Any:
 
 def save_json_file(path: str, data: Any) -> None:
     """Save data as JSON to a file atomically, creating parent directories as needed."""
-    file_path = Path(path)
+    file_path = Path(path).resolve()
     file_path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=str(file_path.parent), suffix=".tmp")
     try:

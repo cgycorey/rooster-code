@@ -481,6 +481,7 @@ def test_query_timeout_configured() -> None:
 
     assert dm._QUERY_TIMEOUT == 300
     assert dm._CONNECT_TIMEOUT == 5
+    assert dm._READLINE_TIMEOUT == 30
     assert dm._MAX_RETRIES == 3
     assert dm._RETRY_BASE_DELAY == 1.0
     assert dm._is_retriable(Exception("rate limit exceeded")) is True
