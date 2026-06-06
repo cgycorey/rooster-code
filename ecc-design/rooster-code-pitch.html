@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rooster Code — Custom Coding Agent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Sans:wght@300;400;600&display=swap" rel="stylesheet">
+<style>
+/* ===== VIEWPORT BASE (mandatory) ===== */
+html, body { height: 100%; overflow-x: hidden; }
+html { scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+.slide { width: 100vw; height: 100vh; height: 100dvh; overflow: hidden; scroll-snap-align: start; display: flex; flex-direction: column; position: relative; }
+.slide-content { flex: 1; display: flex; flex-direction: column; justify-content: center; max-height: 100%; overflow: hidden; padding: var(--slide-padding); }
+:root {
+    --title-size: clamp(1.5rem, 5vw, 4rem);
+    --h2-size: clamp(1.25rem, 3.5vw, 2.5rem);
+    --h3-size: clamp(1rem, 2.5vw, 1.75rem);
+    --body-size: clamp(0.75rem, 1.5vw, 1.125rem);
+    --small-size: clamp(0.65rem, 1vw, 0.875rem);
+    --slide-padding: clamp(1rem, 4vw, 4rem);
+    --content-gap: clamp(0.5rem, 2vw, 2rem);
+}
+
+/* ===== DARK BOTANICAL PRESET ===== */
+:root {
+    --bg: #1a1817;
+    --surface: rgba(255,255,255,0.03);
+    --text: #f0ebe4;
+    --text-muted: #c4b8a8;
+    --gold: #c9a84c;
+    --blush: #cd8b7a;
+    --terracotta: #b35d3f;
+    --rule: rgba(201,168,76,0.2);
+}
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: 'IBM Plex Sans', sans-serif; font-size: var(--body-size); line-height: 1.5; -webkit-font-smoothing: antialiased; }
+
+h1, h2, h3 { font-family: 'Cormorant', serif; font-weight: 600; }
+h1 { font-size: var(--title-size); line-height: 1.1; color: var(--text); }
+h2 { font-size: var(--h2-size); color: var(--gold); margin-bottom: clamp(0.5rem, 1.5vh, 1rem); }
+h3 { font-size: var(--h3-size); color: var(--text); }
+.small { font-size: var(--small-size); color: var(--text-muted); }
+
+/* ===== DECORATIVE ===== */
+.orb { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.15; pointer-events: none; }
+.orb-1 { width: clamp(200px, 30vw, 500px); height: clamp(200px, 30vw, 500px); background: var(--gold); top: -10%; right: -5%; }
+.orb-2 { width: clamp(150px, 25vw, 400px); height: clamp(150px, 25vw, 400px); background: var(--blush); bottom: -15%; left: -5%; }
+.orb-3 { width: clamp(100px, 20vw, 300px); height: clamp(100px, 20vw, 300px); background: var(--terracotta); top: 40%; right: 20%; }
+hr { border: none; border-top: 1px solid var(--rule); width: clamp(60px, 8vw, 120px); margin: var(--element-gap) 0; }
+
+/* ===== LAYOUT ===== */
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: var(--content-gap); align-items: center; }
+.feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: clamp(0.5rem, 1.5vw, 1rem); }
+.feature-card { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: clamp(0.75rem, 1.5vw, 1.5rem); }
+.feature-card h3 { font-family: 'IBM Plex Sans', sans-serif; font-weight: 600; font-size: var(--body-size); color: var(--gold); margin-bottom: 0.3rem; }
+.feature-card p { font-size: var(--small-size); color: var(--text-muted); }
+.number { font-family: 'Cormorant', serif; font-size: clamp(3rem, 8vw, 7rem); color: var(--gold); opacity: 0.6; line-height: 1; margin-bottom: 0.5rem; font-weight: 700; }
+.code-block { background: rgba(0,0,0,0.3); border: 1px solid var(--rule); border-radius: 6px; padding: clamp(0.5rem, 1vw, 1rem); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: var(--small-size); line-height: 1.6; color: var(--text-muted); overflow: hidden; white-space: pre; }
+.stat { text-align: center; }
+.stat-number { font-family: 'Cormorant', serif; font-size: clamp(2rem, 5vw, 3.5rem); color: var(--gold); font-weight: 700; }
+.stat-label { font-size: var(--small-size); color: var(--text-muted); }
+.quote { font-family: 'Cormorant', serif; font-style: italic; font-size: clamp(1.25rem, 3vw, 2rem); line-height: 1.4; color: var(--text); position: relative; padding-left: clamp(1rem, 2vw, 2rem); border-left: 2px solid var(--gold); }
+
+/* ===== ANIMATION ===== */
+.slide-content > * { opacity: 0; transform: translateY(20px); transition: opacity 0.6s ease, transform 0.6s ease; }
+.slide.visible .slide-content > * { opacity: 1; transform: translateY(0); }
+.slide.visible h1 { transition-delay: 0.1s; }
+.slide.visible h2 { transition-delay: 0.15s; }
+.slide.visible p, .slide.visible li { transition-delay: 0.2s; }
+.slide.visible .feature-card:nth-child(1) { transition-delay: 0.2s; }
+.slide.visible .feature-card:nth-child(2) { transition-delay: 0.3s; }
+.slide.visible .feature-card:nth-child(3) { transition-delay: 0.4s; }
+.slide.visible .feature-card:nth-child(4) { transition-delay: 0.5s; }
+.slide.visible .feature-card:nth-child(5) { transition-delay: 0.35s; }
+.slide.visible .feature-card:nth-child(6) { transition-delay: 0.45s; }
+
+/* ===== NAV ===== */
+.nav { position: fixed; right: clamp(0.5rem, 1.5vw, 1.5rem); top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 0.5rem; z-index: 100; }
+.nav-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); opacity: 0.3; cursor: pointer; transition: opacity 0.3s; border: none; }
+.nav-dot.active { opacity: 1; background: var(--gold); }
+.slide-counter { position: fixed; bottom: clamp(0.5rem, 1.5vw, 1rem); left: clamp(0.5rem, 1.5vw, 1rem); font-size: var(--small-size); color: var(--text-muted); z-index: 100; }
+.keyboard-hint { position: fixed; bottom: clamp(0.5rem, 1.5vw, 1rem); right: clamp(0.5rem, 1.5vw, 1rem); font-size: var(--small-size); color: var(--text-muted); z-index: 100; opacity: 0.4; }
+
+@media (max-height: 700px) {
+    :root { --slide-padding: clamp(0.75rem, 3vw, 2rem); --content-gap: clamp(0.4rem, 1.5vw, 1rem); --title-size: clamp(1.25rem, 4.5vw, 2.5rem); --h2-size: clamp(1rem, 3vw, 1.75rem); }
+    .nav, .keyboard-hint, .orb { display: none; }
+}
+@media (max-height: 600px) {
+    :root { --slide-padding: clamp(0.5rem, 2.5vw, 1.5rem); --content-gap: clamp(0.3rem, 1vw, 0.75rem); --title-size: clamp(1.1rem, 4vw, 2rem); --body-size: clamp(0.7rem, 1.2vw, 0.95rem); }
+}
+@media (max-width: 600px) { .split { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.2s !important; }
+    html { scroll-behavior: auto; }
+}
+</style>
+</head>
+<body>
+
+<!-- ===== SLIDE 1: TITLE ===== -->
+<section class="slide">
+    <div class="orb orb-1"></div>
+    <div class="slide-content" style="align-items:center; text-align:center;">
+        <p class="small" style="letter-spacing:0.15em; text-transform:uppercase; color:var(--gold); margin-bottom:1rem;">Custom Coding Agent Platform</p>
+        <h1>Rooster Code</h1>
+        <hr style="margin:clamp(0.5rem,2vh,1.5rem) auto;">
+        <p style="max-width:500px; color:var(--text-muted);">CLI, daemon, and team orchestration<br>for autonomous AI-assisted development</p>
+        <p class="small" style="margin-top:2rem; opacity:0.5;">&#x2193; Scroll or press arrow keys to navigate</p>
+    </div>
+</section>
+
+<!-- ===== SLIDE 2: WHAT IS IT ===== -->
+<section class="slide">
+    <div class="orb orb-2"></div>
+    <div class="slide-content">
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">01 — Overview</p>
+        <h2>What is Rooster Code?</h2>
+        <hr>
+        <p style="max-width:650px; color:var(--text-muted);">Rooster Code is a <span style="color:var(--text);">custom coding agent</span> that gives you fine-grained control over how AI agents work with your codebase. It runs as a CLI, a background daemon, or a team orchestrator — all configurable from a single codebase.</p>
+        <div class="feature-grid" style="margin-top:var(--content-gap);">
+            <div class="feature-card"><h3>CLI & Chat</h3><p>Interactive TUI with slash commands, prompt injection, and session management</p></div>
+            <div class="feature-card"><h3>Daemon Mode</h3><p>Long-running background service with Unix socket, Telegram adapter, and cron scheduling</p></div>
+            <div class="feature-card"><h3>Team Orchestration</h3><p>Multi-agent dispatch with AgentPool, mailboxes, health tracking, and background tasks</p></div>
+        </div>
+    </div>
+</section>
+
+<!-- ===== SLIDE 3: TEAM ORCHESTRATION ===== -->
+<section class="slide">
+    <div class="orb orb-3" style="opacity:0.1;"></div>
+    <div class="slide-content">
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">02 — Core Feature</p>
+        <h2>Team Orchestration</h2>
+        <hr>
+        <p style="max-width:600px; color:var(--text-muted);">Dispatch tasks to specialized agents in parallel. Monitor progress in real-time with <span style="color:var(--gold);">/team status</span> and review output with <span style="color:var(--gold);">/team log</span>.</p>
+        <div class="code-block" style="margin-top:var(--content-gap);">
+/team create review-team security-auditor code-reviewer
+Dispatch security-auditor to review for HIGH vulnerabilities
+Dispatch code-reviewer to check async patterns and error handling
+
+/team status
+  [OK] task_1  completed  team-security-auditor
+  [..] task_2  in_progress  team-code-reviewer
+        </div>
+        <div class="feature-grid" style="margin-top:var(--content-gap); grid-template-columns: repeat(3, 1fr);">
+            <div class="feature-card"><h3>AgentPool</h3><p>Persistent agent instances with per-member mailboxes and health tracking</p></div>
+            <div class="feature-card"><h3>Background Tasks</h3><p>Fire-and-forget dispatch with status notifications and task output retrieval</p></div>
+            <div class="feature-card"><h3>Recovery</h3><p>Automatic member recreation on failure with fallback state restoration</p></div>
+        </div>
+    </div>
+</section>
+
+<!-- ===== SLIDE 4: GOAL SYSTEM ===== -->
+<section class="slide">
+    <div class="slide-content">
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">03 — Core Feature</p>
+        <h2>Goal System</h2>
+        <hr>
+        <p style="max-width:550px; color:var(--text-muted);">Define persistent objectives that survive session restarts. The agent receives your goal as part of its system prompt — keeping it focused across turns.</p>
+        <div class="split" style="margin-top:var(--content-gap);">
+            <div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>/goal set</h3><p>Define an active goal with JSON persistence in ~/.rooster-code/</p></div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>/goal work</h3><p>Auto-loop mode — agent works autonomously, stops on GOAL_MET</p></div>
+                <div class="feature-card"><h3>/goal check</h3><p>Manual progress assessment with goal-specific prompt</p></div>
+            </div>
+            <div class="code-block">
+/goal set "Add O_NOFOLLOW to all file ops"
+/goal work
+
+Turn 1: Checking codebase... Found 3 unprotected os.open calls
+Turn 2: Applied O_NOFOLLOW. Running tests... GOAL_MET
+Goal met! Loop stopped.
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ===== SLIDE 5: SECURITY ===== -->
+<section class="slide">
+    <div class="orb orb-1" style="opacity:0.08; background:var(--gold);"></div>
+    <div class="slide-content">
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">04 — Security</p>
+        <h2>Hardened by Default</h2>
+        <hr>
+        <p style="max-width:600px; color:var(--text-muted);">Every file operation is protected against TOCTOU races. Multiple security audits — zero critical findings.</p>
+        <div class="feature-grid" style="margin-top:var(--content-gap);">
+            <div class="feature-card"><h3>O_NOFOLLOW</h3><p>All 7 os.open calls use O_NOFOLLOW to atomically prevent symlink attacks on file reads and writes</p></div>
+            <div class="feature-card"><h3>Atomic Writes</h3><p>Lock files isolated to .lock suffix. mkstemp + os.replace pattern prevents zero-byte corruption on crash</p></div>
+            <div class="feature-card"><h3>Socket Hardening</h3><p>Unix socket chmod 0o600 after bind. Telegram tokens via env var — never in /proc/cmdline</p></div>
+            <div class="feature-card"><h3>SSE Reconnect</h3><p>MCP transport with 3-retry exponential backoff (2s→4s→8s), orphaned request cleanup</p></div>
+        </div>
+    </div>
+</section>
+
+<!-- ===== SLIDE 6: DAEMON MODE ===== -->
+<section class="slide">
+    <div class="slide-content">
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">05 — Infrastructure</p>
+        <h2>Daemon Mode</h2>
+        <hr>
+        <div class="split" style="margin-top:var(--content-gap);">
+            <div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Unix Socket Server</h3><p>Long-running agent daemon listening on Unix socket with session state management</p></div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Telegram Adapter</h3><p>Control agents via Telegram bot. Token via env var or CLI flag</p></div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Cron Engine</h3><p>SQLite-backed persistent cron jobs with heartbeat monitoring and cleanup loop</p></div>
+                <div class="feature-card"><h3>Session Persistence</h3><p>SQLite state store for sessions, teams, and cron — survive daemon restarts</p></div>
+            </div>
+            <div class="code-block">
+rooster-daemon --socket /tmp/rooster-code.sock \
+    --telegram "$ROOSTER_CODE_TELEGRAM_TOKEN"
+
+# Session management
+claude --daemon ask "Review the PR"
+claude daemon sessions
+claude daemon health
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ===== SLIDE 7: MCP TRANSPORT ===== -->
+<section class="slide">
+    <div class="orb orb-2" style="opacity:0.1;"></div>
+    <div class="slide-content">
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">06 — Integration</p>
+        <h2>MCP Transport</h2>
+        <hr>
+        <p style="max-width:600px; color:var(--text-muted);">Custom SSE/HTTP MCP client with automatic reconnect — fills the gap the SDK leaves for non-stdio transports.</p>
+        <div class="split" style="margin-top:var(--content-gap);">
+            <div class="feature-grid" style="grid-template-columns: 1fr;">
+                <div class="feature-card"><h3>Persistent SSE Stream</h3><p>Single GET /sse for endpoint discovery and response reading, correlated by request ID</p></div>
+                <div class="feature-card"><h3>Reconnect Loop</h3><p>3 retry attempts with exponential backoff: 2s → 4s → 8s. Orphaned futures cleaned up on disconnect</p></div>
+                <div class="feature-card"><h3>Inline SSE Fallback</h3><p>Some MCP servers return SSE in POST responses — handled via _parse_inline_sse fallback</p></div>
+            </div>
+            <div>
+                <div class="stat"><div class="stat-number">3</div><div class="stat-label">Max reconnection retries</div></div>
+                <div class="stat" style="margin-top:1rem;"><div class="stat-number">2<sup>n</sup></div><div class="stat-label">Exponential backoff capped at 10s</div></div>
+                <div class="stat" style="margin-top:1rem;"><div class="stat-number">0</div><div class="stat-label">Orphaned futures left hanging</div></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ===== SLIDE 8: FILE REFERENCES ===== -->
+<section class="slide">
+    <div class="slide-content">
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">07 — UX</p>
+        <h2>File References & CLI</h2>
+        <hr>
+        <div class="split">
+            <div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>@file References</h3><p>Drag files into context with @ syntax. Path confinement, TOCTOU-safe reads, 512KB limit</p></div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Slash Commands</h3><p>/goal, /team, /agents, /model — configurable command system with argument parsing</p></div>
+                <div class="feature-card"><h3>Chat & Ask Modes</h3><p>Interactive chat with prompt history, or single-turn ask with background task tracking</p></div>
+            </div>
+            <div class="code-block">
+/team create review agent-1 agent-2 agent-3
+/team status
+/team log 10
+/goal set "Implement feature X"
+/goal work
+/goal check
+/agents list
+/agents save security-reviewer
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ===== SLIDE 9: CHAT MODE DEMO ===== -->
+<section class="slide">
+    <div class="orb orb-3" style="opacity:0.07;"></div>
+    <div class="slide-content">
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">08 — Interactive Demo</p>
+        <h2>Chat Mode in Action</h2>
+        <hr>
+        <p style="max-width:600px; color:var(--text-muted); margin-bottom:0.5rem;">A real session showing team orchestration, goal system, and background task tracking — all from the chat interface.</p>
+        <div class="split">
+            <div>
+                <div class="code-block" style="font-size:clamp(0.5rem,0.9vw,0.7rem); line-height:1.7;">
+<span style="color:var(--gold);">rooster-code chat</span>
+<span style="color:var(--text-muted);">Session  new    Model  deepseek-v4-pro</span>
+
+<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/goal set</span> "Add O_NOFOLLOW hardening"
+╭── Goal Set ────────────────────────────────╮
+│ Goal: Add O_NOFOLLOW hardening              │
+╰─────────────────────────────────────────────╯
+
+<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/team create</span> review security-auditor
+╭── Team Created ────────────────────────────╮
+│ Team 'review' with members: security-auditor │
+╰─────────────────────────────────────────────╯
+
+<span style="color:var(--text);">rooster-code></span> Dispatch security-auditor to scan
+for remaining TOCTOU vulnerabilities
+
+╭── Thinking ────────────────────────────────╮
+│ I'll dispatch the security auditor to scan   │
+│ for TOCTOU race conditions.                  │
+╰─────────────────────────────────────────────╯
+
+╭── TeamDispatch ────────────────────────────╮
+│ Dispatched task to 'security-auditor'        │
+│ (task_id: task_1). Background processing...  │
+╰─────────────────────────────────────────────╯
+                </div>
+            </div>
+            <div>
+                <div class="code-block" style="font-size:clamp(0.5rem,0.9vw,0.7rem); line-height:1.7;">
+<span style="color:var(--text-muted);">... agent continues working ...</span>
+
+╭── Background Task ──────────────────────────╮
+│ team-security-auditor (task_1) completed      │
+│ Summary: Found 2 unprotected os.open calls    │
+│ Full output: /task-output task_1              │
+╰─────────────────────────────────────────────╯
+
+<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/team status</span>
+╭── Team Tasks ───────────────────────────────╮
+│ [OK] task_1  completed  team-security-auditor │
+╰──────────────────────────────────────────────╯
+
+<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/team log</span>
+╭── Team Log ─────────────────────────────────╮
+│ task_1  team-security-auditor                 │
+│ ▸ Use /task-output &lt;id&gt; for full output       │
+╰──────────────────────────────────────────────╯
+
+<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/goal check</span>
+╭── Goal Check ───────────────────────────────╮
+│ Active goal: Add O_NOFOLLOW hardening         │
+│ Assess: YES — all os.open calls protected.    │
+╰──────────────────────────────────────────────╯
+                </div>
+            </div>
+        </div>
+        <p class="small" style="margin-top:0.5rem; color:var(--text-muted); text-align:center;">Inline notifications keep you informed while you work. Slash commands plus natural language.</p>
+    </div>
+</section>
+
+<!-- ===== SLIDE 10: AGENT TEAMS ===== -->
+<section class="slide">
+    <div class="orb orb-2" style="opacity:0.08;"></div>
+    <div class="slide-content">
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">09 — Agent Teams</p>
+        <h2>Multi-Agent Codebase Evaluation</h2>
+        <hr>
+        <p style="max-width:600px; color:var(--text-muted);">Spawn specialized review agents in parallel. Each agent gets a narrow contract and reports findings independently. Consolidate for a complete picture.</p>
+        <div class="split" style="margin-top:var(--content-gap);">
+            <div class="feature-grid" style="grid-template-columns: 1fr;">
+                <div class="feature-card"><h3>&#x1f6e1; Security Auditor</h3><p>Scans for vulnerabilities, hardcoded secrets, TOCTOU races, injection risks. Reports HIGH/CRITICAL only.</p></div>
+                <div class="feature-card"><h3>&#x1f4dd; Code Reviewer</h3><p>Python patterns, async correctness, error handling, type hints, code duplication. MEDIUM+ findings.</p></div>
+                <div class="feature-card"><h3>&#x1f50d; Silent-Failure Hunter</h3><p>Bare excepts, swallowed exceptions, missing logs, fire-and-forget gaps. All severities.</p></div>
+            </div>
+            <div>
+                <div class="code-block" style="font-size:clamp(0.5rem,0.9vw,0.7rem); line-height:1.6;">
+<span style="color:var(--gold);">/team create codebase-eval</span>
+<span style="color:var(--text);">  security-auditor code-reviewer silent-hunter</span>
+
+<span style="color:var(--text-muted);"># Dispatch all 3 in parallel</span>
+<span style="color:var(--text);">Dispatch security-auditor to scan for</span>
+<span style="color:var(--text);">  HIGH/CRITICAL security issues</span>
+
+<span style="color:var(--text);">Dispatch code-reviewer to check for</span>
+<span style="color:var(--text);">  async patterns and error handling</span>
+
+<span style="color:var(--text);">Dispatch silent-hunter to scan for</span>
+<span style="color:var(--text);">  swallowed exceptions and dead code</span>
+
+<span style="color:var(--gold);">/team status</span>
+<span style="color:var(--text-muted);">  [..] task_1  in_progress  security-auditor</span>
+<span style="color:var(--text-muted);">  [..] task_2  in_progress  code-reviewer</span>
+<span style="color:var(--text-muted);">  [..] task_3  in_progress  silent-hunter</span>
+
+<span style="color:var(--text-muted);">... all 3 complete ...</span>
+
+<span style="color:var(--gold);">/team status</span>
+<span style="color:var(--text);">  [OK] task_1  completed  security-auditor</span>
+<span style="color:var(--text);">  [OK] task_2  completed  code-reviewer</span>
+<span style="color:var(--text);">  [OK] task_3  completed  silent-hunter</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ===== SLIDE 11: ARCHITECTURE ===== -->
+<section class="slide">
+    <div class="orb orb-3" style="opacity:0.08;"></div>
+    <div class="slide-content">
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">10 — Architecture</p>
+        <h2>How It Fits Together</h2>
+        <hr>
+        <div class="feature-grid" style="grid-template-columns: repeat(3, 1fr); margin-top:var(--content-gap);">
+            <div class="feature-card"><h3>cli.py</h3><p>Entry point. Chat loop, slash commands, goal injection, notification polling. 1,274 lines.</p></div>
+            <div class="feature-card"><h3>runtime.py</h3><p>Agent creation, background tasks, MCP wiring, session rehydration. 1,058 lines.</p></div>
+            <div class="feature-card"><h3>team.py</h3><p>AgentPool, TeamManager, dispatch, recovery, mailboxes. 1,062 lines.</p></div>
+            <div class="feature-card"><h3>daemon.py</h3><p>Socket server, state store, cron engine, Telegram adapter. 931 lines.</p></div>
+            <div class="feature-card"><h3>config.py</h3><p>RuntimeConfig, env loading, atomic JSON save, agent resolution. 187 lines.</p></div>
+            <div class="feature-card"><h3>goal.py</h3><p>Goal dataclass, JSON persistence, prompt builder. 115 lines.</p></div>
+            <div class="feature-card"><h3>mcp_transport.py</h3><p>SSE client with reconnect, tool wrapper, HTTP MCP connector. 247 lines.</p></div>
+            <div class="feature-card"><h3>runtime_tools.py</h3><p>Custom tools: TaskCreate, TaskUpdate, TeamDispatch, SkillTool. Edit tool with O_NOFOLLOW.</p></div>
+            <div class="feature-card"><h3>file_context.py</h3><p>@file reference resolver with path safety, size limits, binary detection.</p></div>
+        </div>
+    </div>
+</section>
+
+<!-- ===== SLIDE 10: TESTING ===== -->
+<section class="slide">
+    <div class="slide-content">
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">11 — Quality</p>
+        <h2>Testing & Quality</h2>
+        <hr>
+        <div class="split">
+            <div style="text-align:center;">
+                <div class="stat-number" style="font-size:clamp(4rem,10vw,7rem);">492</div>
+                <div class="stat-label">Tests passing</div>
+                <div class="stat" style="margin-top:1.5rem;"><div class="stat-number">0</div><div class="stat-label">Bare excepts</div></div>
+                <div class="stat" style="margin-top:0.5rem;"><div class="stat-number">0</div><div class="stat-label">exec/eval calls</div></div>
+            </div>
+            <div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Codebase Eval Teams</h3><p>3-agent parallel review: security + quality + silent failures. Automated report generation.</p></div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Full Coverage</h3><p>21 test modules covering config, chat, CLI, daemon, file context, goal, MCP transport, rendering, runtime, sessions, team messaging</p></div>
+                <div class="feature-card"><h3>Zero Regressions</h3><p>All changes verified with fresh test runs before commit. CI-ready with uv-based dependency management.</p></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ===== SLIDE 11: KEY METRICS ===== -->
+<section class="slide">
+    <div class="orb orb-1" style="opacity:0.06;"></div>
+    <div class="slide-content" style="align-items:center; text-align:center;">
+        <p class="small" style="color:var(--gold); margin-bottom:1rem;">12 — By the Numbers</p>
+        <h2>Key Metrics</h2>
+        <hr style="margin:1rem auto;">
+        <div class="feature-grid" style="grid-template-columns: repeat(4, 1fr); max-width:800px;">
+            <div class="stat"><div class="stat-number">18</div><div class="stat-label">Python modules</div></div>
+            <div class="stat"><div class="stat-number">18</div><div class="stat-label">Commits in current sprint</div></div>
+            <div class="stat"><div class="stat-number">8</div><div class="stat-label">HIGH issues fixed in one pass</div></div>
+            <div class="stat"><div class="stat-number">3</div><div class="stat-label">Agent types for evaluation</div></div>
+        </div>
+        <div class="quote" style="margin-top:var(--content-gap); max-width:650px; text-align:left;">
+            "Three specialized agents reviewed the codebase. 0 CRITICAL findings. All HIGH findings resolved. 492 tests, zero regressions."
+        </div>
+        <p class="small" style="margin-top:0.5rem; color:var(--text-muted);">&mdash; Pass 1 codebase evaluation</p>
+    </div>
+</section>
+
+<!-- ===== SLIDE 12: USE CASES ===== -->
+<section class="slide">
+    <div class="slide-content">
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">13 — Use Cases</p>
+        <h2>When to Use Rooster Code</h2>
+        <hr>
+        <div class="feature-grid" style="margin-top:var(--content-gap);">
+            <div class="feature-card"><h3>Code Review</h3><p>Spawn a team of review agents — security, quality, silent-failure — for every PR or pre-commit check</p></div>
+            <div class="feature-card"><h3>Automated Refactoring</h3><p>/goal with auto-loop: define the objective, let the agent work across turns until GOAL_MET</p></div>
+            <div class="feature-card"><h3>Background Tasks</h3><p>Fire-and-forget agents via daemon. Results delivered as notifications in the main session</p></div>
+            <div class="feature-card"><h3>CI/CD Integration</h3><p>Daemon mode for GitHub Actions, cron scheduling for periodic checks, Telegram for mobile alerts</p></div>
+            <div class="feature-card"><h3>Security Hardening</h3><p>Run parallel security audits across codebase changes. TOCTOU-safe O_NOFOLLOW throughout</p></div>
+            <div class="feature-card"><h3>Team Collaboration</h3><p>Multiple agents working in parallel with isolated contexts, mailboxes, and status tracking</p></div>
+        </div>
+    </div>
+</section>
+
+<!-- ===== SLIDE 13: ROADMAP ===== -->
+<section class="slide">
+    <div class="orb orb-2" style="opacity:0.08;"></div>
+    <div class="slide-content">
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">14 — Next Steps</p>
+        <h2>Roadmap</h2>
+        <hr>
+        <div class="split" style="margin-top:var(--content-gap);">
+            <div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Worktree Isolation</h3><p>Git worktrees per agent — parallel edits without file conflicts. EnterWorktree/ExitWorktree tools.</p></div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Review Pipeline</h3><p>Automated code review gates: tests → lint → review agent → merge. Persistent pipeline state.</p></div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Kanban Tracking</h3><p>Task cards with owners, states, acceptance criteria. Control pane for operator visibility.</p></div>
+                <div class="feature-card"><h3>Permission System</h3><p>Interactive permission mode. Tool-specific allow/deny rules. Sandbox integration.</p></div>
+            </div>
+            <div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Plugin System</h3><p>Custom slash commands, agent definitions, hooks. Marketplace for shared configurations.</p></div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Web Dashboard</h3><p>Live team status, task history, token usage. Daemon-exposed API for external tooling.</p></div>
+                <div class="feature-card"><h3>Review Harness</h3><p>Reusable codebase evaluation: /review diff dispatches 3 agents, pollutes status, consolidates reports.</p></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ===== SLIDE 14: THANK YOU ===== -->
+<section class="slide">
+    <div class="orb orb-1" style="opacity:0.1;"></div>
+    <div class="orb orb-2" style="opacity:0.06;"></div>
+    <div class="slide-content" style="align-items:center; text-align:center;">
+        <div class="number" style="font-size:clamp(5rem,12vw,9rem); margin-bottom:0;">&#x223F;</div>
+        <h1 style="margin-top:-1rem;">Rooster Code</h1>
+        <hr style="margin:1rem auto;">
+        <p style="max-width:450px; color:var(--text-muted);">A custom coding agent platform for teams<br>that demand control, visibility, and security.</p>
+        <p class="small" style="margin-top:2rem; color:var(--gold);">github.com/cgycorey/rooster-code</p>
+    </div>
+</section>
+
+<!-- ===== NAVIGATION ===== -->
+<nav class="nav" id="nav"></nav>
+<div class="slide-counter" id="counter">1 / 16</div>
+<div class="keyboard-hint">&larr; &rarr; to navigate &middot; swipe on mobile</div>
+
+<script>
+class Presentation {
+    constructor() {
+        this.slides = document.querySelectorAll('.slide');
+        this.nav = document.getElementById('nav');
+        this.counter = document.getElementById('counter');
+        this.current = 0;
+        this.total = this.slides.length;
+
+        this.buildNav();
+        this.bindEvents();
+        this.initObserver();
+        this.updateNav(0);
+    }
+
+    buildNav() {
+        for (let i = 0; i < this.total; i++) {
+            const dot = document.createElement('button');
+            dot.className = 'nav-dot';
+            dot.setAttribute('aria-label', `Slide ${i + 1}`);
+            dot.addEventListener('click', () => this.goTo(i));
+            this.nav.appendChild(dot);
+        }
+    }
+
+    bindEvents() {
+        document.addEventListener('keydown', e => {
+            if (e.key === 'ArrowDown' || e.key === 'ArrowRight' || e.key === ' ') {
+                e.preventDefault();
+                this.next();
+            } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+                e.preventDefault();
+                this.prev();
+            } else if (e.key === 'Home') {
+                e.preventDefault();
+                this.goTo(0);
+            } else if (e.key === 'End') {
+                e.preventDefault();
+                this.goTo(this.total - 1);
+            }
+        });
+
+        let touchStartY = 0;
+        document.addEventListener('touchstart', e => { touchStartY = e.touches[0].clientY; }, { passive: true });
+        document.addEventListener('touchend', e => {
+            const diff = touchStartY - e.changedTouches[0].clientY;
+            if (Math.abs(diff) > 50) diff > 0 ? this.next() : this.prev();
+        });
+    }
+
+    initObserver() {
+        const opts = { threshold: 0.5 };
+        const observer = new IntersectionObserver(entries => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const idx = Array.from(this.slides).indexOf(entry.target);
+                    if (idx >= 0) this.updateNav(idx);
+                    entry.target.classList.add('visible');
+                }
+            });
+        }, opts);
+        this.slides.forEach(s => observer.observe(s));
+    }
+
+    updateNav(idx) {
+        this.current = idx;
+        this.counter.textContent = `${idx + 1} / ${this.total}`;
+        this.nav.querySelectorAll('.nav-dot').forEach((d, i) => {
+            d.classList.toggle('active', i === idx);
+        });
+    }
+
+    goTo(idx) {
+        if (idx >= 0 && idx < this.total) {
+            this.slides[idx].scrollIntoView({ behavior: 'smooth' });
+        }
+    }
+
+    next() { if (this.current < this.total - 1) this.goTo(this.current + 1); }
+    prev() { if (this.current > 0) this.goTo(this.current - 1); }
+}
+
+new Presentation();
+</script>
+</body>
+</html>
