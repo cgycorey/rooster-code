@@ -1097,9 +1097,20 @@ async def run_chat(config) -> int:
                 subcmd = command.args[0] if command.args else ""
                 if subcmd == "add" and len(command.args) >= 2:
                     name = command.args[1]
-                    content = " ".join(command.args[2:]) if len(command.args) > 2 else ""
+                    rest = command.args[2:]
+                    desc = ""
+                    if "--desc" in rest:
+                        idx = rest.index("--desc")
+                        desc_parts = []
+                        i = idx + 1
+                        while i < len(rest) and rest[i] != "--":
+                            desc_parts.append(rest[i])
+                            i += 1
+                        desc = " ".join(desc_parts)
+                        rest = [a for j, a in enumerate(rest) if j < idx or j >= i]
+                    content = " ".join(rest) if rest else ""
                     try:
-                        file_path = save_memory(name, content)
+                        file_path = save_memory(name, content, description=desc)
                         render_notice(console, "Memory Saved", f"'{name}' saved to {file_path}", "green")
                     except OSError as exc:
                         render_notice(console, "Error", f"Could not save memory: {exc}", "red")

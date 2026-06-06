@@ -102,7 +102,12 @@ def save_memory(name: str, content: str, description: str = "", *, global_scope:
     target_dir.mkdir(parents=True, exist_ok=True)
     file_path = target_dir / f"{_slugify(name)}.md"
     frontmatter = f"---\nname: {name}\ndescription: {description}\ntype: memory\n---\n\n"
-    file_path.write_text(frontmatter + content, encoding="utf-8")
+    fd = os.open(str(file_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+    try:
+        with open(fd, "w", encoding="utf-8", closefd=False) as fh:
+            fh.write(frontmatter + content)
+    finally:
+        os.close(fd)
     return file_path
 
 
