@@ -77,47 +77,65 @@ class SseClient:
         self._endpoint_discovered = asyncio.Event()
 
     async def _sse_stream_reader(self) -> None:
-        """Persistent GET /sse that discovers the endpoint then reads responses."""
-        try:
-            async with self._http.stream("GET", self._sse_url, headers={"Accept": "text/event-stream"}) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    payload = line[6:].strip()
+        """Persistent GET /sse that discovers the endpoint then reads responses.
+        Reconnects automatically on transient stream failures with backoff."""
+        retry = 0
+        _MAX_RETRIES = 3
+        while True:
+            try:
+                async with self._http.stream("GET", self._sse_url, headers={"Accept": "text/event-stream"}) as resp:
+                    resp.raise_for_status()
+                    retry = 0  # reset on successful connection
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        payload = line[6:].strip()
 
-                    if self._messages_url is None:
-                        path = payload
-                        if path.startswith("/"):
-                            parsed = urlparse(self._sse_url)
-                            self._messages_url = f"{parsed.scheme}://{parsed.netloc}{path}"
-                        else:
-                            self._messages_url = path
+                        if self._messages_url is None:
+                            path = payload
+                            if path.startswith("/"):
+                                parsed = urlparse(self._sse_url)
+                                self._messages_url = f"{parsed.scheme}://{parsed.netloc}{path}"
+                            else:
+                                self._messages_url = path
+                            self._endpoint_discovered.set()
+                            log.debug("SSE messages endpoint: %s", self._messages_url)
+                            continue
+
+                        try:
+                            event = json.loads(payload)
+                        except json.JSONDecodeError:
+                            continue
+
+                        req_id = event.get("id")
+                        if req_id is not None and req_id in self._pending:
+                            fut = self._pending.pop(req_id)
+                            if not fut.done():
+                                if "result" in event:
+                                    fut.set_result(event["result"])
+                                elif "error" in event:
+                                    fut.set_exception(RuntimeError(f"MCP error: {event['error']}"))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                retry += 1
+                if retry > _MAX_RETRIES:
+                    log.error("SSE reader failed after %d retries: %s", _MAX_RETRIES, exc, exc_info=True)
+                    if not self._endpoint_discovered.is_set():
                         self._endpoint_discovered.set()
-                        log.debug("SSE messages endpoint: %s", self._messages_url)
-                        continue
-
-                    try:
-                        event = json.loads(payload)
-                    except json.JSONDecodeError:
-                        continue
-
-                    req_id = event.get("id")
-                    if req_id is not None and req_id in self._pending:
-                        fut = self._pending.pop(req_id)
+                    for fut in self._pending.values():
                         if not fut.done():
-                            if "result" in event:
-                                fut.set_result(event["result"])
-                            elif "error" in event:
-                                fut.set_exception(RuntimeError(f"MCP error: {event['error']}"))
-        except Exception as exc:
-            if not self._endpoint_discovered.is_set():
-                self._endpoint_discovered.set()
-            log.warning("SSE reader stopped: %s", exc)
-            for fut in self._pending.values():
-                if not fut.done():
-                    fut.set_exception(exc)
-            self._pending.clear()
+                            fut.set_exception(exc)
+                    self._pending.clear()
+                    return
+                log.warning("SSE reader disconnected (retry %d/%d): %s", retry, _MAX_RETRIES, exc)
+                # Fail orphaned pending requests — the response was lost
+                for fut in self._pending.values():
+                    if not fut.done():
+                        fut.set_exception(exc)
+                self._pending.clear()
+                self._messages_url = None
+                await asyncio.sleep(min(2 ** retry, 10))
 
     async def initialize(self) -> dict[str, Any]:
         self._reader_task = asyncio.create_task(self._sse_stream_reader())

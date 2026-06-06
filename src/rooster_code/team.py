@@ -50,9 +50,9 @@ def _load_review_guidance() -> str:
             if end != -1:
                 text = text[end + 5:].strip()
         return text + "\n\n"
-    except Exception:
+    except OSError:
+        log.warning("Could not load review guidance from %s", skill_file)
         return ""
-
 
 _REVIEW_GUIDANCE = _load_review_guidance()
 
@@ -478,6 +478,7 @@ class TeamManager:
                         new_mailbox.put_nowait(previous_mailbox.get_nowait())
                 self._configure_member(member_name)
             except Exception:
+                log.exception("Failed to recover team member '%s'", member_name)
                 if previous_agent is not None:
                     self._pool._members[member_name] = previous_agent
                 if previous_mailbox is not None:
@@ -621,6 +622,7 @@ class TeamManager:
             try:
                 await self._recover_member(member)
             except Exception:
+                log.exception("Failed to recover team member '%s' for mailbox wake", member)
                 return {"status": "queued_unhealthy"}
         if member in self._pool._busy:
             return {"status": "queued_busy"}

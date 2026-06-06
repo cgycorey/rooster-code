@@ -496,6 +496,23 @@ async def cancel_background_subagent_tasks() -> None:
     await runtime_cancel_background_subagent_tasks()
 
 
+def _list_team_tasks() -> list[dict[str, object]]:
+    from rooster_code.runtime import get_all_tasks, sanitize_task_output
+
+    tasks = get_all_tasks()
+    result: list[dict[str, object]] = []
+    for task_id, task in tasks.items():
+        output = str(task.get("output", ""))
+        result.append({
+            "id": task_id,
+            "subject": str(task.get("subject", "")),
+            "status": str(task.get("status", "pending")),
+            "output": sanitize_task_output(output),
+        })
+    result.sort(key=lambda t: str(t.get("id", "")))
+    return result
+
+
 def list_tool_names() -> list[str]:
     from rooster_code.runtime import list_tool_names as runtime_list_tool_names
 
@@ -697,9 +714,48 @@ async def _handle_team_command(console, command, config, team_manager, agent, ab
             render_notice(console, "Error", f"Failed to create team: {exc}", "red")
         return None
 
+    if subcmd == "status":
+        try:
+            tasks = _list_team_tasks()
+        except Exception:
+            render_notice(console, "Error", "Could not retrieve team tasks.", "red")
+            return None
+        if not tasks:
+            render_notice(console, "Team Tasks", "No team tasks tracked yet.", "dim")
+            return None
+        lines = []
+        status_icons = {"completed": "[OK]", "cancelled": "[XX]", "in_progress": "[..]", "pending": "[--]"}
+        for t in tasks:
+            icon = status_icons.get(str(t.get("status", "")), "[??]")
+            lines.append(f"{icon} {t['id']}  {t['status']}  {t['subject']}")
+        render_notice(console, "Team Tasks", "\n".join(lines), "blue")
+        return None
+
     if subcmd == "info":
         info = team_manager.info()
         render_state(console, "Team", info)
+        return None
+
+    if subcmd == "log":
+        try:
+            n = int(command.args[1]) if len(command.args) > 1 else 10
+        except ValueError:
+            render_notice(console, "Team Log", f"Invalid number: {command.args[1]}", "yellow")
+            return None
+        try:
+            tasks = _list_team_tasks()
+        except Exception:
+            render_notice(console, "Error", "Could not retrieve team tasks.", "red")
+            return None
+        completed = [t for t in tasks if str(t.get("status")) == "completed"]
+        if not completed:
+            render_notice(console, "Team Log", "No completed team tasks.", "dim")
+            return None
+        recent = completed[-n:]
+        lines = [f"{t['id']}  {t['subject']}" for t in recent]
+        lines.append("")
+        lines.append("Use /task-output <id> to see full output of any task above.")
+        render_notice(console, "Team Log", "\n".join(lines), "blue")
         return None
 
     if subcmd == "stop":
@@ -1099,13 +1155,10 @@ async def run_chat(config) -> int:
                 await team_manager.close_team(agent)
         clear_question_handler()
         await cancel_background_subagent_tasks()
-        if interrupted:
-            try:
-                await asyncio.wait_for(agent.close(), timeout=1.0)
-            except TimeoutError:
-                pass
-        else:
-            await agent.close()
+        try:
+            await asyncio.wait_for(agent.close(), timeout=3.0)
+        except TimeoutError:
+            logging.getLogger("rooster.cli").warning("Agent close timed out after 3s")
 
     if config.persist_session:
         await enforce_session_retention()

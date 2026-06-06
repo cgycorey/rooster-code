@@ -119,10 +119,10 @@ def save_json_file(path: str, data: Any) -> None:
     """Save data as JSON to a file atomically, creating parent directories as needed."""
     file_path = Path(path).resolve()
     file_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = file_path.with_suffix(file_path.suffix + ".lock")
     fd, tmp_path = tempfile.mkstemp(dir=str(file_path.parent), suffix=".tmp")
     try:
-        # Acquire exclusive advisory lock to prevent concurrent writes
-        lock_file = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o644)
+        lock_file = os.open(str(lock_path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o644)
         try:
             fcntl.flock(lock_file, fcntl.LOCK_EX)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -131,6 +131,8 @@ def save_json_file(path: str, data: Any) -> None:
         finally:
             fcntl.flock(lock_file, fcntl.LOCK_UN)
             os.close(lock_file)
+            with contextlib.suppress(OSError):
+                os.unlink(str(lock_path))
     except Exception:
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)

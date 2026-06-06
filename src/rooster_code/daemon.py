@@ -356,6 +356,7 @@ class AgentDaemon:
         if self.socket_path.exists():
             self.socket_path.unlink()
         self._server = await asyncio.start_unix_server(self._handle_client, path=str(self.socket_path))
+        os.chmod(str(self.socket_path), 0o600)
         log.info("listening on %s", self.socket_path)
         import open_agent_sdk.tools as sdk_tools
         sdk_tools._cron_jobs = self.cron
@@ -902,11 +903,12 @@ def main() -> int:
     except SystemExit:
         return 1
 
-    if args.telegram:
+    token = args.telegram or os.environ.get("ROOSTER_CODE_TELEGRAM_TOKEN")
+    if token:
         allowed = None
         if args.telegram_allowed:
             allowed = [int(uid.strip()) for uid in args.telegram_allowed.split(",") if uid.strip().isdigit()]
-        daemon.add_telegram(args.telegram, allowed_users=allowed)
+        daemon.add_telegram(token, allowed_users=allowed)
 
     async def _run() -> None:
         asyncio.get_running_loop().set_exception_handler(_async_exception_handler)
