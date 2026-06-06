@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import uuid
+from copy import deepcopy
 from typing import Any
 
 from open_agent_sdk.types import BaseTool, ToolContext, ToolInputSchema, ToolResult
@@ -565,7 +566,7 @@ class TeamManager:
             self._pool = pool
             self._team_id = str(uuid.uuid4())[:8]
             self._team_name = name
-            self._member_definitions = {m: dict(agents_def[m]) for m in members}
+            self._member_definitions = {m: deepcopy(agents_def[m]) for m in members}
             self._config = config
             self._abort_signal = abort_signal
             for member_name in members:

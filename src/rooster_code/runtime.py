@@ -838,10 +838,6 @@ async def stream_skill_events(config: RuntimeConfig, agent, skill_name: str, arg
         yield event
 
 
-def _runtime_tools(config: RuntimeConfig, include_runtime_agent_tool: bool) -> list[Any]:
-    return []
-
-
 def build_agent_options(
     config: RuntimeConfig,
     *,
@@ -858,7 +854,6 @@ def build_agent_options(
         cwd=config.cwd or "",
         system_prompt=system_prompt,
         append_system_prompt=agent_prompt,
-        tools=_runtime_tools(config, include_runtime_agent_tool),
         allowed_tools=config.allowed_tools,
         disallowed_tools=config.disallowed_tools,
         resume=config.resume or "",
