@@ -172,6 +172,16 @@ class AgentPool:
                     )
                 except Exception:
                     log.exception("Failed to update background task %s status", task_id)
+                    try:
+                        await _update_background_subagent_task(
+                            task_id,
+                            status="completed",
+                            output=f"Task completed but status update failed: {sanitize_task_output(result)[:500]}",
+                            cwd=cwd,
+                            env=env,
+                        )
+                    except Exception:
+                        log.exception("Fallback status update also failed for %s", task_id)
             except asyncio.CancelledError:
                 await _update_background_subagent_task(
                     task_id,
