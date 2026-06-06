@@ -288,6 +288,77 @@ rooster-code daemon health
     </div>
 </section>
 
+<!-- ===== SLIDE 9: CHAT MODE DEMO ===== -->
+<section class="slide">
+    <div class="orb orb-3" style="opacity:0.07;"></div>
+    <div class="slide-content">
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">08 — Interactive Demo</p>
+        <h2>Chat Mode in Action</h2>
+        <hr>
+        <p style="max-width:600px; color:var(--text-muted); margin-bottom:0.5rem;">A real session showing team orchestration, goal system, and background task tracking — all from the chat interface.</p>
+        <div class="split">
+            <div>
+                <div class="code-block" style="font-size:clamp(0.5rem,0.9vw,0.7rem); line-height:1.7;">
+<span style="color:var(--gold);">rooster-code chat</span>
+<span style="color:var(--text-muted);">Session  new    Model  deepseek-v4-pro</span>
+
+<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/goal set</span> "Add O_NOFOLLOW hardening"
+╭── Goal Set ────────────────────────────────╮
+│ Goal: Add O_NOFOLLOW hardening              │
+╰─────────────────────────────────────────────╯
+
+<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/team create</span> review security-auditor
+╭── Team Created ────────────────────────────╮
+│ Team 'review' with members: security-auditor │
+╰─────────────────────────────────────────────╯
+
+<span style="color:var(--text);">rooster-code></span> Dispatch security-auditor to scan
+for remaining TOCTOU vulnerabilities
+
+╭── Thinking ────────────────────────────────╮
+│ I'll dispatch the security auditor to scan   │
+│ for TOCTOU race conditions.                  │
+╰─────────────────────────────────────────────╯
+
+╭── TeamDispatch ────────────────────────────╮
+│ Dispatched task to 'security-auditor'        │
+│ (task_id: task_1). Background processing...  │
+╰─────────────────────────────────────────────╯
+                </div>
+            </div>
+            <div>
+                <div class="code-block" style="font-size:clamp(0.5rem,0.9vw,0.7rem); line-height:1.7;">
+<span style="color:var(--text-muted);">... agent continues working ...</span>
+
+╭── Background Task ──────────────────────────╮
+│ team-security-auditor (task_1) completed      │
+│ Summary: Found 2 unprotected os.open calls    │
+│ Full output: /task-output task_1              │
+╰─────────────────────────────────────────────╯
+
+<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/team status</span>
+╭── Team Tasks ───────────────────────────────╮
+│ [OK] task_1  completed  team-security-auditor │
+╰──────────────────────────────────────────────╯
+
+<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/team log</span>
+╭── Team Log ─────────────────────────────────╮
+│ task_1  team-security-auditor                 │
+│ ▸ Use /task-output &lt;id&gt; for full output       │
+╰──────────────────────────────────────────────╯
+
+<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/goal check</span>
+╭── Goal Check ───────────────────────────────╮
+│ Active goal: Add O_NOFOLLOW hardening         │
+│ Assess: YES — all os.open calls protected.    │
+╰──────────────────────────────────────────────╯
+                </div>
+            </div>
+        </div>
+        <p class="small" style="margin-top:0.5rem; color:var(--text-muted); text-align:center;">Inline notifications keep you informed while you work. Slash commands plus natural language.</p>
+    </div>
+</section>
+
 <!-- ===== SLIDE 10: AGENT TEAMS ===== -->
 <section class="slide">
     <div class="orb orb-2" style="opacity:0.08;"></div>
