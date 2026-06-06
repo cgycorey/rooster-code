@@ -305,23 +305,22 @@ rooster-code daemon health
         <h2 style="margin-bottom:0.25rem;">Chat Mode in Action</h2>
         <hr>
         <p style="max-width:700px; color:var(--text-muted); margin-bottom:0.3rem; font-size:var(--small-size);">Real session: goal setting, team dispatch, background task tracking — all from the terminal.</p>
-        <div class="code-block" style="font-size:clamp(0.55rem,0.9vw,0.85rem); line-height:1.6; max-width:min(95vw,1000px); margin:0 auto;">
+        <div class="code-block" style="font-size:clamp(0.55rem,1vw,0.9rem); line-height:1.6; max-width:min(90vw,900px); margin:0 auto;">
 <span style="color:var(--gold);">rooster-code chat</span>
 <span style="color:var(--text-muted);">Session  new    Model  deepseek-v4-pro</span>
 
-<span style="color:var(--text);">></span> <span style="color:var(--gold);">/goal set</span> "Add O_NOFOLLOW hardening"     <span style="color:var(--text-muted);">╭ Goal Set — Add O_NOFOLLOW hardening</span>
-<span style="color:var(--text);">></span> <span style="color:var(--gold);">/team create</span> review security-auditor    <span style="color:var(--text-muted);">╭ Team Created — review: security-auditor</span>
-<span style="color:var(--text);">></span> Dispatch security-auditor to scan for TOCTOU races     <span style="color:var(--text-muted);">╭ Thinking — dispatching auditor...</span>
-<span style="color:var(--text);">></span>                                                      <span style="color:var(--text-muted);">╭ TeamDispatch — task_1 processing in background...</span>
+<span style="color:var(--text);">></span> <span style="color:var(--gold);">/goal set</span> "Add O_NOFOLLOW hardening"      <span style="color:var(--text-muted);">╭ Goal Set — active: Add O_NOFOLLOW hardening</span>
 
-<span style="color:var(--text-muted);">... agent working in background ...</span>
+<span style="color:var(--text);">></span> <span style="color:var(--gold);">/team create</span> review security-auditor    <span style="color:var(--text-muted);">╭ Team Created — members: security-auditor</span>
+
+<span style="color:var(--text);">></span> Dispatch security-auditor to scan for    <span style="color:var(--text-muted);">╭ TeamDispatch — task_1, background processing...</span>
+TOCTOU vulnerabilities in all file operations
 
 <span style="color:var(--text-muted);">╭ Background Task — task_1 completed</span>
-<span style="color:var(--text-muted);">│ Summary: Found 2 unprotected os.open calls</span>
+<span style="color:var(--text-muted);">│ Found 2 unprotected os.open calls</span>
 
-<span style="color:var(--text);">></span> <span style="color:var(--gold);">/team status</span>       <span style="color:var(--text-muted);">╭ [OK] task_1  completed  team-security-auditor</span>
-<span style="color:var(--text);">></span> <span style="color:var(--gold);">/team log 5</span>         <span style="color:var(--text-muted);">╭ task_1  team-security-auditor</span>
-<span style="color:var(--text);">></span> <span style="color:var(--gold);">/goal check</span>         <span style="color:var(--text-muted);">╭ Assess: YES — all os.open calls protected</span>
+<span style="color:var(--text);">></span> <span style="color:var(--gold);">/team status</span>      <span style="color:var(--text-muted);">╭ [OK] task_1 completed</span>
+<span style="color:var(--text);">></span> <span style="color:var(--gold);">/goal check</span>        <span style="color:var(--text-muted);">╭ GOAL_MET — all os.open calls now protected</span>
         </div>
         <p class="small" style="margin-top:0.3rem; color:var(--text-muted); text-align:center;">Inline notifications + slash commands + natural language — all in one interface</p>
     </div>
