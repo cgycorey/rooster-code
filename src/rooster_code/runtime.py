@@ -52,7 +52,7 @@ from open_agent_sdk.tools.skill_tool import SkillTool
 from rooster_code.config import RuntimeConfig
 from rooster_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeReadTool, RuntimeSkillTool, RuntimeTraceTool, TurnTracker
 from rooster_code.team import SDKTeamCreateBridgeTool, SDKTeamDeleteBridgeTool, patch_tool_pool as _patch_tool_pool
-from rooster_code.goal import get_active_goal
+from rooster_code.goal import build_goal_prompt_section
 from rooster_code.runtime_session import (
     _build_manual_compaction_summary_prompt,
     _extract_text_blocks,
@@ -448,15 +448,11 @@ def _agent_context_prompt(
         lines.extend(["# Available Skills", skills_prompt])
 
     if include_runtime_agent_tool:
-        active_goal = get_active_goal()
-        if active_goal:
+        goal_section = build_goal_prompt_section()
+        if goal_section:
             if lines:
                 lines.append("")
-            lines.extend([
-                "# Current Goal",
-                f"You are working toward the following goal: {active_goal.text}",
-                "Use /goal check to assess progress. Do not autonomously loop; wait for the user to check.",
-            ])
+            lines.append(goal_section.strip())
 
     if team_info and team_info.get("active"):
         members = team_info.get("members", {})

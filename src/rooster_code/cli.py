@@ -458,24 +458,10 @@ def _update_agent_goal_prompt(agent, goal_text: str | None) -> None:
     opts = getattr(agent, "_options", None)
     if opts is None:
         return
-    try:
-        from rooster_code.goal import get_active_goal as _get_active
-    except ImportError:
-        return
-    active = _get_active()
-    # Rebuild the goal section that _agent_context_prompt would produce
-    goal_section = ""
-    if active:
-        goal_section = (
-            f"\n\n# Current Goal\n"
-            f"You are working toward the following goal: {active.text}\n"
-            f"Use /goal check to assess progress. Do not autonomously loop; wait for the user to check."
-        )
-    # Strip any previous goal section and append the current one
+    from rooster_code.goal import build_goal_prompt_section
+    goal_section = build_goal_prompt_section() if get_active_goal() else ""
     current = getattr(opts, "append_system_prompt", "") or ""
-    # Remove any existing "# Current Goal" section
-    import re
-    current = re.sub(r"\n*# Current Goal\n.*?(?=\n# |\Z)", "", current, flags=re.DOTALL)
+    current = re.sub(r"\n*# Current Goal\n.*?(?=\n# |\Z)", "", current, flags=re.DOTALL).rstrip() + "\n"
     opts.append_system_prompt = (current + goal_section).strip()
 
 
@@ -868,8 +854,7 @@ async def run_chat(config) -> int:
                     _goal_loop_turns = 0
                     continue
                 _goal_loop_turns += 1
-                from rooster_code.goal import get_active_goal as _loop_goal
-                active = _loop_goal()
+                active = get_active_goal()
                 if active is None:
                     render_notice(console, "Goal Loop", "No active goal. Loop stopped.", "yellow")
                     _goal_loop_active = False

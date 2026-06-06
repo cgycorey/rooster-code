@@ -93,6 +93,18 @@ def list_goals() -> list[Goal]:
     return result
 
 
+def build_goal_prompt_section() -> str:
+    """Build the '# Current Goal' prompt section for the active goal, or empty string."""
+    active = get_active_goal()
+    if not active:
+        return ""
+    return (
+        f"\n\n# Current Goal\n"
+        f"You are working toward the following goal: {active.text}\n"
+        f"Use /goal check to assess progress. Do not autonomously loop; wait for the user to check."
+    )
+
+
 def get_goal_check_prompt() -> str | None:
     active = get_active_goal()
     if not active:
