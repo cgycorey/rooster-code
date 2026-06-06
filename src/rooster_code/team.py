@@ -117,6 +117,7 @@ class AgentPool:
                 result = await agent.prompt(task_with_messages)
                 return result.text or ""
             except Exception as exc:
+                log.exception("Team member '%s' failed during dispatch", member)
                 self._unhealthy.add(member)
                 return f"Error: member '{member}' failed: {exc}"
 
@@ -192,6 +193,7 @@ class AgentPool:
                 )
                 raise
             except Exception as exc:
+                log.exception("Team member '%s' failed for task %s", member, task_id)
                 try:
                     await _update_background_subagent_task(
                         task_id,
@@ -202,6 +204,16 @@ class AgentPool:
                     )
                 except Exception:
                     log.exception("Failed to update background task %s status", task_id)
+                    try:
+                        await _update_background_subagent_task(
+                            task_id,
+                            status="cancelled",
+                            output=f"Error (status update failed): {exc}",
+                            cwd=cwd,
+                            env=env,
+                        )
+                    except Exception:
+                        log.exception("Fallback status update also failed for %s", task_id)
             finally:
                 self._busy.discard(member)
 
@@ -211,6 +223,7 @@ class AgentPool:
             self._dispatch_tasks.add(task_handle)
             _track_background_task(task_handle)
         except Exception:
+            log.exception("Failed to create background task for member '%s'", member)
             self._busy.discard(member)
             raise
         return task_id
