@@ -558,15 +558,16 @@ class Presentation {
     }
 
     initObserver() {
-        const opts = { threshold: 0.5 };
+        const opts = { threshold: 0.8 };
         const observer = new IntersectionObserver(entries => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    const idx = Array.from(this.slides).indexOf(entry.target);
-                    if (idx >= 0) this.updateNav(idx);
-                    entry.target.classList.add('visible');
-                }
-            });
+            const visible = entries
+                .filter(e => e.isIntersecting)
+                .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+            if (visible.length > 0) {
+                const idx = Array.from(this.slides).indexOf(visible[0].target);
+                if (idx >= 0 && idx !== this.current) this.updateNav(idx);
+                visible[0].target.classList.add('visible');
+            }
         }, opts);
         this.slides.forEach(s => observer.observe(s));
     }
