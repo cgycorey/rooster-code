@@ -62,17 +62,8 @@ hr { border: none; height: 2px; background: linear-gradient(90deg, transparent, 
 .feature-card h3 { font-family: 'IBM Plex Sans', sans-serif; font-weight: 600; font-size: var(--body-size); color: var(--gold); margin-bottom: 0.3rem; }
 .feature-card p { font-size: var(--small-size); color: var(--text-muted); }
 .number { font-family: 'Cormorant', serif; font-size: clamp(3rem, 8vw, 7rem); color: var(--gold); opacity: 0.6; line-height: 1; margin-bottom: 0.5rem; font-weight: 700; }
-.code-block { background: rgba(0,0,0,0.45); border: 1px solid var(--rule); border-radius: 8px; padding: clamp(0.5rem, 1vw, 1rem); padding-top: clamp(1.2rem, 2vw, 1.8rem); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: var(--small-size); line-height: 1.65; color: var(--text-muted); overflow: hidden; white-space: pre; position: relative; }
-.code-block::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: clamp(1rem, 1.5vw, 1.4rem); background: rgba(255,255,255,0.03); border-bottom: 1px solid var(--rule); }
-.terminal-dots { position: absolute; top: clamp(0.3rem, 0.5vw, 0.45rem); left: clamp(0.4rem, 0.7vw, 0.6rem); display: flex; gap: clamp(3px, 0.4vw, 5px); z-index: 2; }
-.terminal-dot { width: clamp(5px, 0.7vw, 8px); height: clamp(5px, 0.7vw, 8px); border-radius: 50%; }
-.terminal-dot.red { background: #e06c6c; }
-.terminal-dot.yellow { background: #d4a853; }
-.terminal-dot.green { background: #5a9e5a; }
-.blink { display: inline-block; width: clamp(5px, 0.7vw, 8px); height: clamp(0.4rem, 1vw, 0.85rem); background: var(--gold); vertical-align: middle; margin-left: 1px; animation: blink-cursor 1s step-end infinite; }
-@keyframes blink-cursor { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
-.typewriter-line { opacity: 0; }
-.typewriter-line.typed { opacity: 1; }
+.code-block { background: rgba(0,0,0,0.3); border: 1px solid var(--rule); border-radius: 6px; padding: clamp(0.5rem, 1vw, 1rem); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: var(--small-size); line-height: 1.6; color: var(--text-muted); overflow: hidden; white-space: pre; position: relative; }
+.code-block::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(201,168,76,0.3), transparent); }
 .stat { text-align: center; }
 .stat-number { font-family: 'Cormorant', serif; font-size: clamp(2rem, 5vw, 3.5rem); color: var(--gold); font-weight: 700; animation: pulse-gold 3s ease-in-out infinite; }
 @keyframes pulse-gold { 0%,100% { opacity: 1; } 50% { opacity: 0.7; } }
@@ -301,28 +292,70 @@ rooster-code daemon health
 <section class="slide">
     <div class="orb orb-3" style="opacity:0.07;"></div>
     <div class="slide-content">
-        <p class="small" style="color:var(--gold); margin-bottom:0.25rem;">08 — Interactive Demo</p>
-        <h2 style="margin-bottom:0.25rem;">Chat Mode in Action</h2>
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">08 — Interactive Demo</p>
+        <h2>Chat Mode in Action</h2>
         <hr>
-        <p style="max-width:700px; color:var(--text-muted); margin-bottom:0.3rem; font-size:var(--small-size);">Real session: goal setting, team dispatch, background task tracking — all from the terminal.</p>
-        <div class="code-block" style="font-size:clamp(0.55rem,1vw,0.9rem); line-height:1.6; max-width:min(90vw,900px); margin:0 auto;">
+        <p style="max-width:600px; color:var(--text-muted); margin-bottom:0.5rem;">A real session showing team orchestration, goal system, and background task tracking — all from the chat interface.</p>
+        <div class="split">
+            <div>
+                <div class="code-block" style="font-size:clamp(0.5rem,0.9vw,0.7rem); line-height:1.7;">
 <span style="color:var(--gold);">rooster-code chat</span>
 <span style="color:var(--text-muted);">Session  new    Model  deepseek-v4-pro</span>
 
-<span style="color:var(--text);">></span> <span style="color:var(--gold);">/goal set</span> "Add O_NOFOLLOW hardening"      <span style="color:var(--text-muted);">╭ Goal Set — active: Add O_NOFOLLOW hardening</span>
+<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/goal set</span> "Add O_NOFOLLOW hardening"
+╭── Goal Set ────────────────────────────────╮
+│ Goal: Add O_NOFOLLOW hardening              │
+╰─────────────────────────────────────────────╯
 
-<span style="color:var(--text);">></span> <span style="color:var(--gold);">/team create</span> review security-auditor    <span style="color:var(--text-muted);">╭ Team Created — members: security-auditor</span>
+<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/team create</span> review security-auditor
+╭── Team Created ────────────────────────────╮
+│ Team 'review' with members: security-auditor │
+╰─────────────────────────────────────────────╯
 
-<span style="color:var(--text);">></span> Dispatch security-auditor to scan for    <span style="color:var(--text-muted);">╭ TeamDispatch — task_1, background processing...</span>
-TOCTOU vulnerabilities in all file operations
+<span style="color:var(--text);">rooster-code></span> Dispatch security-auditor to scan
+for remaining TOCTOU vulnerabilities
 
-<span style="color:var(--text-muted);">╭ Background Task — task_1 completed</span>
-<span style="color:var(--text-muted);">│ Found 2 unprotected os.open calls</span>
+╭── Thinking ────────────────────────────────╮
+│ I'll dispatch the security auditor to scan   │
+│ for TOCTOU race conditions.                  │
+╰─────────────────────────────────────────────╯
 
-<span style="color:var(--text);">></span> <span style="color:var(--gold);">/team status</span>      <span style="color:var(--text-muted);">╭ [OK] task_1 completed</span>
-<span style="color:var(--text);">></span> <span style="color:var(--gold);">/goal check</span>        <span style="color:var(--text-muted);">╭ GOAL_MET — all os.open calls now protected</span>
+╭── TeamDispatch ────────────────────────────╮
+│ Dispatched task to 'security-auditor'        │
+│ (task_id: task_1). Background processing...  │
+╰─────────────────────────────────────────────╯
+                </div>
+            </div>
+            <div>
+                <div class="code-block" style="font-size:clamp(0.5rem,0.9vw,0.7rem); line-height:1.7;">
+<span style="color:var(--text-muted);">... agent continues working ...</span>
+
+╭── Background Task ──────────────────────────╮
+│ team-security-auditor (task_1) completed      │
+│ Summary: Found 2 unprotected os.open calls    │
+│ Full output: /task-output task_1              │
+╰─────────────────────────────────────────────╯
+
+<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/team status</span>
+╭── Team Tasks ───────────────────────────────╮
+│ [OK] task_1  completed  team-security-auditor │
+╰──────────────────────────────────────────────╯
+
+<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/team log</span>
+╭── Team Log ─────────────────────────────────╮
+│ task_1  team-security-auditor                 │
+│ ▸ Use /task-output &lt;id&gt; for full output       │
+╰──────────────────────────────────────────────╯
+
+<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/goal check</span>
+╭── Goal Check ───────────────────────────────╮
+│ Active goal: Add O_NOFOLLOW hardening         │
+│ Assess: YES — all os.open calls protected.    │
+╰──────────────────────────────────────────────╯
+                </div>
+            </div>
         </div>
-        <p class="small" style="margin-top:0.3rem; color:var(--text-muted); text-align:center;">Inline notifications + slash commands + natural language — all in one interface</p>
+        <p class="small" style="margin-top:0.5rem; color:var(--text-muted); text-align:center;">Inline notifications keep you informed while you work. Slash commands plus natural language.</p>
     </div>
 </section>
 
@@ -341,24 +374,31 @@ TOCTOU vulnerabilities in all file operations
                 <div class="feature-card"><h3>&#x1f50d; Silent-Failure Hunter</h3><p>Bare excepts, swallowed exceptions, missing logs, fire-and-forget gaps. All severities.</p></div>
             </div>
             <div>
-                <div class="code-block" style="font-size:clamp(0.45rem,0.75vw,0.65rem); line-height:1.5;">
-<span style="color:var(--gold);">/team create</span> codebase-eval security-auditor code-reviewer silent-hunter
+                <div class="code-block" style="font-size:clamp(0.5rem,0.9vw,0.7rem); line-height:1.6;">
+<span style="color:var(--gold);">/team create codebase-eval</span>
+<span style="color:var(--text);">  security-auditor code-reviewer silent-hunter</span>
 
-<span style="color:var(--text);">></span> Dispatch security-auditor to scan for HIGH/CRITICAL issues
-<span style="color:var(--text);">></span> Dispatch code-reviewer to check async patterns and error handling
-<span style="color:var(--text);">></span> Dispatch silent-hunter to hunt for swallowed exceptions
+<span style="color:var(--text-muted);"># Dispatch all 3 in parallel</span>
+<span style="color:var(--text);">Dispatch security-auditor to scan for</span>
+<span style="color:var(--text);">  HIGH/CRITICAL security issues</span>
+
+<span style="color:var(--text);">Dispatch code-reviewer to check for</span>
+<span style="color:var(--text);">  async patterns and error handling</span>
+
+<span style="color:var(--text);">Dispatch silent-hunter to scan for</span>
+<span style="color:var(--text);">  swallowed exceptions and dead code</span>
 
 <span style="color:var(--gold);">/team status</span>
-<span style="color:var(--text-muted);">  [..] task_1  in_progress  team-security-auditor</span>
-<span style="color:var(--text-muted);">  [..] task_2  in_progress  team-code-reviewer</span>
-<span style="color:var(--text-muted);">  [..] task_3  in_progress  team-silent-hunter</span>
+<span style="color:var(--text-muted);">  [..] task_1  in_progress  security-auditor</span>
+<span style="color:var(--text-muted);">  [..] task_2  in_progress  code-reviewer</span>
+<span style="color:var(--text-muted);">  [..] task_3  in_progress  silent-hunter</span>
 
-<span style="color:var(--text-muted);">... all agents complete in parallel ...</span>
+<span style="color:var(--text-muted);">... all 3 complete ...</span>
 
 <span style="color:var(--gold);">/team status</span>
-<span style="color:var(--text);">  [OK] task_1  completed  team-security-auditor</span>
-<span style="color:var(--text);">  [OK] task_2  completed  team-code-reviewer</span>
-<span style="color:var(--text);">  [OK] task_3  completed  team-silent-hunter</span>
+<span style="color:var(--text);">  [OK] task_1  completed  security-auditor</span>
+<span style="color:var(--text);">  [OK] task_2  completed  code-reviewer</span>
+<span style="color:var(--text);">  [OK] task_3  completed  silent-hunter</span>
                 </div>
             </div>
         </div>
@@ -574,86 +614,7 @@ class Presentation {
         this.slides.forEach(s => observer.observe(s));
     }
 
-    typewriter(block) {
-        if (block.dataset.typed === 'done') return;
-        block.dataset.typed = 'done';
-
-        // Add terminal chrome
-        if (!block.querySelector('.terminal-dots')) {
-            const dots = document.createElement('div');
-            dots.className = 'terminal-dots';
-            dots.innerHTML = '<span class="terminal-dot red"></span><span class="terminal-dot yellow"></span><span class="terminal-dot green"></span>';
-            block.insertBefore(dots, block.firstChild);
-        }
-
-        // Wrap lines for animation while preserving HTML
-        const children = Array.from(block.childNodes).filter(n => !n.classList || !n.classList.contains('terminal-dots'));
-        children.forEach((node, i) => {
-            if (node.nodeType === 3) {
-                // Text node — wrap in typewriter-line
-                const text = node.textContent || '';
-                const frag = document.createDocumentFragment();
-                text.split('\n').forEach(part => {
-                    const div = document.createElement('div');
-                    div.className = 'typewriter-line';
-                    div.textContent = part || ' ';
-                    frag.appendChild(div);
-                });
-                node.replaceWith(frag);
-            } else if (node.nodeType === 1 && node.tagName === 'BR') {
-                const div = document.createElement('div');
-                div.className = 'typewriter-line';
-                div.textContent = ' ';
-                node.replaceWith(div);
-            } else if (node.nodeType === 1 && !node.classList.contains('typewriter-line')) {
-                // Element node (spans etc) — treat as one line with innerHTML
-                const wrapper = document.createElement('div');
-                wrapper.className = 'typewriter-line';
-                wrapper.appendChild(node.cloneNode(true));
-                node.replaceWith(wrapper);
-            }
-        });
-
-        // Animate lines sequentially
-        const lines = block.querySelectorAll('.typewriter-line');
-        lines.forEach((line, i) => {
-            setTimeout(() => line.classList.add('typed'), i * 50 + 100);
-        });
-
-        // Blinking cursor at end
-        setTimeout(() => {
-            const cursor = document.createElement('span');
-            cursor.className = 'blink';
-            block.appendChild(cursor);
-        }, lines.length * 50 + 200);
-    }
-
-    resetCodeBlocks(slide) {
-        slide.querySelectorAll('.code-block').forEach(block => {
-            delete block.dataset.typed;
-            const cursor = block.querySelector('.blink');
-            if (cursor) cursor.remove();
-            block.querySelectorAll('.typewriter-line').forEach(l => l.classList.remove('typed'));
-        });
-    }
-
-    animateCodeBlocks(slide) {
-        slide.querySelectorAll('.code-block').forEach((block, i) => {
-            // Click to replay
-            block.style.cursor = 'pointer';
-            block.addEventListener('click', () => {
-                this.resetCodeBlocks(slide);
-                setTimeout(() => this.typewriter(block), 100);
-            });
-            setTimeout(() => this.typewriter(block), i * 600 + 300);
-        });
-    }
-
     updateNav(idx) {
-        if (idx !== this.current) {
-            const slide = this.slides[idx];
-            this.animateCodeBlocks(slide);
-        }
         this.current = idx;
         const pct = ((idx) / (this.total - 1)) * 100;
         this.counter.textContent = `${idx + 1} / ${this.total}`;
