@@ -1092,6 +1092,40 @@ async def run_chat(config) -> int:
                 else:
                     render_notice(console, "Error", f"Unknown /goal subcommand: {subcmd}", "red")
                 continue
+            if command.name == "memory":
+                from rooster_code.memory import delete_memory, load_memories, save_memory, GLOBAL_MEMORY_DIR, PROJECT_MEMORY_DIR
+                subcmd = command.args[0] if command.args else ""
+                if subcmd == "add" and len(command.args) >= 2:
+                    name = command.args[1]
+                    content = " ".join(command.args[2:]) if len(command.args) > 2 else ""
+                    try:
+                        file_path = save_memory(name, content)
+                        render_notice(console, "Memory Saved", f"'{name}' saved to {file_path}", "green")
+                    except OSError as exc:
+                        render_notice(console, "Error", f"Could not save memory: {exc}", "red")
+                elif subcmd == "forget" and len(command.args) >= 2:
+                    deleted = delete_memory(command.args[1])
+                    if deleted:
+                        render_notice(console, "Memory Forgotten", f"Deleted: {deleted}", "green")
+                    else:
+                        render_notice(console, "Memory", f"No memory named '{command.args[1]}' found.", "yellow")
+                elif subcmd == "list":
+                    memories = load_memories()
+                    if memories:
+                        lines = [f"{m['name']} — {m['description']}" for m in memories]
+                        render_notice(console, "Memories", "\n".join(lines), "blue")
+                    else:
+                        render_notice(console, "Memories", "No memories saved.", "dim")
+                else:
+                    lines = []
+                    if GLOBAL_MEMORY_DIR.is_dir():
+                        lines.append(f"Global: {GLOBAL_MEMORY_DIR}")
+                    if PROJECT_MEMORY_DIR.is_dir():
+                        lines.append(f"Project: {PROJECT_MEMORY_DIR}")
+                    if not lines:
+                        lines.append("No memory directories. Use /memory add <name> <content> to create one.")
+                    render_notice(console, "Memory", "\n".join(lines), "blue")
+                continue
             available_skills = set(list_skill_names())
             if command.name in available_skills:
                 render_agent_panel(console, "Skill Started", command.name, "blue")

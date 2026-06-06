@@ -53,6 +53,8 @@ from rooster_code.config import RuntimeConfig
 from rooster_code.runtime_tools import RuntimeAgentTool, RuntimeEditTool, RuntimeReadTool, RuntimeSkillTool, RuntimeTraceTool, TurnTracker
 from rooster_code.team import SDKTeamCreateBridgeTool, SDKTeamDeleteBridgeTool, patch_tool_pool as _patch_tool_pool
 from rooster_code.goal import build_goal_prompt_section
+from rooster_code.memory import build_memory_prompt_section
+from rooster_code.memory_save_tool import SaveMemoryTool
 from rooster_code.runtime_session import (
     _build_manual_compaction_summary_prompt,
     _extract_text_blocks,
@@ -453,6 +455,11 @@ def _agent_context_prompt(
             if lines:
                 lines.append("")
             lines.append(goal_section.strip())
+        memory_section = build_memory_prompt_section()
+        if memory_section:
+            if lines:
+                lines.append("")
+            lines.append(memory_section.strip())
 
     if team_info and team_info.get("active"):
         members = team_info.get("members", {})
@@ -1013,6 +1020,8 @@ def _create_sdk_agent(
                     new_pool.append(RuntimeTraceTool(tool, tracker))
             if not replaced:
                 new_pool.append(RuntimeAgentTool(lambda input, context: _run_subagent(config, input, context), tracker))
+            if include_runtime_agent_tool:
+                new_pool.append(RuntimeTraceTool(SaveMemoryTool(), tracker))
             agent._tool_pool = new_pool
             engine = getattr(agent, "_engine", None)
             if engine is not None:

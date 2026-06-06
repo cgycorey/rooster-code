@@ -1543,7 +1543,7 @@ def test_create_runtime_agent_replaces_placeholder_agent_tool_after_initialize(m
 
     asyncio.run(agent._initialize())
 
-    assert [tool.name for tool in agent._tool_pool] == ["Agent", "Read"]
+    assert [tool.name for tool in agent._tool_pool] == ["Agent", "Read", "SaveMemory"]
     assert agent._tool_pool[0].__class__.__name__ == "RuntimeAgentTool"
 
 
@@ -1571,7 +1571,7 @@ def test_create_runtime_agent_replaces_read_and_edit_tools_after_initialize(monk
 
     asyncio.run(agent._initialize())
 
-    assert [tool.name for tool in agent._tool_pool] == ["Read", "Edit", "Bash", "Agent"]
+    assert [tool.name for tool in agent._tool_pool] == ["Read", "Edit", "Bash", "Agent", "SaveMemory"]
     assert agent._tool_pool[0].__class__.__name__ == "RuntimeReadTool"
     assert agent._tool_pool[1].__class__.__name__ == "RuntimeEditTool"
 
@@ -1600,7 +1600,7 @@ def test_create_runtime_agent_bridges_sdk_team_tools_after_initialize(monkeypatc
 
     asyncio.run(agent._initialize())
 
-    assert [tool.name for tool in agent._tool_pool] == ["TeamCreate", "TeamDelete", "Bash", "Agent"]
+    assert [tool.name for tool in agent._tool_pool] == ["TeamCreate", "TeamDelete", "Bash", "Agent", "SaveMemory"]
     assert agent._tool_pool[0].__class__.__name__ == "RuntimeTraceTool"
     assert agent._tool_pool[1].__class__.__name__ == "RuntimeTraceTool"
 
@@ -1626,7 +1626,7 @@ def test_create_runtime_agent_adds_default_task_agent_without_agents(monkeypatch
 
     asyncio.run(agent._initialize())
 
-    assert [tool.name for tool in agent._tool_pool] == ["Read", "Agent"]
+    assert [tool.name for tool in agent._tool_pool] == ["Read", "Agent", "SaveMemory"]
 
 
 def test_create_runtime_agent_attaches_activity_trace_to_tool_result(monkeypatch, tmp_path: Path) -> None:
@@ -2760,7 +2760,7 @@ def test_remote_mcp_failure_logs_warning_and_continues(monkeypatch, caplog) -> N
     with caplog.at_level(logging.WARNING, logger="rooster.runtime"):
         asyncio.run(agent._initialize())
 
-    assert [tool.name for tool in agent._tool_pool] == ["Agent"]
+    assert [tool.name for tool in agent._tool_pool] == ["Agent", "SaveMemory"]
 
     warning_messages = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
     assert any("remote-server" in msg for msg in warning_messages), f"Expected warning about remote-server, got: {warning_messages}"
