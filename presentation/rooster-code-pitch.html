@@ -301,70 +301,29 @@ rooster-code daemon health
 <section class="slide">
     <div class="orb orb-3" style="opacity:0.07;"></div>
     <div class="slide-content">
-        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">08 — Interactive Demo</p>
-        <h2>Chat Mode in Action</h2>
+        <p class="small" style="color:var(--gold); margin-bottom:0.25rem;">08 — Interactive Demo</p>
+        <h2 style="margin-bottom:0.25rem;">Chat Mode in Action</h2>
         <hr>
-        <p style="max-width:600px; color:var(--text-muted); margin-bottom:0.5rem;">A real session showing team orchestration, goal system, and background task tracking — all from the chat interface.</p>
-        <div class="split">
-            <div>
-                <div class="code-block" style="font-size:clamp(0.5rem,0.9vw,0.7rem); line-height:1.7;">
+        <p style="max-width:700px; color:var(--text-muted); margin-bottom:0.3rem; font-size:var(--small-size);">Real session: goal setting, team dispatch, background task tracking — all from the terminal.</p>
+        <div class="code-block" style="font-size:clamp(0.45rem,0.75vw,0.65rem); line-height:1.55; max-width:min(90vw,800px); margin:0 auto;">
 <span style="color:var(--gold);">rooster-code chat</span>
 <span style="color:var(--text-muted);">Session  new    Model  deepseek-v4-pro</span>
 
-<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/goal set</span> "Add O_NOFOLLOW hardening"
-╭── Goal Set ────────────────────────────────╮
-│ Goal: Add O_NOFOLLOW hardening              │
-╰─────────────────────────────────────────────╯
+<span style="color:var(--text);">></span> <span style="color:var(--gold);">/goal set</span> "Add O_NOFOLLOW hardening"     <span style="color:var(--text-muted);">╭ Goal Set — Add O_NOFOLLOW hardening</span>
+<span style="color:var(--text);">></span> <span style="color:var(--gold);">/team create</span> review security-auditor    <span style="color:var(--text-muted);">╭ Team Created — review: security-auditor</span>
+<span style="color:var(--text);">></span> Dispatch security-auditor to scan for      <span style="color:var(--text-muted);">╭ Thinking — I'll dispatch the auditor</span>
+TOCTOU vulnerabilities                          <span style="color:var(--text-muted);">╭ TeamDispatch — task_1, processing...</span>
 
-<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/team create</span> review security-auditor
-╭── Team Created ────────────────────────────╮
-│ Team 'review' with members: security-auditor │
-╰─────────────────────────────────────────────╯
+<span style="color:var(--text-muted);">... agent working in background ...</span>
 
-<span style="color:var(--text);">rooster-code></span> Dispatch security-auditor to scan
-for remaining TOCTOU vulnerabilities
+<span style="color:var(--text-muted);">╭ Background Task — task_1 completed</span>
+<span style="color:var(--text-muted);">│ Summary: Found 2 unprotected os.open calls</span>
 
-╭── Thinking ────────────────────────────────╮
-│ I'll dispatch the security auditor to scan   │
-│ for TOCTOU race conditions.                  │
-╰─────────────────────────────────────────────╯
-
-╭── TeamDispatch ────────────────────────────╮
-│ Dispatched task to 'security-auditor'        │
-│ (task_id: task_1). Background processing...  │
-╰─────────────────────────────────────────────╯
-                </div>
-            </div>
-            <div>
-                <div class="code-block" style="font-size:clamp(0.5rem,0.9vw,0.7rem); line-height:1.7;">
-<span style="color:var(--text-muted);">... agent continues working ...</span>
-
-╭── Background Task ──────────────────────────╮
-│ team-security-auditor (task_1) completed      │
-│ Summary: Found 2 unprotected os.open calls    │
-│ Full output: /task-output task_1              │
-╰─────────────────────────────────────────────╯
-
-<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/team status</span>
-╭── Team Tasks ───────────────────────────────╮
-│ [OK] task_1  completed  team-security-auditor │
-╰──────────────────────────────────────────────╯
-
-<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/team log</span>
-╭── Team Log ─────────────────────────────────╮
-│ task_1  team-security-auditor                 │
-│ ▸ Use /task-output &lt;id&gt; for full output       │
-╰──────────────────────────────────────────────╯
-
-<span style="color:var(--text);">rooster-code></span> <span style="color:var(--gold);">/goal check</span>
-╭── Goal Check ───────────────────────────────╮
-│ Active goal: Add O_NOFOLLOW hardening         │
-│ Assess: YES — all os.open calls protected.    │
-╰──────────────────────────────────────────────╯
-                </div>
-            </div>
+<span style="color:var(--text);">></span> <span style="color:var(--gold);">/team status</span>           <span style="color:var(--text-muted);">╭ [OK] task_1  completed  team-security-auditor</span>
+<span style="color:var(--text);">></span> <span style="color:var(--gold);">/team log 5</span>             <span style="color:var(--text-muted);">╭ task_1  team-security-auditor</span>
+<span style="color:var(--text);">></span> <span style="color:var(--gold);">/goal check</span>             <span style="color:var(--text-muted);">╭ Assess: YES — all os.open calls protected</span>
         </div>
-        <p class="small" style="margin-top:0.5rem; color:var(--text-muted); text-align:center;">Inline notifications keep you informed while you work. Slash commands plus natural language.</p>
+        <p class="small" style="margin-top:0.3rem; color:var(--text-muted); text-align:center;">Inline notifications + slash commands + natural language — all in one interface</p>
     </div>
 </section>
 
@@ -383,31 +342,24 @@ for remaining TOCTOU vulnerabilities
                 <div class="feature-card"><h3>&#x1f50d; Silent-Failure Hunter</h3><p>Bare excepts, swallowed exceptions, missing logs, fire-and-forget gaps. All severities.</p></div>
             </div>
             <div>
-                <div class="code-block" style="font-size:clamp(0.5rem,0.9vw,0.7rem); line-height:1.6;">
-<span style="color:var(--gold);">/team create codebase-eval</span>
-<span style="color:var(--text);">  security-auditor code-reviewer silent-hunter</span>
+                <div class="code-block" style="font-size:clamp(0.45rem,0.75vw,0.65rem); line-height:1.5;">
+<span style="color:var(--gold);">/team create</span> codebase-eval security-auditor code-reviewer silent-hunter
 
-<span style="color:var(--text-muted);"># Dispatch all 3 in parallel</span>
-<span style="color:var(--text);">Dispatch security-auditor to scan for</span>
-<span style="color:var(--text);">  HIGH/CRITICAL security issues</span>
-
-<span style="color:var(--text);">Dispatch code-reviewer to check for</span>
-<span style="color:var(--text);">  async patterns and error handling</span>
-
-<span style="color:var(--text);">Dispatch silent-hunter to scan for</span>
-<span style="color:var(--text);">  swallowed exceptions and dead code</span>
+<span style="color:var(--text);">></span> Dispatch security-auditor to scan for HIGH/CRITICAL issues
+<span style="color:var(--text);">></span> Dispatch code-reviewer to check async patterns and error handling
+<span style="color:var(--text);">></span> Dispatch silent-hunter to hunt for swallowed exceptions
 
 <span style="color:var(--gold);">/team status</span>
-<span style="color:var(--text-muted);">  [..] task_1  in_progress  security-auditor</span>
-<span style="color:var(--text-muted);">  [..] task_2  in_progress  code-reviewer</span>
-<span style="color:var(--text-muted);">  [..] task_3  in_progress  silent-hunter</span>
+<span style="color:var(--text-muted);">  [..] task_1  in_progress  team-security-auditor</span>
+<span style="color:var(--text-muted);">  [..] task_2  in_progress  team-code-reviewer</span>
+<span style="color:var(--text-muted);">  [..] task_3  in_progress  team-silent-hunter</span>
 
-<span style="color:var(--text-muted);">... all 3 complete ...</span>
+<span style="color:var(--text-muted);">... all agents complete in parallel ...</span>
 
 <span style="color:var(--gold);">/team status</span>
-<span style="color:var(--text);">  [OK] task_1  completed  security-auditor</span>
-<span style="color:var(--text);">  [OK] task_2  completed  code-reviewer</span>
-<span style="color:var(--text);">  [OK] task_3  completed  silent-hunter</span>
+<span style="color:var(--text);">  [OK] task_1  completed  team-security-auditor</span>
+<span style="color:var(--text);">  [OK] task_2  completed  team-code-reviewer</span>
+<span style="color:var(--text);">  [OK] task_3  completed  team-silent-hunter</span>
                 </div>
             </div>
         </div>
