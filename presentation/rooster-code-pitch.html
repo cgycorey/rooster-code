@@ -62,8 +62,17 @@ hr { border: none; height: 2px; background: linear-gradient(90deg, transparent, 
 .feature-card h3 { font-family: 'IBM Plex Sans', sans-serif; font-weight: 600; font-size: var(--body-size); color: var(--gold); margin-bottom: 0.3rem; }
 .feature-card p { font-size: var(--small-size); color: var(--text-muted); }
 .number { font-family: 'Cormorant', serif; font-size: clamp(3rem, 8vw, 7rem); color: var(--gold); opacity: 0.6; line-height: 1; margin-bottom: 0.5rem; font-weight: 700; }
-.code-block { background: rgba(0,0,0,0.3); border: 1px solid var(--rule); border-radius: 6px; padding: clamp(0.5rem, 1vw, 1rem); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: var(--small-size); line-height: 1.6; color: var(--text-muted); overflow: hidden; white-space: pre; position: relative; }
-.code-block::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(201,168,76,0.3), transparent); }
+.code-block { background: rgba(0,0,0,0.45); border: 1px solid var(--rule); border-radius: 8px; padding: clamp(0.5rem, 1vw, 1rem); padding-top: clamp(1.2rem, 2vw, 1.8rem); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: var(--small-size); line-height: 1.65; color: var(--text-muted); overflow: hidden; white-space: pre; position: relative; }
+.code-block::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: clamp(1rem, 1.5vw, 1.4rem); background: rgba(255,255,255,0.03); border-bottom: 1px solid var(--rule); }
+.terminal-dots { position: absolute; top: clamp(0.3rem, 0.5vw, 0.45rem); left: clamp(0.4rem, 0.7vw, 0.6rem); display: flex; gap: clamp(3px, 0.4vw, 5px); z-index: 2; }
+.terminal-dot { width: clamp(5px, 0.7vw, 8px); height: clamp(5px, 0.7vw, 8px); border-radius: 50%; }
+.terminal-dot.red { background: #e06c6c; }
+.terminal-dot.yellow { background: #d4a853; }
+.terminal-dot.green { background: #5a9e5a; }
+.blink { display: inline-block; width: clamp(5px, 0.7vw, 8px); height: clamp(0.4rem, 1vw, 0.85rem); background: var(--gold); vertical-align: middle; margin-left: 1px; animation: blink-cursor 1s step-end infinite; }
+@keyframes blink-cursor { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+.typewriter-line { opacity: 0; }
+.typewriter-line.typed { opacity: 1; }
 .stat { text-align: center; }
 .stat-number { font-family: 'Cormorant', serif; font-size: clamp(2rem, 5vw, 3.5rem); color: var(--gold); font-weight: 700; animation: pulse-gold 3s ease-in-out infinite; }
 @keyframes pulse-gold { 0%,100% { opacity: 1; } 50% { opacity: 0.7; } }
@@ -614,7 +623,86 @@ class Presentation {
         this.slides.forEach(s => observer.observe(s));
     }
 
+    typewriter(block) {
+        if (block.dataset.typed === 'done') return;
+        block.dataset.typed = 'done';
+
+        // Add terminal chrome
+        if (!block.querySelector('.terminal-dots')) {
+            const dots = document.createElement('div');
+            dots.className = 'terminal-dots';
+            dots.innerHTML = '<span class="terminal-dot red"></span><span class="terminal-dot yellow"></span><span class="terminal-dot green"></span>';
+            block.insertBefore(dots, block.firstChild);
+        }
+
+        // Wrap lines for animation while preserving HTML
+        const children = Array.from(block.childNodes).filter(n => !n.classList || !n.classList.contains('terminal-dots'));
+        children.forEach((node, i) => {
+            if (node.nodeType === 3) {
+                // Text node — wrap in typewriter-line
+                const text = node.textContent || '';
+                const frag = document.createDocumentFragment();
+                text.split('\n').forEach(part => {
+                    const div = document.createElement('div');
+                    div.className = 'typewriter-line';
+                    div.textContent = part || ' ';
+                    frag.appendChild(div);
+                });
+                node.replaceWith(frag);
+            } else if (node.nodeType === 1 && node.tagName === 'BR') {
+                const div = document.createElement('div');
+                div.className = 'typewriter-line';
+                div.textContent = ' ';
+                node.replaceWith(div);
+            } else if (node.nodeType === 1 && !node.classList.contains('typewriter-line')) {
+                // Element node (spans etc) — treat as one line with innerHTML
+                const wrapper = document.createElement('div');
+                wrapper.className = 'typewriter-line';
+                wrapper.appendChild(node.cloneNode(true));
+                node.replaceWith(wrapper);
+            }
+        });
+
+        // Animate lines sequentially
+        const lines = block.querySelectorAll('.typewriter-line');
+        lines.forEach((line, i) => {
+            setTimeout(() => line.classList.add('typed'), i * 50 + 100);
+        });
+
+        // Blinking cursor at end
+        setTimeout(() => {
+            const cursor = document.createElement('span');
+            cursor.className = 'blink';
+            block.appendChild(cursor);
+        }, lines.length * 50 + 200);
+    }
+
+    resetCodeBlocks(slide) {
+        slide.querySelectorAll('.code-block').forEach(block => {
+            delete block.dataset.typed;
+            const cursor = block.querySelector('.blink');
+            if (cursor) cursor.remove();
+            block.querySelectorAll('.typewriter-line').forEach(l => l.classList.remove('typed'));
+        });
+    }
+
+    animateCodeBlocks(slide) {
+        slide.querySelectorAll('.code-block').forEach((block, i) => {
+            // Click to replay
+            block.style.cursor = 'pointer';
+            block.addEventListener('click', () => {
+                this.resetCodeBlocks(slide);
+                setTimeout(() => this.typewriter(block), 100);
+            });
+            setTimeout(() => this.typewriter(block), i * 600 + 300);
+        });
+    }
+
     updateNav(idx) {
+        if (idx !== this.current) {
+            const slide = this.slides[idx];
+            this.animateCodeBlocks(slide);
+        }
         this.current = idx;
         const pct = ((idx) / (this.total - 1)) * 100;
         this.counter.textContent = `${idx + 1} / ${this.total}`;
