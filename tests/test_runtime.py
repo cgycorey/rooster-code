@@ -250,7 +250,7 @@ def test_repo_plan_skill_loads_and_has_detailed_generic_prompt() -> None:
     assert "Verification commands" in text
     assert "Do not implement yet" in text
     assert "Do not save the plan unless the user explicitly asks" in text
-    assert "User request: add auth support" in text
+    assert "<user-request>\nadd auth support\n</user-request>" in text
 
 
 def test_stream_skill_events_runs_inline_skills_on_current_agent(monkeypatch) -> None:

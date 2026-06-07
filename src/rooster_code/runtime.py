@@ -135,7 +135,7 @@ def _build_filesystem_skill_definition(skill_dir: Path) -> SkillDefinition | Non
     async def get_prompt(args: str, ctx: ToolContext, *, content: str = body) -> list[dict[str, str]]:
         prompt_text = content.strip()
         if args.strip():
-            prompt_text = f"{prompt_text}\n\nUser request: {args.strip()}"
+            prompt_text = f"{prompt_text}\n\n<user-request>\n{args.strip()}\n</user-request>"
         return [{"type": "text", "text": prompt_text}]
 
     return SkillDefinition(
