@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from rooster_code.memory import (
     _parse_frontmatter,
+    _parse_yaml_value,
     build_memory_prompt_section,
     delete_memory,
     load_memories,
@@ -136,6 +137,32 @@ def test_slugify_collision_resistance() -> None:
     assert slug1 != slug2, f"Collision: {slug1!r} == {slug2!r}"
     assert slug1 != slug3, f"Collision: {slug1!r} == {slug3!r}"
     assert slug2 != slug3, f"Collision: {slug2!r} == {slug3!r}"
+
+
+def test_parse_yaml_value_strips_double_quotes() -> None:
+    assert _parse_yaml_value('"hello"') == "hello"
+
+
+def test_parse_yaml_value_unescapes_inner_quotes() -> None:
+    assert _parse_yaml_value('"say \\"hi\\""') == 'say "hi"'
+
+
+def test_parse_yaml_value_strips_single_quotes() -> None:
+    assert _parse_yaml_value("'hello'") == "hello"
+
+
+def test_parse_yaml_value_preserves_bare() -> None:
+    assert _parse_yaml_value("bare value") == "bare value"
+
+
+def test_parse_yaml_value_handles_newline_escape() -> None:
+    assert _parse_yaml_value('"line1\\nline2"') == "line1\nline2"
+
+
+def test_parse_frontmatter_with_quoted_values() -> None:
+    text = '---\nname: test\ndescription: "a quoted description"\n---\n\nBody.'
+    fields, body = _parse_frontmatter(text)
+    assert fields["description"] == "a quoted description"
 
 
 def test_memory_prompt_section_includes_memory_tags() -> None:

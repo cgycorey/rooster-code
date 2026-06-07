@@ -24,6 +24,22 @@ MEMORY_MAX_COUNT = 20
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 
+def _parse_yaml_value(raw: str) -> str:
+    """Strip YAML quoting and unescape a frontmatter value."""
+    val = raw.strip()
+    if len(val) >= 2 and val[0] == '"' and val[-1] == '"':
+        # Double-quoted: unescape inner content
+        inner = val[1:-1]
+        inner = inner.replace('\\"', '"')
+        inner = inner.replace("\\n", "\n")
+        inner = inner.replace("\\\\", "\\")
+        return inner
+    if len(val) >= 2 and val[0] == "'" and val[-1] == "'":
+        # Single-quoted: literal content
+        return val[1:-1]
+    return val
+
+
 def _parse_frontmatter(content: str) -> tuple[dict[str, str], str]:
     """Parse YAML frontmatter from memory file content. Returns (fields, body)."""
     m = _FRONTMATTER_RE.match(content)
@@ -34,7 +50,7 @@ def _parse_frontmatter(content: str) -> tuple[dict[str, str], str]:
         line = line.strip()
         if ":" in line:
             key, _, val = line.partition(":")
-            fields[key.strip()] = val.strip()
+            fields[key.strip()] = _parse_yaml_value(val)
     body = content[m.end():].strip()
     return fields, body
 
