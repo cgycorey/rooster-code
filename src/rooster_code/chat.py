@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 
 
@@ -10,7 +11,12 @@ class ChatCommand:
 
 
 def parse_chat_command(text: str) -> ChatCommand:
-    parts = text.strip().split()
+    try:
+        parts = shlex.split(text.strip())
+    except ValueError:
+        # Malformed quoting — fall back to whitespace split
+        parts = text.strip().split()
+
     if not parts:
         return ChatCommand(name="", args=[])
 
