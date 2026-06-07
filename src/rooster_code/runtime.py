@@ -8,9 +8,8 @@ import logging
 from pathlib import Path
 import re
 import threading
-from typing import Any, cast
+from typing import Any
 
-log = logging.getLogger("rooster.runtime")
 from open_agent_sdk import (
     AgentOptions,
     ToolContext,
@@ -18,35 +17,35 @@ from open_agent_sdk import (
     PermissionMode,
     ThinkingConfig,
     create_agent,
-    delete_session as sdk_delete_session,
-    estimate_messages_tokens,
-    fork_session as sdk_fork_session,
-    get_all_base_tools,
-    get_all_cron_jobs,
+    delete_session as sdk_delete_session,  # noqa: F401
+    estimate_messages_tokens,  # noqa: F401
+    fork_session as sdk_fork_session,  # noqa: F401
+    get_all_base_tools,  # noqa: F401
+    get_all_cron_jobs,  # noqa: F401
     get_all_tasks,
-    get_all_teams,
-    get_config,
-    get_current_plan,
-    get_todos,
-    is_plan_mode_active,
-    get_session_info as sdk_get_session_info,
-    get_session_messages as sdk_get_session_messages,
-    get_user_invocable_skills,
-    init_bundled_skills,
-    list_sessions as sdk_list_sessions,
+    get_all_teams,  # noqa: F401
+    get_config,  # noqa: F401
+    get_current_plan,  # noqa: F401
+    get_todos,  # noqa: F401
+    is_plan_mode_active,  # noqa: F401
+    get_session_info as sdk_get_session_info,  # noqa: F401
+    get_session_messages as sdk_get_session_messages,  # noqa: F401
+    get_user_invocable_skills,  # noqa: F401
+    init_bundled_skills,  # noqa: F401
+    list_sessions as sdk_list_sessions,  # noqa: F401
     format_skills_for_prompt,
-    rename_session as sdk_rename_session,
+    rename_session as sdk_rename_session,  # noqa: F401
     register_skill,
     SkillDefinition,
     TaskCreateTool,
     TaskOutputTool,
     TaskStopTool,
     TaskUpdateTool,
-    tag_session as sdk_tag_session,
+    tag_session as sdk_tag_session,  # noqa: F401
     unregister_skill,
 )
 from open_agent_sdk.types import SDKMessage, SDKMessageType, SDKSystemSubtype
-from open_agent_sdk.providers import CreateMessageParams
+from open_agent_sdk.providers import CreateMessageParams  # noqa: F401
 from open_agent_sdk.tools.skill_tool import SkillTool
 
 from rooster_code.config import RuntimeConfig
@@ -56,23 +55,25 @@ from rooster_code.goal import build_goal_prompt_section
 from rooster_code.memory import build_memory_prompt_section
 from rooster_code.memory_save_tool import SaveMemoryTool
 from rooster_code.runtime_session import (
-    _build_manual_compaction_summary_prompt,
-    _extract_text_blocks,
+    _build_manual_compaction_summary_prompt,  # noqa: F401
+    _extract_text_blocks,  # noqa: F401
     _format_subagent_summary,
     _format_subagent_task_output,
-    compact_current_session,
-    delete_session,
-    enforce_session_retention,
-    fork_session,
-    get_session_info,
-    get_session_messages,
-    get_state_snapshot,
-    list_sessions,
-    list_tool_names,
-    rename_session,
+    compact_current_session,  # noqa: F401
+    delete_session,  # noqa: F401
+    enforce_session_retention,  # noqa: F401
+    fork_session,  # noqa: F401
+    get_session_info,  # noqa: F401
+    get_session_messages,  # noqa: F401
+    get_state_snapshot,  # noqa: F401
+    list_sessions,  # noqa: F401
+    list_tool_names,  # noqa: F401
+    rename_session,  # noqa: F401
     sanitize_task_output,
-    tag_session,
+    tag_session,  # noqa: F401
 )
+
+log = logging.getLogger("rooster.runtime")
 
 
 _loaded_local_skill_names: set[str] = set()
@@ -230,7 +231,7 @@ def rehydrate_tasks_from_history(agent) -> None:
     loaded history and re-creates minimal _tasks entries so /task-output works
     after resume.
     """
-    from open_agent_sdk.tools import _tasks, _task_counter
+    from open_agent_sdk.tools import _tasks
     import open_agent_sdk.tools as tools_mod
 
     history = getattr(agent, "_history", None)
@@ -556,7 +557,6 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
             context.env,
         )
 
-        effective_name = agent_name
         effective_def = definition
 
         async def run_background() -> None:

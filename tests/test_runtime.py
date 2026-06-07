@@ -2570,7 +2570,7 @@ def test_runtime_agent_tool_allows_when_no_team():
 
 
 def test_rehydrate_tasks_from_history_reconstructs_tasks_from_injected_messages() -> None:
-    from open_agent_sdk.tools import _tasks, _task_counter
+    from open_agent_sdk.tools import _tasks
     import open_agent_sdk.tools as tools_mod
 
     original_tasks = dict(_tasks)
@@ -2609,7 +2609,7 @@ def test_rehydrate_tasks_from_history_reconstructs_tasks_from_injected_messages(
 
 
 def test_rehydrate_tasks_from_history_skips_already_present_tasks() -> None:
-    from open_agent_sdk.tools import _tasks, _task_counter
+    from open_agent_sdk.tools import _tasks
     import open_agent_sdk.tools as tools_mod
 
     original_tasks = dict(_tasks)
@@ -2688,7 +2688,7 @@ def test_format_subagent_summary_still_produces_condensed_output() -> None:
 
 
 def test_rehydrate_tasks_from_history_clears_stale_ids_on_reresume() -> None:
-    from open_agent_sdk.tools import _tasks, _task_counter
+    from open_agent_sdk.tools import _tasks
     import open_agent_sdk.tools as tools_mod
 
     original_tasks = dict(_tasks)
@@ -2807,7 +2807,6 @@ def test_remote_mcp_failure_does_not_crash_agent_initialization(monkeypatch) -> 
 
 def test_wrapped_initialize_syncs_engine_tool_state(monkeypatch) -> None:
     """After _initialize(), the engine's _config.tools and _tool_map must match agent._tool_pool."""
-    import dataclasses
 
     class FakeConfig:
         tools = None
@@ -2867,7 +2866,6 @@ def test_wrapped_initialize_syncs_engine_tool_state(monkeypatch) -> None:
 
 def test_wrapped_initialize_syncs_engine_after_double_init(monkeypatch) -> None:
     """After two _initialize() calls (simulating interrupt recovery), the engine must stay synced."""
-    import dataclasses
 
     class FakeConfig:
         tools = None
@@ -2909,7 +2907,6 @@ def test_wrapped_initialize_syncs_engine_after_double_init(monkeypatch) -> None:
     # First init
     asyncio.run(agent._initialize())
     assert agent._engine._config.tools is agent._tool_pool
-    first_pool_id = id(agent._tool_pool)
 
     # Simulate interrupt: clear engine, set _initialized=False
     agent._engine = FakeEngine()

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+from pathlib import Path
 from typing import NamedTuple
 
 from prompt_toolkit.completion import Completer, Completion
@@ -34,8 +36,6 @@ class FileTooLargeError(AtFileError):
 class BinaryFileError(AtFileError):
     """@ referenced file appears to be binary."""
 
-import re
-
 # Matches inline `...` and fenced ```...``` blocks (non-greedy)
 _BACKTICK_BLOCK = re.compile(r'```[\s\S]*?```|`[^`\n]+`')
 # Same pattern but capturing for re.split to include matched blocks in result
@@ -53,8 +53,6 @@ def _scan_for_at_refs(text: str) -> list[str]:
     tokens = [m.group(1) for m in _AT_REF.finditer(safe)]
     return [_TRAILING_PUNCTUATION.sub('', t) for t in tokens]
 
-
-from pathlib import Path
 
 _GLOB_CHARS = frozenset('*?[')
 

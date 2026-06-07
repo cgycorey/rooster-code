@@ -1,7 +1,6 @@
 """Tests for rooster_code.team — AgentPool, TeamManager, TeamDispatchTool, TeamSendMessageTool, patch_tool_pool."""
 
 import asyncio
-import json
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -2022,7 +2021,7 @@ def test_send_message_maintains_fifo_under_concurrent_dispatch():
 
         with unittest.mock.patch("rooster_code.runtime._track_background_task"):
             with unittest.mock.patch("rooster_code.runtime._update_background_subagent_task", new_callable=unittest.mock.AsyncMock):
-                dispatch_task = asyncio.create_task(
+                asyncio.create_task(
                     pool.dispatch_async("reviewer", "check", "task-fifo", ".", {})
                 )
                 await prompt_started.wait()

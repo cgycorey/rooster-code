@@ -1,7 +1,4 @@
 import asyncio
-from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 from rooster_code.adapters.telegram import TelegramAdapter, _split_long_message
 

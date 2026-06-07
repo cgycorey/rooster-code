@@ -174,6 +174,7 @@ def render_help(console: Console) -> None:
     table.add_row("/goal clear", "Deactivate the current goal")
     table.add_row("/goal list", "List all goals (active + completed)")
     table.add_row("/memory add <name> <content>", "Save a persistent memory")
+    table.add_row("/memory show <name>", "Show a saved memory's content")
     table.add_row("/memory forget <name>", "Delete a saved memory")
     table.add_row("/memory list", "List all saved memories")
     table.add_row("/resume <id>", "Resume another session")

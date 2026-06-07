@@ -1,7 +1,6 @@
 """Tests for rooster_code.file_context — @ reference resolution and AtFileCompleter."""
 
 import os
-from pathlib import Path
 
 import pytest
 from prompt_toolkit.document import Document

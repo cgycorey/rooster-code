@@ -7,6 +7,7 @@ with name, description, and type fields. MEMORY.md serves as an index.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -18,6 +19,7 @@ log = logging.getLogger(__name__)
 GLOBAL_MEMORY_DIR = Path.home() / ".rooster-code" / "memory"
 PROJECT_MEMORY_DIR = Path(".rooster-code") / "memory"
 MEMORY_INDEX = "MEMORY.md"
+MEMORY_MAX_COUNT = 20
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
@@ -56,12 +58,20 @@ def _read_file_safe(path: Path) -> str | None:
 
 
 def _load_memory_dir(directory: Path) -> list[dict[str, str]]:
-    """Load all memory files from a directory. Returns list of {name, description, content}."""
+    """Load all memory files from a directory. Returns list of {name, description, content}.
+
+    Sorted by modification time (newest first) so truncation keeps recent memories.
+    """
     memories: list[dict[str, str]] = []
     if not directory.is_dir():
         return memories
     try:
-        for entry in sorted(directory.iterdir()):
+        entries = sorted(
+            directory.iterdir(),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for entry in entries:
             if not entry.is_file() or not entry.suffix == ".md":
                 continue
             if entry.name == MEMORY_INDEX:
@@ -78,14 +88,47 @@ def _load_memory_dir(directory: Path) -> list[dict[str, str]]:
     return memories
 
 
+def _find_memory_file(directory: Path, name: str) -> Path | None:
+    """Find a memory file by its frontmatter name.
+
+    Tries the current hash-suffixed slug first, then falls back to scanning
+    frontmatter for backward compatibility with old-style (hashless) filenames.
+    """
+    if not directory.is_dir():
+        return None
+    # Try current hashed slug first
+    hashed = directory / f"{_slugify(name)}.md"
+    if hashed.is_file():
+        return hashed
+    # Fall back: scan for matching frontmatter name (backward compat)
+    try:
+        for entry in directory.iterdir():
+            if not entry.is_file() or not entry.suffix == ".md":
+                continue
+            if entry.name == MEMORY_INDEX:
+                continue
+            text = _read_file_safe(entry)
+            if text is None:
+                continue
+            fields, _ = _parse_frontmatter(text)
+            if fields.get("name") == name:
+                return entry
+    except OSError:
+        log.exception("Could not scan memory directory %s", directory)
+    return None
+
+
 def _slugify(name: str) -> str:
-    """Convert a memory name to a safe filename slug."""
-    return re.sub(r"[^a-z0-9_-]", "", name.lower().replace(" ", "-")) or "memory"
+    """Convert a memory name to a safe filename slug with collision-resistant hash suffix."""
+    base = re.sub(r"[^a-z0-9_-]", "", name.lower().replace(" ", "-")) or "memory"
+    h = hashlib.md5(name.encode()).hexdigest()[:4]
+    return f"{base}-{h}"
 
 
 def load_memories() -> list[dict[str, str]]:
-    """Load all memory entries with metadata."""
-    return _load_memory_dir(GLOBAL_MEMORY_DIR) + _load_memory_dir(PROJECT_MEMORY_DIR)
+    """Load all memory entries with metadata. Project memories come first
+    so truncation to MEMORY_MAX_COUNT favors project-relevant entries."""
+    return _load_memory_dir(PROJECT_MEMORY_DIR) + _load_memory_dir(GLOBAL_MEMORY_DIR)
 
 
 def build_memory_prompt_section() -> str:
@@ -93,11 +136,19 @@ def build_memory_prompt_section() -> str:
 
     User-supplied content is wrapped in memory tags to isolate it from
     the system prompt and prevent prompt injection via saved memory content.
+    Capped at MEMORY_MAX_COUNT to prevent context overflow; project memories
+    come first, and within each directory newest (by mtime) are kept first.
     """
     all_memories = load_memories()
     if not all_memories:
         return ""
+    total_count = len(all_memories)
+    truncated = total_count > MEMORY_MAX_COUNT
+    if truncated:
+        all_memories = all_memories[:MEMORY_MAX_COUNT]
     lines: list[str] = ["# Saved Memories"]
+    if truncated:
+        lines.append(f"_(showing {MEMORY_MAX_COUNT} of {total_count} memories)_")
     for mem in all_memories:
         lines.append(f"\n## {mem['name']}")
         if mem["description"]:
@@ -154,15 +205,18 @@ def save_memory(name: str, content: str, description: str = "", *, global_scope:
 
 
 def delete_memory(name: str) -> Path | None:
-    """Delete a memory file by name. Returns the path if deleted, None if not found."""
-    slug = _slugify(name)
+    """Delete a memory file by name. Returns the path if deleted, None if not found.
+
+    Uses _find_memory_file for backward-compatible filename resolution
+    (old-style hashless slugs and new hash-suffixed slugs).
+    """
     for d in (PROJECT_MEMORY_DIR, GLOBAL_MEMORY_DIR):
-        fp = d / f"{slug}.md"
+        fp = _find_memory_file(d, name)
+        if fp is None:
+            continue
         try:
             fp.unlink()
             return fp
-        except FileNotFoundError:
-            continue
         except OSError:
             log.exception("Could not delete memory file %s", fp)
             return None

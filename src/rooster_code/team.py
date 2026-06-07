@@ -364,7 +364,7 @@ class TeamManager:
         lines = [
             f"# Team: {self._team_name}",
             f"You are the orchestrator for team '{self._team_name}'. Members: {members_list}.",
-            f"When a team is active, you MUST delegate work to team members via TeamDispatch. Do NOT use Read, Bash, Glob, Grep, or other tools to do the work yourself — always dispatch to a team member instead.",
+            "When a team is active, you MUST delegate work to team members via TeamDispatch. Do NOT use Read, Bash, Glob, Grep, or other tools to do the work yourself — always dispatch to a team member instead.",
             "TeamDispatch starts the work in the background and the result appears when complete.",
             "Use SendMessage for informational teammate coordination; it may wake an idle teammate to process queued mail, but it does NOT replace TeamDispatch for explicit task assignment.",
             f"If the user wants to leave team mode or use tools directly, call TeamDelete with team_id '{self._team_id}' first.",

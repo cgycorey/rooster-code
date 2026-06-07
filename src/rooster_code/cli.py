@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import argparse
 import asyncio
 import contextlib
 import logging
 import os
 import re
 import signal
-import sys
 import threading
 
 from prompt_toolkit import PromptSession
@@ -22,6 +20,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 import httpx
 
 from rooster_code.chat import parse_chat_command
+from rooster_code.cli_parser import build_parser
 from rooster_code.config import config_from_namespace, save_agents_file
 from rooster_code.goal import set_goal, clear_goal, list_goals, get_active_goal, get_goal_check_prompt
 from rooster_code.file_context import (
@@ -518,8 +517,6 @@ def list_tool_names() -> list[str]:
 
     return runtime_list_tool_names()
 
-
-from rooster_code.cli_parser import build_parser
 
 
 def run_async_with_sigint_exit(coroutine) -> int:
@@ -1118,6 +1115,21 @@ async def run_chat(config) -> int:
                     deleted = delete_memory(command.args[1])
                     if deleted:
                         render_notice(console, "Memory Forgotten", f"Deleted: {deleted}", "green")
+                    else:
+                        render_notice(console, "Memory", f"No memory named '{command.args[1]}' found.", "yellow")
+                elif subcmd == "show" and len(command.args) >= 2:
+                    from rooster_code.memory import _slugify
+                    slug = _slugify(command.args[1])
+                    memories = [m for m in load_memories() if _slugify(m["name"]) == slug]
+                    if len(memories) > 1:
+                        render_notice(console, "Memory",
+                                      f"Multiple memories match '{command.args[1]}'. "
+                                      f"Try /memory show with one of: {', '.join(m['name'] for m in memories)}",
+                                      "yellow")
+                    elif memories:
+                        m = memories[0]
+                        render_notice(console, f"Memory: {m['name']}",
+                                      f"{m['content']}\n\n[dim]{m['description']}[/dim]", "blue")
                     else:
                         render_notice(console, "Memory", f"No memory named '{command.args[1]}' found.", "yellow")
                 elif subcmd == "list":
