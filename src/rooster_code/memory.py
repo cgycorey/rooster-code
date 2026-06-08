@@ -22,10 +22,15 @@ MEMORY_INDEX = "MEMORY.md"
 MEMORY_MAX_COUNT = 20
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+_SENTINEL = "\x00"  # placeholder for \\ during YAML unescape (NUL is illegal in YAML)
 
 
 def _parse_yaml_value(raw: str) -> str:
-    """Strip YAML quoting and unescape a frontmatter value."""
+    """Strip YAML quoting and unescape a frontmatter value.
+
+    Expects a raw frontmatter value as written in the YAML line (may include
+    surrounding double or single quotes).  Returns the unescaped Python string.
+    """
     val = raw.strip()
     if len(val) >= 2 and val[0] == '"' and val[-1] == '"':
         # Double-quoted: unescape inner content.
@@ -35,11 +40,10 @@ def _parse_yaml_value(raw: str) -> str:
         # so we use a raw string r"\\" (or quadruple "\\\\\\\\") to match
         # two consecutive backslashes (the YAML escape for one literal backslash).
         inner = val[1:-1]
-        SENTINEL = "\x00"
-        inner = inner.replace(r"\\", SENTINEL)
+        inner = inner.replace(r"\\", _SENTINEL)
         inner = inner.replace('\\"', '"')
         inner = inner.replace("\\n", "\n")
-        inner = inner.replace(SENTINEL, "\\")
+        inner = inner.replace(_SENTINEL, "\\")
         return inner
     if len(val) >= 2 and val[0] == "'" and val[-1] == "'":
         # Single-quoted: literal content

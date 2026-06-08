@@ -209,6 +209,25 @@ def test_escape_yaml_value_never_emits_block_scalar() -> None:
     assert _escape_yaml_value("line1\nline2").startswith('"')
 
 
+def test_escape_yaml_value_roundtrips_through_parse() -> None:
+    """Values written by _escape_yaml_value must survive a parse roundtrip."""
+    from rooster_code.memory import _escape_yaml_value, _parse_yaml_value
+
+    cases = [
+        "plain text",
+        "has: colon",
+        "has # hash",
+        "has \"quotes\"",
+        "line1\nline2",
+        "backslash\\nhere",
+        "special & ampersand",
+    ]
+    for original in cases:
+        escaped = _escape_yaml_value(original)
+        parsed = _parse_yaml_value(escaped)
+        assert parsed == original, f"Roundtrip failed: {original!r} -> {escaped!r} -> {parsed!r}"
+
+
 
 def test_parse_frontmatter_with_quoted_values() -> None:
     text = '---\nname: test\ndescription: "a quoted description"\n---\n\nBody.'
