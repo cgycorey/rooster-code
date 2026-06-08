@@ -34,6 +34,114 @@ def test_parse_model_command() -> None:
     assert command.args == ["claude-opus"]
 
 
+# --- parse_chat_command unit tests (shlex.split) ---
+
+def test_parse_empty_input() -> None:
+    cmd = parse_chat_command("")
+    assert cmd.name == ""
+    assert cmd.args == []
+
+
+def test_parse_whitespace_only() -> None:
+    cmd = parse_chat_command("   ")
+    assert cmd.name == ""
+    assert cmd.args == []
+
+
+def test_parse_non_command_text() -> None:
+    cmd = parse_chat_command("just a message")
+    assert cmd.name == ""
+    assert cmd.args == []
+
+
+def test_parse_command_no_args() -> None:
+    cmd = parse_chat_command("/exit")
+    assert cmd.name == "exit"
+    assert cmd.args == []
+
+
+def test_parse_command_with_args() -> None:
+    cmd = parse_chat_command("/model claude-sonnet")
+    assert cmd.name == "model"
+    assert cmd.args == ["claude-sonnet"]
+
+
+def test_parse_multi_word_args() -> None:
+    cmd = parse_chat_command("/goal set finish the thing")
+    assert cmd.name == "goal"
+    assert cmd.args == ["set", "finish", "the", "thing"]
+
+
+def test_parse_quoted_single_arg() -> None:
+    cmd = parse_chat_command('/memory show "My Project"')
+    assert cmd.name == "memory"
+    assert cmd.args == ["show", "My Project"]
+
+
+def test_parse_quoted_multi_word_name() -> None:
+    cmd = parse_chat_command('/memory add "Project Alpha" some content here')
+    assert cmd.name == "memory"
+    assert cmd.args == ["add", "Project Alpha", "some", "content", "here"]
+
+
+def test_parse_nested_quotes_in_arg() -> None:
+    cmd = parse_chat_command('/memory add Name "content with \\"quotes\\""')
+    assert cmd.name == "memory"
+    assert cmd.args == ["add", "Name", 'content with "quotes"']
+
+
+def test_parse_single_quoted_args() -> None:
+    cmd = parse_chat_command("/command 'single quoted' value")
+    assert cmd.name == "command"
+    assert cmd.args == ["single quoted", "value"]
+
+
+def test_parse_multiple_quoted_args() -> None:
+    cmd = parse_chat_command('/cmd "first arg" "second arg" bare')
+    assert cmd.name == "cmd"
+    assert cmd.args == ["first arg", "second arg", "bare"]
+
+
+def test_parse_unclosed_quote_falls_back_to_split() -> None:
+    """Malformed quoting raises ValueError in shlex, falls back to str.split."""
+    cmd = parse_chat_command('/memory add "unclosed')
+    assert cmd.name == "memory"
+    # shlex would raise ValueError, so we fall back to whitespace split
+    assert cmd.args == ["add", '"unclosed']
+
+
+def test_parse_mismatched_quotes() -> None:
+    """shlex allows mixing quote styles; each quote starts and ends its own segment."""
+    cmd = parse_chat_command("/cmd arg 'with quote")
+    assert cmd.name == "cmd"
+    # shlex raises ValueError on unclosed single quote, falls back
+    assert len(cmd.args) >= 2
+
+
+def test_parse_trailing_slash_only() -> None:
+    cmd = parse_chat_command("/")
+    assert cmd.name == ""
+    assert cmd.args == []
+
+
+def test_parse_double_slash() -> None:
+    cmd = parse_chat_command("//double")
+    assert cmd.name == "/double"
+    assert cmd.args == []
+
+
+def test_parse_leading_whitespace() -> None:
+    cmd = parse_chat_command("   /help")
+    assert cmd.name == "help"
+    assert cmd.args == []
+
+
+def test_parse_empty_quoted_arg() -> None:
+    cmd = parse_chat_command('/cmd ""')
+    assert cmd.name == "cmd"
+    assert cmd.args == [""]
+
+
 def test_run_chat_exits_cleanly(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
