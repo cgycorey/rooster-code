@@ -28,11 +28,18 @@ def _parse_yaml_value(raw: str) -> str:
     """Strip YAML quoting and unescape a frontmatter value."""
     val = raw.strip()
     if len(val) >= 2 and val[0] == '"' and val[-1] == '"':
-        # Double-quoted: unescape inner content
+        # Double-quoted: unescape inner content.
+        # Process \\ first (via sentinel) so that \\n (escaped backslash
+        # followed by literal n) is not mistaken for \n (newline).
+        # "\\\\" in a Python string literal is one backslash character,
+        # so we use a raw string r"\\" (or quadruple "\\\\\\\\") to match
+        # two consecutive backslashes (the YAML escape for one literal backslash).
         inner = val[1:-1]
+        SENTINEL = "\x00"
+        inner = inner.replace(r"\\", SENTINEL)
         inner = inner.replace('\\"', '"')
         inner = inner.replace("\\n", "\n")
-        inner = inner.replace("\\\\", "\\")
+        inner = inner.replace(SENTINEL, "\\")
         return inner
     if len(val) >= 2 and val[0] == "'" and val[-1] == "'":
         # Single-quoted: literal content
@@ -171,18 +178,20 @@ def build_memory_prompt_section() -> str:
             lines.append(f"_{mem['description']}_")
         lines.append("")
         lines.append("<memory>")
-        lines.append(mem["content"])
+        lines.append(mem["content"].replace("</memory>", "<\\/memory>"))
         lines.append("</memory>")
     return "\n".join(lines)
 
 
 def _escape_yaml_value(value: str) -> str:
     """Escape a string for safe use as a YAML value. If it contains newlines
-    or special characters, use a quoted string with escaping."""
+    or special characters, use a double-quoted string with escaping.
+    Block scalars are intentionally avoided because _parse_frontmatter
+    cannot parse them back."""
     if "\n" in value:
-        # Use a literal block scalar for multi-line values
-        indented = "\n".join("  " + line for line in value.split("\n"))
-        return "|\n" + indented
+        # Use double-quoted with \n escape so the reader roundtrips
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+        return '"' + escaped + '"'
     if any(c in value for c in (':', '#', '"', "'", '&', '*', '!', '>', '|', '%', '@', '`', '{', '}', '[', ']')):
         return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
     return value
@@ -193,10 +202,18 @@ def save_memory(name: str, content: str, description: str = "", *, global_scope:
 
     Uses atomic write via temp file + os.replace to prevent TOCTOU races
     and partial writes. Frontmatter values are escaped to prevent YAML injection.
+    Cleans up any old-style (pre-hash) file for the same memory name so
+    upgrades don't produce duplicate entries.
     """
     target_dir = GLOBAL_MEMORY_DIR if global_scope else PROJECT_MEMORY_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
     file_path = target_dir / f"{_slugify(name)}.md"
+
+    # Find any pre-existing file (possibly old-style hashless) to clean up
+    old_file = _find_memory_file(target_dir, name)
+    if old_file is not None and old_file != file_path:
+        # An old-style file exists — we'll replace it, then remove the old one
+        pass
 
     frontmatter = (
         f"---\n"
@@ -216,6 +233,13 @@ def save_memory(name: str, content: str, description: str = "", *, global_scope:
         os.close(fd)
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
+
+    # Remove any old-style duplicate so _load_memory_dir doesn't double-load
+    if old_file is not None and old_file != file_path:
+        try:
+            old_file.unlink()
+        except OSError:
+            pass
 
     return file_path
 
