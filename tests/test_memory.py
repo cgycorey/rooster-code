@@ -244,3 +244,14 @@ def test_memory_prompt_section_includes_memory_tags() -> None:
             section = build_memory_prompt_section()
             assert "<memory>" in section
             assert "</memory>" in section
+
+
+def test_read_file_safe_handles_unicode_decode_error() -> None:
+    """A corrupted UTF-8 .md file should not kill the entire memory load."""
+    from rooster_code.memory import _read_file_safe
+
+    with tempfile.TemporaryDirectory() as tmp:
+        bad = Path(tmp, "bad.md")
+        bad.write_bytes(b"\xff\xfe\x00\x00")
+        result = _read_file_safe(bad)
+        assert result is None

@@ -76,7 +76,7 @@ def _read_file_safe(path: Path) -> str | None:
     try:
         with open(fd, "r", encoding="utf-8", closefd=False) as fh:
             return fh.read()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         log.exception("Could not read memory file %s", path)
         return None
     finally:
