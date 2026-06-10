@@ -9,6 +9,7 @@ from rooster_code.daemon import (
     daemon_health, daemon_list_sessions, daemon_session_info, daemon_shutdown,
     daemon_query, _SOCKET_PATH,
 )
+from rooster_code.config import load_json_file
 
 _CONNECTION_ERRORS = (ConnectionRefusedError, FileNotFoundError, OSError)
 
@@ -44,6 +45,21 @@ def _ask_via_daemon(prompt: str, args: argparse.Namespace) -> int:
         val = getattr(args, attr, None)
         if val is not None:
             overrides[key] = val
+    if getattr(args, "search_url", None):
+        overrides["search_url"] = args.search_url
+    if getattr(args, "skills_dir", None):
+        overrides["skills_dir"] = args.skills_dir
+    _FILE_OVERRIDES: list[tuple[str, str]] = [
+        ("agents_file", "agents"),
+        ("hooks_file", "hooks"),
+        ("json_schema_file", "json_schema"),
+        ("mcp_file", "mcp_servers"),
+        ("extra_args_file", "extra_args"),
+    ]
+    for attr, key in _FILE_OVERRIDES:
+        path = getattr(args, attr, None)
+        if path:
+            overrides[key] = load_json_file(path) or {}
     if getattr(args, "allowed_tools", None):
         overrides["allowed_tools"] = args.allowed_tools
     if getattr(args, "disallowed_tools", None):

@@ -101,6 +101,10 @@ class TestExpandPaths:
         with pytest.raises(GlobNoMatchError, match="no files matched"):
             _expand_paths(["*.rs"], str(tmp_path))
 
+    def test_absolute_glob_outside_rejected_as_at_file_error(self, tmp_path):
+        with pytest.raises(FileNotFoundAtError, match="outside working directory"):
+            _expand_paths(["/tmp/*.py"], str(tmp_path))
+
     def test_duplicate_dedup(self, tmp_path):
         (tmp_path / "foo.py").write_text("hello")
         paths = _expand_paths(["foo.py", "foo.py"], str(tmp_path))

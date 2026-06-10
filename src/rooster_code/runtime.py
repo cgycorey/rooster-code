@@ -116,6 +116,18 @@ def _parse_list_field(value: str) -> list[str]:
     return [item.strip().strip('"').strip("'") for item in raw.split(",") if item.strip()]
 
 
+_skill_body_cache: dict[str, str] = {}
+
+
+def _load_skill_body(path: Path) -> str:
+    """Read and cache a skill's body text. First call reads from disk."""
+    key = str(path)
+    if key not in _skill_body_cache:
+        _, body = _parse_skill_metadata(path.read_text(encoding="utf-8"))
+        _skill_body_cache[key] = body
+    return _skill_body_cache[key]
+
+
 def _build_filesystem_skill_definition(skill_dir: Path) -> SkillDefinition | None:
     skill_file = skill_dir / "SKILL.md"
     if not skill_file.exists():
@@ -133,8 +145,9 @@ def _build_filesystem_skill_definition(skill_dir: Path) -> SkillDefinition | Non
     agent = metadata.get("agent", "")
     user_invocable = metadata.get("user_invocable", "true").lower() != "false"
 
-    async def get_prompt(args: str, ctx: ToolContext, *, content: str = body) -> list[dict[str, str]]:
-        prompt_text = content.strip()
+    async def get_prompt(args: str, ctx: ToolContext) -> list[dict[str, str]]:
+        body = _load_skill_body(skill_file)
+        prompt_text = body.strip()
         if args.strip():
             prompt_text = f"{prompt_text}\n\n<user-request>\n{args.strip()}\n</user-request>"
         return [{"type": "text", "text": prompt_text}]
@@ -174,6 +187,7 @@ def _ensure_skills_loaded(config: RuntimeConfig) -> None:
     for name in list(_loaded_local_skill_names):
         unregister_skill(name)
     _loaded_local_skill_names.clear()
+    _skill_body_cache.clear()
     _loaded_skills_dir = skills_dir_str
 
     if not skills_dir or not skills_dir.exists():
@@ -558,9 +572,40 @@ async def _run_subagent(config: RuntimeConfig, input: dict[str, Any], context: T
         )
 
         effective_def = definition
+        effective_skill_request = skill_request
 
         async def run_background() -> None:
             try:
+                if effective_skill_request is not None:
+                    skill_name, args = effective_skill_request
+                    tool_context = ToolContext(cwd=context.cwd, env=context.env)
+                    result = await SkillTool().call({"skill": skill_name, "args": args}, tool_context)
+                    if result.is_error:
+                        raise RuntimeError(str(result.content))
+                    payload = json.loads(str(result.content))
+                    prompt_text = str(payload.get("prompt", "")).strip()
+                    if not prompt_text:
+                        raise RuntimeError(f'Skill "{skill_name}" returned no prompt')
+                    child_config = replace(
+                        config,
+                        model=str(payload.get("model") or config.model or ""),
+                        allowed_tools=payload.get("allowedTools") if isinstance(payload.get("allowedTools"), list) else config.allowed_tools,
+                        persist_session=False,
+                    )
+                    child_agent = _create_sdk_agent(child_config, include_runtime_agent_tool=False)
+                    try:
+                        query_result = await _prompt_agent_with_abort(child_agent, prompt_text)
+                    finally:
+                        await child_agent.close()
+                    raw_text = query_result.text.strip() if query_result.text else ""
+                    output = _format_subagent_task_output(raw_text, query_result.messages)
+                    if not output or output == "Agent completed with no text output.":
+                        output = raw_text or "Agent completed with no text output."
+                    await _update_background_subagent_task(
+                        task_id, status="completed", output=output,
+                        cwd=context.cwd, env=context.env,
+                    )
+                    return
                 if effective_def is None:
                     try:
                         await _update_background_subagent_task(
@@ -723,7 +768,9 @@ async def _stream_subagent(config: RuntimeConfig, input: dict[str, Any], context
         yield SDKMessage(type=SDKMessageType.RESULT, text=str(result.content), is_error=result.is_error)
         return
 
-    if skill_request := _resolve_subagent_skill_request(config, input):
+    requested_name = str(input.get("name") or input.get("subagent_type") or "").strip()
+    agent_name, definition = _resolve_agent_definition(config, input)
+    if not (requested_name and definition is not None) and (skill_request := _resolve_subagent_skill_request(config, input)):
         skill_name, args = skill_request
         working_agent = _create_sdk_agent(replace(config, persist_session=False), include_runtime_agent_tool=False)
         try:
@@ -735,7 +782,6 @@ async def _stream_subagent(config: RuntimeConfig, input: dict[str, Any], context
             await working_agent.close()
         return
 
-    agent_name, definition = _resolve_agent_definition(config, input)
     if definition is None:
         message = f"Error: unknown agent '{agent_name or 'unspecified'}'" if _effective_agents(config) else "Error: no agents configured"
         yield SDKMessage(type=SDKMessageType.RESULT, text=message, is_error=True)

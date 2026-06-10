@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import json
 from rooster_code.cli import build_parser
 
 
@@ -95,6 +96,83 @@ def test_main_dispatches_ask(monkeypatch) -> None:
 
     assert exit_code == 0
     assert captured == {"prompt": "hello", "model": "m1"}
+
+
+def test_ask_via_daemon_forwards_runtime_file_overrides(tmp_path, monkeypatch) -> None:
+    import rooster_code.cli_daemon as cli_daemon
+
+    captured: dict[str, object] = {}
+    agents_file = tmp_path / "agents.json"
+    hooks_file = tmp_path / "hooks.json"
+    schema_file = tmp_path / "schema.json"
+    mcp_file = tmp_path / "mcp.json"
+    extra_file = tmp_path / "extra.json"
+    skills_dir = tmp_path / "skills"
+    agents_file.write_text(json.dumps({"reviewer": {"description": "reviews"}}), encoding="utf-8")
+    hooks_file.write_text(json.dumps({"PreToolUse": []}), encoding="utf-8")
+    schema_file.write_text(json.dumps({"type": "object"}), encoding="utf-8")
+    mcp_file.write_text(json.dumps({"fs": {"type": "stdio", "command": "echo"}}), encoding="utf-8")
+    extra_file.write_text(json.dumps({"temperature": 0}), encoding="utf-8")
+    skills_dir.mkdir()
+
+    async def fake_daemon_query(prompt: str, *, session_id: str = "", cwd: str = ".", overrides=None):
+        captured["prompt"] = prompt
+        captured["session_id"] = session_id
+        captured["cwd"] = cwd
+        captured["overrides"] = overrides
+        return {"type": "done", "text": "ok"}
+
+    parser = build_parser()
+    args = parser.parse_args([
+        "ask",
+        "hello",
+        "--daemon",
+        "--search-url",
+        "https://search.example.test",
+        "--agents-file",
+        str(agents_file),
+        "--hooks-file",
+        str(hooks_file),
+        "--json-schema-file",
+        str(schema_file),
+        "--mcp-file",
+        str(mcp_file),
+        "--extra-args-file",
+        str(extra_file),
+        "--skills-dir",
+        str(skills_dir),
+    ])
+    monkeypatch.setattr(cli_daemon, "daemon_query", fake_daemon_query)
+
+    assert cli_daemon._ask_via_daemon(args.prompt, args) == 0
+
+    overrides = captured["overrides"]
+    assert overrides["search_url"] == "https://search.example.test"
+    assert overrides["agents"] == {"reviewer": {"description": "reviews"}}
+    assert overrides["hooks"] == {"PreToolUse": []}
+    assert overrides["json_schema"] == {"type": "object"}
+    assert overrides["mcp_servers"] == {"fs": {"type": "stdio", "command": "echo"}}
+    assert overrides["extra_args"] == {"temperature": 0}
+    assert overrides["skills_dir"] == str(skills_dir)
+
+
+def test_main_agents_list_loads_configured_agents(tmp_path, monkeypatch) -> None:
+    import rooster_code.config as config_mod
+
+    captured: dict[str, object] = {}
+    agents_file = tmp_path / "agents.json"
+    agents_file.write_text(json.dumps({"reviewer": {"description": "reviews"}}), encoding="utf-8")
+
+    monkeypatch.setattr(config_mod, "DEFAULT_AGENTS_PATH", agents_file)
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(
+        cli,
+        "render_agents_list",
+        lambda console, agents: captured.update({"agents": agents}),
+    )
+
+    assert cli.main(["agents", "list"]) == 0
+    assert captured["agents"] == {"reviewer": {"description": "reviews"}}
 
 
 def test_run_ask_streams_events_and_closes_agent(monkeypatch) -> None:

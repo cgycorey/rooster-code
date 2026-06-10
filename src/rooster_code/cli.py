@@ -1319,8 +1319,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "agents" and args.agents_command == "list":
             console = build_console()
-            from rooster_code.config import resolve_runtime_env
-            config = resolve_runtime_env(os.environ, cwd=".")
+            config = config_from_namespace(args, os.environ)
             render_agents_list(console, config.agents)
             return 0
 

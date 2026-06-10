@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import json
 import logging
 from pathlib import Path
 from typing import Coroutine, cast
@@ -568,6 +569,57 @@ def test_run_subagent_background_creates_sdk_task_and_updates_output(monkeypatch
             await asyncio.sleep(0)
         assert tasks[task_id]["status"] == "completed"
         assert "background done" in tasks[task_id]["output"]
+
+    asyncio.run(run_case())
+
+
+def test_run_subagent_background_skill_completes_task(monkeypatch) -> None:
+    class FakeSkillAgent:
+        async def prompt(self, prompt: str, overrides=None):
+            from open_agent_sdk.types import QueryResult
+
+            return QueryResult(
+                text="skill background done",
+                messages=[
+                    {"role": "assistant", "content": [{"type": "text", "text": "Outcome: skill background done"}]},
+                ],
+            )
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_skill_call(self, input, context):
+        return ToolResult(
+            tool_use_id="",
+            content=json.dumps({
+                "success": True,
+                "commandName": "review",
+                "status": "inline",
+                "prompt": "Review the code",
+            }),
+        )
+
+    monkeypatch.setattr(runtime.SkillTool, "call", fake_skill_call)
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeSkillAgent())
+    monkeypatch.setattr(runtime, "_resolve_subagent_skill_request", lambda config, input: ("review", "check changes"))
+    monkeypatch.setattr(runtime, "_resolve_agent_definition", lambda config, input: ("review", None))
+
+    async def run_case():
+        result = await runtime._run_subagent(
+            RuntimeConfig(model="m1"),
+            {"name": "review", "prompt": "check changes", "description": "review", "run_in_background": True},
+            ToolContext(cwd="/tmp/project", env={}),
+        )
+        assert result.is_error is False
+        assert "Created task" in str(result.content)
+        tasks = get_all_tasks()
+        task_id = next(iter(tasks))
+        for _ in range(50):
+            if tasks[task_id]["status"] == "completed":
+                break
+            await asyncio.sleep(0)
+        assert tasks[task_id]["status"] == "completed"
+        assert "skill background done" in tasks[task_id]["output"]
 
     asyncio.run(run_case())
 
@@ -1905,6 +1957,43 @@ def test_stream_named_agent_events_emits_skill_resolution_visibility(monkeypatch
     ]
 
 
+def test_stream_named_agent_events_prefers_explicit_agent_over_same_named_skill(monkeypatch) -> None:
+    class FakeAgent:
+        async def query(self, prompt: str, overrides=None):
+            yield SDKMessage(type=SDKMessageType.RESULT, text="agent done")
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_create_sdk_agent", lambda config, include_runtime_agent_tool=False, system_prompt="", is_child_agent=False: FakeAgent())
+    monkeypatch.setattr(runtime, "_resolve_subagent_skill_request", lambda config, input: ("review", "check"))
+
+    async def collect_events():
+        return [
+            event
+            async for event in runtime.stream_named_agent_events(
+                RuntimeConfig(
+                    api_key="test",
+                    base_url="https://nano-gpt.com/api/v1",
+                    model="m1",
+                    agents={"review": {"description": "agent reviewer"}},
+                    skills_dir="skills",
+                ),
+                "review",
+                "review last commit",
+            )
+        ]
+
+    events = asyncio.run(collect_events())
+
+    assert events[0].system_data["activity_trace"] == [
+        {"action": "Resolved subagent", "tool": "Agent", "target": "review"}
+    ]
+    assert events[-1].system_data["activity_trace"] == [
+        {"action": "Completed subagent", "tool": "Agent", "target": "review"}
+    ]
+
+
 def test_run_named_agent_prompt_prefers_final_sdk_result_text(monkeypatch) -> None:
     class FakeChildAgent:
         async def prompt(self, prompt: str, overrides=None):
@@ -2957,3 +3046,75 @@ def test_wrapped_initialize_syncs_engine_with_empty_pool(monkeypatch) -> None:
     assert agent._engine._config.tools is agent._tool_pool
     assert isinstance(agent._engine._tool_map, dict)
     assert len(agent._engine._tool_map) >= 0
+
+
+def test_skill_get_prompt_lazy_loads_body(tmp_path: Path) -> None:
+    """get_prompt should load the skill body on first call, not at registration."""
+    from rooster_code.runtime import _build_filesystem_skill_definition
+
+    skill_dir = tmp_path / "skills" / "lazy"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: lazy\ndescription: A lazy skill\n---\n\nLazy loaded body content.",
+        encoding="utf-8",
+    )
+
+    definition = _build_filesystem_skill_definition(skill_dir)
+    assert definition is not None
+    assert definition.name == "lazy"
+    assert definition.get_prompt is not None
+
+    blocks = asyncio.run(definition.get_prompt("", ToolContext()))
+    text = "\n".join(str(b["text"]) for b in blocks if b.get("type") == "text")
+    assert "Lazy loaded body content." in text
+
+
+def test_build_filesystem_skill_definition_does_not_cache_body_until_prompt(tmp_path: Path) -> None:
+    import rooster_code.runtime as rt
+
+    skill_dir = tmp_path / "skills" / "lazy"
+    skill_dir.mkdir(parents=True)
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text(
+        "---\nname: lazy\ndescription: A lazy skill\n---\n\nOriginal body.",
+        encoding="utf-8",
+    )
+    rt._skill_body_cache.clear()
+
+    definition = rt._build_filesystem_skill_definition(skill_dir)
+    assert definition is not None
+    assert str(skill_file) not in rt._skill_body_cache
+
+    skill_file.write_text(
+        "---\nname: lazy\ndescription: A lazy skill\n---\n\nUpdated body.",
+        encoding="utf-8",
+    )
+    blocks = asyncio.run(definition.get_prompt("", ToolContext()))
+    text = "\n".join(str(b["text"]) for b in blocks if b.get("type") == "text")
+    assert "Updated body." in text
+
+
+def test_skill_body_cache_cleared_on_reload(tmp_path: Path) -> None:
+    """Stale cache entries are cleared and skill bodies stay lazy after reload."""
+    import rooster_code.runtime as rt
+
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "test-skill").mkdir()
+    (skills_dir / "test-skill" / "SKILL.md").write_text(
+        "---\nname: test-skill\ndescription: desc\n---\n\nBody.",
+        encoding="utf-8",
+    )
+
+    rt._skill_body_cache.clear()
+    rt._skill_body_cache["fake-key"] = "stale"
+    assert len(rt._skill_body_cache) == 1
+
+    rt._ensure_skills_loaded(
+        RuntimeConfig(
+            api_key="a", base_url="https://x.test", model="m",
+            skills_dir=str(skills_dir),
+        )
+    )
+    assert "fake-key" not in rt._skill_body_cache
+    assert rt._skill_body_cache == {}

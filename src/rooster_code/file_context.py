@@ -69,7 +69,14 @@ def _expand_paths(refs: list[str], cwd: str) -> list[Path]:
             p = base / p
 
         if _GLOB_CHARS.intersection(ref):
-            matches = sorted(base.glob(ref))
+            glob_ref = ref
+            if Path(ref).is_absolute():
+                glob_ref = os.path.relpath(ref, base)
+                if glob_ref == ".." or glob_ref.startswith(f"..{os.sep}") or os.path.isabs(glob_ref):
+                    raise FileNotFoundAtError(
+                        f"@{ref}: path outside working directory"
+                    )
+            matches = sorted(base.glob(glob_ref))
             matches = [m for m in matches
                        if m.resolve(strict=False).is_relative_to(base)]
             if not matches:
