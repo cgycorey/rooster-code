@@ -25,6 +25,12 @@ _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 _SENTINEL = "\x00"  # placeholder for \\ during YAML unescape (NUL is illegal in YAML)
 
 
+def _project_memory_dir(project_cwd: str | Path | None = None) -> Path:
+    if project_cwd is None:
+        return PROJECT_MEMORY_DIR
+    return Path(project_cwd) / PROJECT_MEMORY_DIR
+
+
 def _parse_yaml_value(raw: str) -> str:
     """Strip YAML quoting and unescape a frontmatter value.
 
@@ -152,13 +158,17 @@ def _slugify(name: str) -> str:
     return f"{base}-{h}"
 
 
-def load_memories() -> list[dict[str, str]]:
+def load_memories(*, project_cwd: str | Path | None = None) -> list[dict[str, str]]:
     """Load all memory entries with metadata. Project memories come first
     so truncation to MEMORY_MAX_COUNT favors project-relevant entries."""
-    return _load_memory_dir(PROJECT_MEMORY_DIR) + _load_memory_dir(GLOBAL_MEMORY_DIR)
+    return _load_memory_dir(_project_memory_dir(project_cwd)) + _load_memory_dir(GLOBAL_MEMORY_DIR)
 
 
-def build_memory_prompt_section() -> str:
+def _escape_memory_content(value: str) -> str:
+    return value.replace("</memory>", "<\\/memory>")
+
+
+def build_memory_prompt_section(*, project_cwd: str | Path | None = None) -> str:
     """Build the memory prompt section from all global and project memory files.
 
     User-supplied content is wrapped in memory tags to isolate it from
@@ -166,7 +176,7 @@ def build_memory_prompt_section() -> str:
     Capped at MEMORY_MAX_COUNT to prevent context overflow; project memories
     come first, and within each directory newest (by mtime) are kept first.
     """
-    all_memories = load_memories()
+    all_memories = load_memories(project_cwd=project_cwd)
     if not all_memories:
         return ""
     total_count = len(all_memories)
@@ -176,13 +186,14 @@ def build_memory_prompt_section() -> str:
     lines: list[str] = ["# Saved Memories"]
     if truncated:
         lines.append(f"_(showing {MEMORY_MAX_COUNT} of {total_count} memories)_")
-    for mem in all_memories:
-        lines.append(f"\n## {mem['name']}")
-        if mem["description"]:
-            lines.append(f"_{mem['description']}_")
-        lines.append("")
+    for idx, mem in enumerate(all_memories, start=1):
+        lines.append(f"\n## Memory {idx}")
         lines.append("<memory>")
-        lines.append(mem["content"].replace("</memory>", "<\\/memory>"))
+        lines.append(f"name: {_escape_memory_content(mem['name'])}")
+        if mem["description"]:
+            lines.append(f"description: {_escape_memory_content(mem['description'])}")
+        lines.append("")
+        lines.append(_escape_memory_content(mem["content"]))
         lines.append("</memory>")
     return "\n".join(lines)
 
@@ -201,7 +212,14 @@ def _escape_yaml_value(value: str) -> str:
     return value
 
 
-def save_memory(name: str, content: str, description: str = "", *, global_scope: bool = False) -> Path:
+def save_memory(
+    name: str,
+    content: str,
+    description: str = "",
+    *,
+    global_scope: bool = False,
+    project_cwd: str | Path | None = None,
+) -> Path:
     """Save a memory file. Creates the directory if needed. Returns the file path.
 
     Uses atomic write via temp file + os.replace to prevent TOCTOU races
@@ -209,7 +227,7 @@ def save_memory(name: str, content: str, description: str = "", *, global_scope:
     Cleans up any old-style (pre-hash) file for the same memory name so
     upgrades don't produce duplicate entries.
     """
-    target_dir = GLOBAL_MEMORY_DIR if global_scope else PROJECT_MEMORY_DIR
+    target_dir = GLOBAL_MEMORY_DIR if global_scope else _project_memory_dir(project_cwd)
     target_dir.mkdir(parents=True, exist_ok=True)
     file_path = target_dir / f"{_slugify(name)}.md"
 
@@ -248,13 +266,13 @@ def save_memory(name: str, content: str, description: str = "", *, global_scope:
     return file_path
 
 
-def delete_memory(name: str) -> Path | None:
+def delete_memory(name: str, *, project_cwd: str | Path | None = None) -> Path | None:
     """Delete a memory file by name. Returns the path if deleted, None if not found.
 
     Uses _find_memory_file for backward-compatible filename resolution
     (old-style hashless slugs and new hash-suffixed slugs).
     """
-    for d in (PROJECT_MEMORY_DIR, GLOBAL_MEMORY_DIR):
+    for d in (_project_memory_dir(project_cwd), GLOBAL_MEMORY_DIR):
         fp = _find_memory_file(d, name)
         if fp is None:
             continue

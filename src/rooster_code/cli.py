@@ -1090,7 +1090,13 @@ async def run_chat(config) -> int:
                     render_notice(console, "Error", f"Unknown /goal subcommand: {subcmd}", "red")
                 continue
             if command.name == "memory":
-                from rooster_code.memory import delete_memory, load_memories, save_memory, GLOBAL_MEMORY_DIR, PROJECT_MEMORY_DIR
+                from rooster_code.memory import (
+                    _project_memory_dir,
+                    delete_memory,
+                    load_memories,
+                    save_memory,
+                    GLOBAL_MEMORY_DIR,
+                )
                 subcmd = command.args[0] if command.args else ""
                 if subcmd == "add" and len(command.args) >= 2:
                     name = command.args[1]
@@ -1104,15 +1110,18 @@ async def run_chat(config) -> int:
                             desc_parts.append(rest[i])
                             i += 1
                         desc = " ".join(desc_parts)
-                        rest = [a for j, a in enumerate(rest) if j < idx or j >= i]
+                        rest = [a for j, a in enumerate(rest) if j < idx or j > i]
                     content = " ".join(rest) if rest else ""
+                    if not content.strip():
+                        render_notice(console, "Error", "Usage: /memory add <name> <content>", "red")
+                        continue
                     try:
-                        file_path = save_memory(name, content, description=desc)
+                        file_path = save_memory(name, content, description=desc, project_cwd=config.cwd or None)
                         render_notice(console, "Memory Saved", f"'{name}' saved to {file_path}", "green")
                     except OSError as exc:
                         render_notice(console, "Error", f"Could not save memory: {exc}", "red")
                 elif subcmd == "forget" and len(command.args) >= 2:
-                    deleted = delete_memory(command.args[1])
+                    deleted = delete_memory(command.args[1], project_cwd=config.cwd or None)
                     if deleted:
                         render_notice(console, "Memory Forgotten", f"Deleted: {deleted}", "green")
                     else:
@@ -1120,7 +1129,7 @@ async def run_chat(config) -> int:
                 elif subcmd == "show" and len(command.args) >= 2:
                     from rooster_code.memory import _slugify
                     slug = _slugify(command.args[1])
-                    memories = [m for m in load_memories() if _slugify(m["name"]) == slug]
+                    memories = [m for m in load_memories(project_cwd=config.cwd or None) if _slugify(m["name"]) == slug]
                     if len(memories) > 1:
                         render_notice(console, "Memory",
                                       f"Multiple memories match '{command.args[1]}'. "
@@ -1133,7 +1142,7 @@ async def run_chat(config) -> int:
                     else:
                         render_notice(console, "Memory", f"No memory named '{command.args[1]}' found.", "yellow")
                 elif subcmd == "list":
-                    memories = load_memories()
+                    memories = load_memories(project_cwd=config.cwd or None)
                     if memories:
                         lines = [f"{m['name']} — {m['description']}" for m in memories]
                         render_notice(console, "Memories", "\n".join(lines), "blue")
@@ -1141,10 +1150,11 @@ async def run_chat(config) -> int:
                         render_notice(console, "Memories", "No memories saved.", "dim")
                 else:
                     lines = []
+                    project_memory_dir = _project_memory_dir(config.cwd or None)
                     if GLOBAL_MEMORY_DIR.is_dir():
                         lines.append(f"Global: {GLOBAL_MEMORY_DIR}")
-                    if PROJECT_MEMORY_DIR.is_dir():
-                        lines.append(f"Project: {PROJECT_MEMORY_DIR}")
+                    if project_memory_dir.is_dir():
+                        lines.append(f"Project: {project_memory_dir}")
                     if not lines:
                         lines.append("No memory directories. Use /memory add <name> <content> to create one.")
                     render_notice(console, "Memory", "\n".join(lines), "blue")

@@ -40,13 +40,20 @@ class SaveMemoryTool(BaseTool):
         name = str(input.get("name", "")).strip()
         content = str(input.get("content", "")).strip()
         description = str(input.get("description", "")).strip()
-        global_scope = bool(input.get("global_scope", False))
+        raw_global_scope = input.get("global_scope", False)
+        if isinstance(raw_global_scope, bool):
+            global_scope = raw_global_scope
+        elif isinstance(raw_global_scope, str):
+            global_scope = raw_global_scope.strip().lower() in {"1", "true", "yes", "on"}
+        else:
+            global_scope = bool(raw_global_scope)
 
         if not name or not content:
             return ToolResult(tool_use_id="", content="Error: name and content are required", is_error=True)
 
         try:
-            file_path = save_memory(name, content, description, global_scope=global_scope)
+            project_cwd = context.cwd or None
+            file_path = save_memory(name, content, description, global_scope=global_scope, project_cwd=project_cwd)
             scope = "global" if global_scope else "project"
             return ToolResult(
                 tool_use_id="",

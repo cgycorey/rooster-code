@@ -470,7 +470,7 @@ def _agent_context_prompt(
             if lines:
                 lines.append("")
             lines.append(goal_section.strip())
-        memory_section = build_memory_prompt_section()
+        memory_section = build_memory_prompt_section(project_cwd=config.cwd or None)
         if memory_section:
             if lines:
                 lines.append("")
@@ -957,6 +957,13 @@ def _create_sdk_agent(
     tracker = TurnTracker()
     setattr(agent, "_rooster_code_config", config)
 
+    def save_memory_allowed() -> bool:
+        if config.allowed_tools is not None and "SaveMemory" not in config.allowed_tools:
+            return False
+        if config.disallowed_tools is not None and "SaveMemory" in config.disallowed_tools:
+            return False
+        return True
+
     if hasattr(agent, "query"):
         original_query = agent.query
 
@@ -1066,7 +1073,7 @@ def _create_sdk_agent(
                     new_pool.append(RuntimeTraceTool(tool, tracker))
             if not replaced:
                 new_pool.append(RuntimeAgentTool(lambda input, context: _run_subagent(config, input, context), tracker))
-            if include_runtime_agent_tool:
+            if include_runtime_agent_tool and save_memory_allowed():
                 new_pool.append(RuntimeTraceTool(SaveMemoryTool(), tracker))
             agent._tool_pool = new_pool
             engine = getattr(agent, "_engine", None)

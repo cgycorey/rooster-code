@@ -142,6 +142,57 @@ def test_parse_empty_quoted_arg() -> None:
     assert cmd.args == [""]
 
 
+def test_run_chat_memory_add_requires_content(monkeypatch, tmp_path) -> None:
+    notices: list[tuple[str, str, str]] = []
+    prompts = iter(["/memory add NameOnly", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(
+        cli,
+        "render_notice",
+        lambda console, title, message, style="yellow": notices.append((title, message, style)),
+    )
+    monkeypatch.setattr("rooster_code.memory.PROJECT_MEMORY_DIR", tmp_path / "memory")
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert ("Error", "Usage: /memory add <name> <content>", "red") in notices
+    assert not (tmp_path / "memory").exists()
+
+
+def test_run_chat_memory_without_subcommand_uses_config_cwd(monkeypatch, tmp_path) -> None:
+    notices: list[tuple[str, str, str]] = []
+    project = tmp_path / "project"
+    memory_dir = project / ".rooster-code" / "memory"
+    memory_dir.mkdir(parents=True)
+    prompts = iter(["/memory", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(
+        cli,
+        "render_notice",
+        lambda console, title, message, style="yellow": notices.append((title, message, style)),
+    )
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2", cwd=str(project))))
+
+    assert exit_code == 0
+    assert ("Memory", f"Project: {memory_dir}", "blue") in notices
+
+
 def test_run_chat_exits_cleanly(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
