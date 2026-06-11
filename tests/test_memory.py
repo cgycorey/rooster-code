@@ -232,8 +232,9 @@ def test_memory_prompt_section_escapes_memory_open_tag() -> None:
             "rooster_code.memory.GLOBAL_MEMORY_DIR", Path(tmp2)
         ):
             section = build_memory_prompt_section()
-        # The one real <memory> opening tag should remain; injected one is escaped
+        # The one real <memory> and </memory> should remain; injected ones are escaped
         assert section.count("<memory>") == 1
+        assert section.count("</memory>") == 1
 
 
 def test_memory_prompt_section_does_not_inject_metadata_outside_memory_tags() -> None:
