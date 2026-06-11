@@ -165,6 +165,7 @@ def load_memories(*, project_cwd: str | Path | None = None) -> list[dict[str, st
 
 
 def _escape_memory_content(value: str) -> str:
+    value = value.replace("<memory>", "<\\/memory>")
     return value.replace("</memory>", "<\\/memory>")
 
 
