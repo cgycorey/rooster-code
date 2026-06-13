@@ -1212,6 +1212,23 @@ async def run_chat(config) -> int:
                     if not lines:
                         lines.append("No memory directories. Use /memory add <name> <content> to create one.")
                     render_notice(console, "Memory", "\n".join(lines), "blue")
+
+            if command.name == "skill":
+                if command.args:
+                    skill_name = command.args[0]
+                    available_skills = set(list_skill_names())
+                    if skill_name not in available_skills:
+                        render_notice(console, "Error", f"Unknown skill '{skill_name}'. Available: {', '.join(sorted(available_skills))}", "red")
+                        continue
+                    render_agent_panel(console, "Skill Started", skill_name, "blue")
+                    await _run_query_with_interrupt(
+                        stream_skill_events(config, agent, skill_name, " ".join(command.args[1:])),
+                        omit_duplicate_result=True,
+                        show_activity_trace=True,
+                    )
+                    _poll_and_render_notifications()
+                else:
+                    render_state(console, "Skills", {"skills": list_skill_names()})
                 continue
             available_skills = set(list_skill_names())
             if command.name in available_skills:
