@@ -1146,7 +1146,10 @@ async def run_chat(config) -> int:
                     GLOBAL_MEMORY_DIR,
                 )
                 subcmd = command.args[0] if command.args else ""
-                if subcmd == "add" and len(command.args) >= 2:
+                if subcmd == "add":
+                    if len(command.args) < 2:
+                        render_notice(console, "Error", "Usage: /memory add <name> <content> [--desc <description>]", "red")
+                        continue
                     name = command.args[1]
                     rest = command.args[2:]
                     desc = ""

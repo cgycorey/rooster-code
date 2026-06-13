@@ -636,6 +636,8 @@ class TeamManager:
             self._pool._mailboxes.pop(member_name, None)
             self._pool._locks.pop(member_name, None)
             self._pool._unhealthy.discard(member_name)
+            self._pool._busy.discard(member_name)
+            self._member_definitions.pop(member_name, None)
             raise
         # Re-apply orchestrator prompt so it sees the updated member list
         if hasattr(orchestrator, "_options"):
@@ -649,11 +651,16 @@ class TeamManager:
         if not self._pool.has_member(member_name):
             raise RuntimeError(f"Member '{member_name}' is not in the team.")
 
-        # Cancel in-flight tasks for this member first (prevents dangling asyncio.Tasks)
+        # Remove from members first to block new task creation (wake_for_messages,
+        # TeamDispatchTool check pool._members) before cancelling in-flight tasks.
+        member_agent = self._pool._members.pop(member_name, None)
+        self._member_definitions.pop(member_name, None)
+        self._recovery_locks.pop(member_name, None)
+
+        # Now cancel in-flight tasks (no new tasks can be created since _members check fails)
         await self._pool.cancel_member_tasks(member_name)
 
-        # Close and remove the agent
-        member_agent = self._pool._members.pop(member_name, None)
+        # Close and clean up the removed agent
         if member_agent is not None:
             with contextlib.suppress(Exception):
                 await member_agent.close()
@@ -661,8 +668,6 @@ class TeamManager:
         self._pool._locks.pop(member_name, None)
         self._pool._unhealthy.discard(member_name)
         self._pool._busy.discard(member_name)
-        self._member_definitions.pop(member_name, None)
-        self._recovery_locks.pop(member_name, None)
 
         # Re-apply orchestrator prompt so it sees the updated member list
         if hasattr(orchestrator, "_options"):
