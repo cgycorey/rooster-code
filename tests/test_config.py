@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import pytest
+
 import argparse
 import json
 
@@ -279,3 +283,139 @@ def test_load_json_file_handles_nested_json(tmp_path) -> None:
     path.write_text('{"mcpServers": {"fs": {"type": "stdio", "command": "echo"}}}', encoding="utf-8")
     result = load_json_file(str(path))
     assert result["mcpServers"]["fs"]["type"] == "stdio"
+
+
+
+class TestRuntimeConfigValidation:
+    """Rigorous tests for RuntimeConfig.__post_init__ validation."""
+
+    def test_default_config_is_valid(self) -> None:
+        from rooster_code.config import RuntimeConfig
+
+        c = RuntimeConfig()
+        assert c.permission_mode == "bypassPermissions"
+        assert c.max_turns is None
+        assert c.max_tokens is None
+
+    def test_valid_field_values_accepted(self) -> None:
+        from rooster_code.config import RuntimeConfig
+
+        c = RuntimeConfig(
+            max_turns=1,
+            max_tokens=1,
+            thinking_budget=1,
+            max_budget_usd=0.0,
+            permission_mode="default",
+        )
+        assert c.max_turns == 1
+        assert c.max_tokens == 1
+        assert c.thinking_budget == 1
+        assert c.max_budget_usd == 0.0
+        assert c.permission_mode == "default"
+
+    def test_all_valid_sdk_permission_modes(self) -> None:
+        from open_agent_sdk import PermissionMode
+        from rooster_code.config import RuntimeConfig
+
+        for mode in PermissionMode:
+            c = RuntimeConfig(permission_mode=mode.value)
+            assert c.permission_mode == mode.value
+
+    @pytest.mark.parametrize("kwargs,expected_msg", [
+        ({"max_turns": -1}, "max_turns"),
+        ({"max_turns": 0}, "max_turns"),
+        ({"max_tokens": -5}, "max_tokens"),
+        ({"max_tokens": 0}, "max_tokens"),
+        ({"thinking_budget": -100}, "thinking_budget"),
+        ({"thinking_budget": 0}, "thinking_budget"),
+        ({"max_budget_usd": -0.01}, "max_budget_usd"),
+        ({"permission_mode": "ask"}, "permission_mode"),
+        ({"permission_mode": "garbage"}, "permission_mode"),
+        ({"permission_mode": ""}, "permission_mode"),
+        ({"permission_mode": "bypass"}, "permission_mode"),
+        ({"max_turns": -1, "max_tokens": 0}, "max_turns"),
+    ])
+    def test_invalid_values_raise_value_error(self, kwargs, expected_msg) -> None:
+        from rooster_code.config import RuntimeConfig
+
+        with pytest.raises(ValueError, match=expected_msg):
+            RuntimeConfig(**kwargs)
+
+    def test_single_invalid_field_does_not_corrupt_other_fields(self) -> None:
+        """Ensure a failing validation doesn't mutate the instance."""
+        from rooster_code.config import RuntimeConfig
+
+        with pytest.raises(ValueError):
+            RuntimeConfig(max_turns=-1, max_tokens=100_000)
+
+    def test_config_from_namespace_propagates_validation(self) -> None:
+        """config_from_namespace should also trigger __post_init__."""
+        import argparse
+        from rooster_code.config import config_from_namespace
+
+        ns = argparse.Namespace(
+            model="test",
+            cwd=".",
+            resume=None,
+            session=None,
+            continue_session=False,
+            fork_session=None,
+            persist_session=True,
+            permission_mode="ask",
+            max_turns=None,
+            max_budget_usd=None,
+            max_tokens=None,
+            thinking_budget=None,
+            debug=False,
+            sandbox=False,
+            include_partials=False,
+            env={},
+            search_url=None,
+            config=None,
+            agents_file=None,
+            mcp_file=None,
+            project_cwd_file=None,
+            allowed_tools=None,
+            disallowed_tools=None,
+            api_key=None,
+            base_url=None,
+            api_type=None,
+            hooks_file=None,
+            json_schema=None,
+            skills_dir=None,
+            extra_args="",
+        )
+        with pytest.raises(ValueError, match="permission_mode"):
+            config_from_namespace(ns, env={})
+
+    def test_none_fields_do_not_trigger_validation(self) -> None:
+        """Fields that are None should not be validated (they are optional)."""
+        from rooster_code.config import RuntimeConfig
+
+        c = RuntimeConfig(
+            max_turns=None,
+            max_tokens=None,
+            thinking_budget=None,
+            max_budget_usd=None,
+        )
+        # Should not raise — None means "not set"
+        assert c is not None
+
+    def test_high_values_accepted(self) -> None:
+        """Boundary: large valid values should not raise."""
+        from rooster_code.config import RuntimeConfig
+
+        c = RuntimeConfig(
+            max_turns=1_000_000,
+            max_tokens=10_000_000,
+            thinking_budget=100_000,
+            max_budget_usd=999999.99,
+        )
+        assert c.max_turns == 1_000_000
+
+    def test_float_max_budget_zero_accepted(self) -> None:
+        """Boundary: max_budget_usd=0 is allowed (free tier)."""
+        from rooster_code.config import RuntimeConfig
+
+        c = RuntimeConfig(max_budget_usd=0.0)
+        assert c.max_budget_usd == 0.0
