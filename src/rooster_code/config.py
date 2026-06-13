@@ -47,6 +47,22 @@ class RuntimeConfig:
     skills_dir: str | None = None
     extra_args: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        """Validate config fields on construction."""
+        if self.max_turns is not None and self.max_turns < 1:
+            raise ValueError(f"max_turns must be >= 1, got {self.max_turns}")
+        if self.max_tokens is not None and self.max_tokens < 1:
+            raise ValueError(f"max_tokens must be >= 1, got {self.max_tokens}")
+        if self.thinking_budget is not None and self.thinking_budget < 1:
+            raise ValueError(f"thinking_budget must be >= 1, got {self.thinking_budget}")
+        if self.max_budget_usd is not None and self.max_budget_usd < 0:
+            raise ValueError(f"max_budget_usd must be >= 0, got {self.max_budget_usd}")
+        if self.permission_mode is not None:
+            from open_agent_sdk import PermissionMode
+            valid = {m.value for m in PermissionMode}
+            if self.permission_mode not in valid:
+                raise ValueError(f"permission_mode must be one of {sorted(valid)}, got '{self.permission_mode}'")
+
 
 def load_dotenv_env(cwd: str | None = None) -> dict[str, str]:
     path = os.path.join(cwd, ".env") if cwd else ".env"
