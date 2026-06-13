@@ -990,11 +990,19 @@ async def run_chat(config) -> int:
                 continue
             if command.name == "permission":
                 if command.args:
-                    config.permission_mode = command.args[0]
-                    await agent.set_permission_mode(command.args[0])
-                    render_notice(console, "Permission", f"Permission mode set to {command.args[0]}", "green")
+                    mode = command.args[0]
+                    from open_agent_sdk import PermissionMode
+                    valid_modes = {m.value for m in PermissionMode}
+                    if mode not in valid_modes:
+                        render_notice(console, "Error", f"Invalid permission mode '{mode}'. Valid modes: {', '.join(sorted(valid_modes))}", "red")
+                        continue
+                    config.permission_mode = mode
+                    await agent.set_permission_mode(mode)
+                    render_notice(console, "Permission", f"Permission mode set to {mode}", "green")
                 else:
-                    render_notice(console, "Permission", f"Current: {config.permission_mode}\nModes: ask, auto, bypassPermissions\nUsage: /permission <mode>", "blue")
+                    from open_agent_sdk import PermissionMode
+                    valid_modes = sorted(m.value for m in PermissionMode)
+                    render_notice(console, "Permission", f"Current: {config.permission_mode}\nModes: {', '.join(valid_modes)}\nUsage: /permission <mode>", "blue")
                 continue
             if command.name == "tools":
                 render_tool_table(console, list_tool_names())
