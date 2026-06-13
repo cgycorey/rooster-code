@@ -1013,7 +1013,12 @@ async def run_chat(config) -> int:
                     render_notice(console, "Error", str(exc), "red")
                 continue
             if command.name == "task-output" and command.args:
-                render_state(console, "Task Output", {"task_id": command.args[0], "output": await get_task_output(command.args[0])})
+                task_id = command.args[0]
+                output = await get_task_output(task_id)
+                if output:
+                    render_state(console, "Task Output", {"task_id": task_id, "output": output})
+                else:
+                    render_notice(console, "Task Output", f"Task '{task_id}' has no output yet. It may still be running.", "yellow")
                 continue
             if command.name == "task-stop" and command.args:
                 render_state(console, "Task Stopped", {"task_id": command.args[0], "stopped": await stop_task(command.args[0])})
@@ -1041,9 +1046,17 @@ async def run_chat(config) -> int:
                 )
                 continue
             if command.name == "resume" and command.args:
+                session_id = command.args[0]
+                try:
+                    session_info = await get_session_info(session_id)
+                except Exception:
+                    session_info = {"session_id": session_id}  # daemon unavailable, allow resume
+                if session_info is None:
+                    render_notice(console, "Error", f"Session '{session_id}' not found. Use /sessions to list available sessions.", "red")
+                    continue
                 with contextlib.suppress(Exception):
                     await agent.close()
-                config.resume = command.args[0]
+                config.resume = session_id
                 agent = create_runtime_agent(config)
                 if hasattr(agent, "_initialize") and callable(agent._initialize):
                     await agent._initialize()
@@ -1053,7 +1066,7 @@ async def run_chat(config) -> int:
                 set_runtime_team_bridge(team_manager, agent)
                 if team_manager.is_active():
                     await team_manager.ensure_orchestrator_team_state(agent)
-                render_notice(console, "Session", f"Resumed {command.args[0]}", "green")
+                render_notice(console, "Session", f"Resumed {session_id}", "green")
                 continue
             if command.name == "agents":
                 _handle_agents_command(console, command, config, team_manager)
@@ -1140,7 +1153,10 @@ async def run_chat(config) -> int:
                         rest = [a for j, a in enumerate(rest) if j < idx or j > i]
                     content = " ".join(rest) if rest else ""
                     if not content.strip():
-                        render_notice(console, "Error", "Usage: /memory add <name> <content>", "red")
+                        if desc:
+                            render_notice(console, "Error", "Content must come before --desc. Usage: /memory add <name> <content> [--desc <description>]", "red")
+                        else:
+                            render_notice(console, "Error", "Usage: /memory add <name> <content>", "red")
                         continue
                     try:
                         file_path = save_memory(name, content, description=desc, project_cwd=config.cwd or None)

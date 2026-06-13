@@ -510,7 +510,6 @@ def test_run_chat_shows_task_output(monkeypatch) -> None:
     monkeypatch.setattr(cli, "get_task_output", fake_get_task_output)
     monkeypatch.setattr(cli, "render_state", lambda console, title, data: captured.setdefault("state", (title, data)))
     monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
-
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
 
     assert exit_code == 0
@@ -1167,6 +1166,9 @@ def test_run_chat_resumes_a_different_session(monkeypatch) -> None:
     async def fake_enforce_session_retention(limit=20):
         return None
     monkeypatch.setattr(cli, "enforce_session_retention", fake_enforce_session_retention)
+    async def fake_get_session_info(session_id):
+        return {"session_id": session_id}
+    monkeypatch.setattr(cli, "get_session_info", fake_get_session_info)
 
     config = RuntimeConfig(model="m2", resume="start")
     exit_code = cli.asyncio.run(cli.run_chat(config))
@@ -1213,7 +1215,9 @@ def test_run_chat_resume_reapplies_team_state_to_new_agent(monkeypatch) -> None:
     async def fake_enforce_session_retention(limit=20):
         return None
     monkeypatch.setattr(cli, "enforce_session_retention", fake_enforce_session_retention)
-
+    async def fake_get_session_info(session_id):
+        return {"session_id": session_id}
+    monkeypatch.setattr(cli, "get_session_info", fake_get_session_info)
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2", resume="start")))
 
     assert exit_code == 0
