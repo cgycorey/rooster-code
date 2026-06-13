@@ -4,7 +4,7 @@ import asyncio
 import tempfile
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from open_agent_sdk.types import ToolContext
@@ -12,6 +12,7 @@ from open_agent_sdk.tools import clear_tasks, get_all_tasks
 
 from rooster_code.config import RuntimeConfig
 from rooster_code.team import (
+    MAX_TEAM_MEMBERS,
     MAILBOX_DISPATCH_TASK,
     AgentPool,
     SDKTeamCreateBridgeTool,
@@ -2215,5 +2216,121 @@ def test_dispatch_tool_skips_task_creation_for_inactive_team():
 
         assert result.is_error
         assert not create_called, "Should not have created a background task for inactive team"
+
+    asyncio.run(_run())
+
+# ---- TeamManager.add_member / remove_member tests ----
+
+
+def test_add_member_no_active_team():
+    manager = TeamManager()
+    config = RuntimeConfig(model="m", agents={})
+    with pytest.raises(RuntimeError, match="No team is active"):
+        asyncio.run(manager.add_member("reviewer", config, MagicMock()))
+
+
+def test_add_member_undefined_agent():
+    manager = TeamManager()
+    manager._active = True
+    manager._pool = AgentPool()
+    manager._config = MagicMock()
+    config = RuntimeConfig(model="m", agents={})
+    with pytest.raises(RuntimeError, match="not defined"):
+        asyncio.run(manager.add_member("ghost", config, MagicMock()))
+
+
+def test_add_member_already_in_team():
+    manager = TeamManager()
+    manager._active = True
+    pool = AgentPool()
+    pool._members["reviewer"] = MagicMock()
+    manager._pool = pool
+    manager._config = MagicMock()
+    config = RuntimeConfig(model="m", agents={"reviewer": {"description": "rev"}})
+    with pytest.raises(RuntimeError, match="already in the team"):
+        asyncio.run(manager.add_member("reviewer", config, MagicMock()))
+
+
+def test_add_member_exceeds_max_size():
+    manager = TeamManager()
+    manager._active = True
+    pool = AgentPool()
+    for i in range(MAX_TEAM_MEMBERS):
+        pool._members[f"m{i}"] = MagicMock()
+    manager._pool = pool
+    manager._config = MagicMock()
+    config = RuntimeConfig(model="m", agents={"extra": {"description": "extra"}})
+    with pytest.raises(RuntimeError, match="more than"):
+        asyncio.run(manager.add_member("extra", config, MagicMock()))
+
+
+def test_remove_member_no_active_team():
+    manager = TeamManager()
+    with pytest.raises(RuntimeError, match="No team is active"):
+        asyncio.run(manager.remove_member("reviewer", MagicMock()))
+
+
+def test_remove_member_not_in_team():
+    manager = TeamManager()
+    manager._active = True
+    manager._pool = AgentPool()
+    with pytest.raises(RuntimeError, match="not in the team"):
+        asyncio.run(manager.remove_member("ghost", MagicMock()))
+
+
+def test_remove_member_success():
+    """Remove a member from an active team — agent closed, entries cleaned."""
+    manager = TeamManager()
+    manager._active = True
+    pool = AgentPool()
+    mock_agent = AsyncMock()
+    pool._members["reviewer"] = mock_agent
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._locks["reviewer"] = asyncio.Lock()
+    pool._busy.add("reviewer")
+    manager._pool = pool
+    manager._member_definitions["reviewer"] = {"description": "rev"}
+    manager._recovery_locks["reviewer"] = asyncio.Lock()
+
+    asyncio.run(manager.remove_member("reviewer", MagicMock()))
+
+    assert "reviewer" not in pool._members
+    assert "reviewer" not in pool._mailboxes
+    assert "reviewer" not in pool._locks
+    assert "reviewer" not in pool._busy
+    assert "reviewer" not in pool._unhealthy
+    assert "reviewer" not in manager._member_definitions
+    assert "reviewer" not in manager._recovery_locks
+    mock_agent.close.assert_awaited_once()
+
+
+def test_remove_member_cancels_in_flight_tasks():
+    """Remove a member with an active dispatch task — task should be cancelled."""
+    manager = TeamManager()
+    manager._active = True
+    pool = AgentPool()
+    mock_agent = MagicMock()
+    pool._members["reviewer"] = mock_agent
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._locks["reviewer"] = asyncio.Lock()
+    manager._pool = pool
+    manager._member_definitions["reviewer"] = {"description": "rev"}
+    manager._recovery_locks["reviewer"] = asyncio.Lock()
+
+    async def _run():
+        # Create a never-completing task for the member
+        blocker = asyncio.Event()
+        async def _stall():
+            await blocker.wait()  # will be cancelled
+        task = asyncio.create_task(_stall())
+        pool._dispatch_tasks.add(task)
+        pool._task_member[task] = "reviewer"
+
+        # Remove member — should cancel the task
+        await manager.remove_member("reviewer", MagicMock())
+
+        # Task should be cancelled
+        assert task.cancelled() or task.done()
+        assert "reviewer" not in pool._members
 
     asyncio.run(_run())

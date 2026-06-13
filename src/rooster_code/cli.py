@@ -643,10 +643,6 @@ def _handle_agents_command(console, command, config, team_manager):
         render_agents_list(console, agents)
         return
 
-    if subcmd == "add" and team_manager.is_active():
-        render_notice(console, "Error", "Cannot add agents while a team is active. Use /team stop first.", "red")
-        return
-
     if subcmd == "add" and len(command.args) >= 3:
         name = command.args[1]
         description = " ".join(command.args[2:])
@@ -711,6 +707,28 @@ async def _handle_team_command(console, command, config, team_manager, agent, ab
             render_notice(console, "Error", f"Failed to create team: {exc}", "red")
         return None
 
+    if subcmd == "add" and len(command.args) >= 2:
+        member_name = command.args[1]
+        try:
+            await team_manager.add_member(member_name, config, agent)
+            render_notice(console, "Member Added", f"'{member_name}' added to the team.", "green")
+        except RuntimeError as exc:
+            render_notice(console, "Error", str(exc), "red")
+        except Exception as exc:
+            render_notice(console, "Error", f"Failed to add member: {exc}", "red")
+        return None
+
+    if subcmd == "remove" and len(command.args) >= 2:
+        member_name = command.args[1]
+        try:
+            await team_manager.remove_member(member_name, agent)
+            render_notice(console, "Member Removed", f"'{member_name}' removed from the team.", "green")
+        except RuntimeError as exc:
+            render_notice(console, "Error", str(exc), "red")
+        except Exception as exc:
+            render_notice(console, "Error", f"Failed to remove member: {exc}", "red")
+        return None
+
     if subcmd == "status":
         try:
             tasks = _list_team_tasks()
@@ -756,11 +774,14 @@ async def _handle_team_command(console, command, config, team_manager, agent, ab
         return None
 
     if subcmd == "stop":
-        try:
-            await team_manager.close_team(agent)
-            render_notice(console, "Team Stopped", "Team disbanded.", "green")
-        except Exception as exc:
-            render_notice(console, "Error", f"Failed to stop team: {exc}", "red")
+        if not team_manager.is_active():
+            render_notice(console, "Team", "No team is active.", "yellow")
+        else:
+            try:
+                await team_manager.close_team(agent)
+                render_notice(console, "Team Stopped", "Team disbanded.", "green")
+            except Exception as exc:
+                render_notice(console, "Error", f"Failed to stop team: {exc}", "red")
         return None
 
     render_notice(console, "Error", f"Unknown /team subcommand: {subcmd}", "red")
@@ -959,15 +980,21 @@ async def run_chat(config) -> int:
             if command.name == "help":
                 render_help(console)
                 continue
-            if command.name == "model" and command.args:
-                config.model = command.args[0]
-                await agent.set_model(command.args[0])
-                render_notice(console, "Model", f"Switched to {command.args[0]}", "green")
+            if command.name == "model":
+                if command.args:
+                    config.model = command.args[0]
+                    await agent.set_model(command.args[0])
+                    render_notice(console, "Model", f"Switched to {command.args[0]}", "green")
+                else:
+                    render_notice(console, "Model", f"Current: {config.model or 'default'}\nUsage: /model <name>", "blue")
                 continue
-            if command.name == "permission" and command.args:
-                config.permission_mode = command.args[0]
-                await agent.set_permission_mode(command.args[0])
-                render_notice(console, "Permission", f"Permission mode set to {command.args[0]}", "green")
+            if command.name == "permission":
+                if command.args:
+                    config.permission_mode = command.args[0]
+                    await agent.set_permission_mode(command.args[0])
+                    render_notice(console, "Permission", f"Permission mode set to {command.args[0]}", "green")
+                else:
+                    render_notice(console, "Permission", f"Current: {config.permission_mode}\nModes: ask, auto, bypassPermissions\nUsage: /permission <mode>", "blue")
                 continue
             if command.name == "tools":
                 render_tool_table(console, list_tool_names())
@@ -1118,7 +1145,7 @@ async def run_chat(config) -> int:
                     try:
                         file_path = save_memory(name, content, description=desc, project_cwd=config.cwd or None)
                         render_notice(console, "Memory Saved", f"'{name}' saved to {file_path}", "green")
-                    except OSError as exc:
+                    except (OSError, ValueError) as exc:
                         render_notice(console, "Error", f"Could not save memory: {exc}", "red")
                 elif subcmd == "forget" and len(command.args) >= 2:
                     deleted = delete_memory(command.args[1], project_cwd=config.cwd or None)

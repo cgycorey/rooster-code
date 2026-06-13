@@ -20,6 +20,7 @@ GLOBAL_MEMORY_DIR = Path.home() / ".rooster-code" / "memory"
 PROJECT_MEMORY_DIR = Path(".rooster-code") / "memory"
 MEMORY_INDEX = "MEMORY.md"
 MEMORY_MAX_COUNT = 20
+MEMORY_MAX_SIZE = 100_000  # per-memory content byte cap
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 _SENTINEL = "\x00"  # placeholder for \\ during YAML unescape (NUL is illegal in YAML)
@@ -49,6 +50,8 @@ def _parse_yaml_value(raw: str) -> str:
         inner = inner.replace(r"\\", _SENTINEL)
         inner = inner.replace('\\"', '"')
         inner = inner.replace("\\n", "\n")
+        inner = inner.replace("\\r", "\r")
+        inner = inner.replace("\\t", "\t")
         inner = inner.replace(_SENTINEL, "\\")
         return inner
     if len(val) >= 2 and val[0] == "'" and val[-1] == "'":
@@ -113,13 +116,14 @@ def _load_memory_dir(directory: Path) -> list[dict[str, str]]:
             if text is None:
                 continue
             fields, body = _parse_frontmatter(text)
+            if len(body.encode("utf-8")) > MEMORY_MAX_SIZE:
+                continue
             name = fields.get("name", entry.stem)
             desc = fields.get("description", "")
             memories.append({"name": name, "description": desc, "content": body})
     except OSError:
         log.exception("Could not iterate memory directory %s", directory)
     return memories
-
 
 def _find_memory_file(directory: Path, name: str) -> Path | None:
     """Find a memory file by its frontmatter name.
@@ -131,7 +135,7 @@ def _find_memory_file(directory: Path, name: str) -> Path | None:
         return None
     # Try current hashed slug first
     hashed = directory / f"{_slugify(name)}.md"
-    if hashed.is_file():
+    if hashed.is_file() and not hashed.is_symlink():
         return hashed
     # Fall back: scan for matching frontmatter name (backward compat)
     try:
@@ -163,10 +167,21 @@ def load_memories(*, project_cwd: str | Path | None = None) -> list[dict[str, st
     so truncation to MEMORY_MAX_COUNT favors project-relevant entries."""
     return _load_memory_dir(_project_memory_dir(project_cwd)) + _load_memory_dir(GLOBAL_MEMORY_DIR)
 
+_MEMORY_TAG_RE = re.compile(r"</?memory>", re.IGNORECASE)
+
 
 def _escape_memory_content(value: str) -> str:
-    value = value.replace("<memory>", "<\\/memory>")
-    return value.replace("</memory>", "<\\/memory>")
+    """Escape memory tags so user content cannot inject fake memory blocks."""
+    return _MEMORY_TAG_RE.sub(
+        lambda m: "&lt;" + m.group()[1:-1] + "&gt;",
+        value,
+    )
+
+
+def _escape_memory_metadata(value: str) -> str:
+    """Escape memory tags and control characters for single-line metadata fields."""
+    value = _escape_memory_content(value)
+    return value.replace("\n", "\\n").replace("\r", "\\r")
 
 
 def build_memory_prompt_section(*, project_cwd: str | Path | None = None) -> str:
@@ -190,9 +205,9 @@ def build_memory_prompt_section(*, project_cwd: str | Path | None = None) -> str
     for idx, mem in enumerate(all_memories, start=1):
         lines.append(f"\n## Memory {idx}")
         lines.append("<memory>")
-        lines.append(f"name: {_escape_memory_content(mem['name'])}")
+        lines.append(f"name: {_escape_memory_metadata(mem['name'])}")
         if mem["description"]:
-            lines.append(f"description: {_escape_memory_content(mem['description'])}")
+            lines.append(f"description: {_escape_memory_metadata(mem['description'])}")
         lines.append("")
         lines.append(_escape_memory_content(mem["content"]))
         lines.append("</memory>")
@@ -204,14 +219,13 @@ def _escape_yaml_value(value: str) -> str:
     or special characters, use a double-quoted string with escaping.
     Block scalars are intentionally avoided because _parse_frontmatter
     cannot parse them back."""
-    if "\n" in value:
-        # Use double-quoted with \n escape so the reader roundtrips
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    if "\n" in value or "\r" in value or "\t" in value:
+        # Use double-quoted with escape sequences so the reader roundtrips
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
         return '"' + escaped + '"'
     if any(c in value for c in (':', '#', '"', "'", '&', '*', '!', '>', '|', '%', '@', '`', '{', '}', '[', ']')):
         return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
     return value
-
 
 def save_memory(
     name: str,
@@ -232,11 +246,16 @@ def save_memory(
     target_dir.mkdir(parents=True, exist_ok=True)
     file_path = target_dir / f"{_slugify(name)}.md"
 
+    # Reject oversized content to prevent context window overflow
+    content_bytes = len(content.encode("utf-8"))
+    if content_bytes > MEMORY_MAX_SIZE:
+        raise ValueError(
+            f"Memory content exceeds maximum size of {MEMORY_MAX_SIZE} bytes "
+            f"(got {content_bytes} bytes)"
+        )
+
     # Find any pre-existing file (possibly old-style hashless) to clean up
     old_file = _find_memory_file(target_dir, name)
-    if old_file is not None and old_file != file_path:
-        # An old-style file exists — we'll replace it, then remove the old one
-        pass
 
     frontmatter = (
         f"---\n"
@@ -267,13 +286,20 @@ def save_memory(
     return file_path
 
 
-def delete_memory(name: str, *, project_cwd: str | Path | None = None) -> Path | None:
+def delete_memory(name: str, *, global_scope: bool = False, project_cwd: str | Path | None = None) -> Path | None:
     """Delete a memory file by name. Returns the path if deleted, None if not found.
 
     Uses _find_memory_file for backward-compatible filename resolution
     (old-style hashless slugs and new hash-suffixed slugs).
+
+    If global_scope is True, only searches the global memory directory.
+    If global_scope is False (default), only searches the project memory directory.
     """
-    for d in (_project_memory_dir(project_cwd), GLOBAL_MEMORY_DIR):
+    if global_scope:
+        dirs = [GLOBAL_MEMORY_DIR]
+    else:
+        dirs = [_project_memory_dir(project_cwd)]
+    for d in dirs:
         fp = _find_memory_file(d, name)
         if fp is None:
             continue

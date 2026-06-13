@@ -186,6 +186,9 @@ def test_run_chat_memory_without_subcommand_uses_config_cwd(monkeypatch, tmp_pat
         lambda console, title, message, style="yellow": notices.append((title, message, style)),
     )
     monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+    # Patch GLOBAL_MEMORY_DIR so the test is independent of the real system state
+    import rooster_code.memory as mem_mod
+    monkeypatch.setattr(mem_mod, "GLOBAL_MEMORY_DIR", tmp_path / "no-global")
 
     exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2", cwd=str(project))))
 

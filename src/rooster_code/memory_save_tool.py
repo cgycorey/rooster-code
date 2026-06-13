@@ -59,5 +59,5 @@ class SaveMemoryTool(BaseTool):
                 tool_use_id="",
                 content=f"Memory '{name}' saved ({scope} scope) to {file_path}",
             )
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             return ToolResult(tool_use_id="", content=f"Error saving memory: {exc}", is_error=True)

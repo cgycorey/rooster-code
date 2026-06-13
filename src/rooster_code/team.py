@@ -71,6 +71,7 @@ class AgentPool:
         self._busy: set[str] = set()
         self._dispatch_tasks: set[asyncio.Task[None]] = set()
         self._message_dispatch_tasks: set[asyncio.Task[None]] = set()
+        self._task_member: dict[asyncio.Task[None], str] = {}
 
     @property
     def member_names(self) -> list[str]:
@@ -221,7 +222,9 @@ class AgentPool:
         try:
             task_handle = asyncio.create_task(_run_member())
             task_handle.add_done_callback(self._dispatch_tasks.discard)
+            task_handle.add_done_callback(lambda t: self._task_member.pop(t, None))
             self._dispatch_tasks.add(task_handle)
+            self._task_member[task_handle] = member
             _track_background_task(task_handle)
         except Exception:
             log.exception("Failed to create background task for member '%s'", member)
@@ -253,7 +256,18 @@ class AgentPool:
         task_handle = asyncio.create_task(_run())
         self._message_dispatch_tasks.add(task_handle)
         task_handle.add_done_callback(self._message_dispatch_tasks.discard)
+        task_handle.add_done_callback(lambda t: self._task_member.pop(t, None))
+        self._task_member[task_handle] = member
         return True
+
+    async def cancel_member_tasks(self, member: str) -> None:
+        """Cancel and await all tasks belonging to a specific member."""
+        member_tasks = [t for t, m in self._task_member.items() if m == member]
+        for task in member_tasks:
+            task.cancel()
+        for task in member_tasks:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
 
     def snapshot_mailboxes(self) -> dict[str, list[dict[str, Any]]]:
         snapshots: dict[str, list[dict[str, Any]]] = {}
@@ -304,6 +318,7 @@ class AgentPool:
         self._locks.clear()
         self._dispatch_tasks.clear()
         self._message_dispatch_tasks.clear()
+        self._task_member.clear()
         self._unhealthy.clear()
         self._busy.clear()
 
@@ -593,6 +608,68 @@ class TeamManager:
             self._original_append_prompt = ""
             self._active = False
             raise
+
+    async def add_member(self, member_name: str, config: Any, orchestrator: Any) -> None:
+        """Add a member to the active team at runtime."""
+        if not self._active or self._pool is None:
+            raise RuntimeError("No team is active. Use /team create first.")
+        if self._config is None:
+            raise RuntimeError("Team config not available.")
+        agents_def = config.agents
+        if not agents_def or member_name not in agents_def:
+            raise RuntimeError(f"Agent '{member_name}' is not defined. Use /agents add first.")
+        if self._pool.has_member(member_name):
+            raise RuntimeError(f"Member '{member_name}' is already in the team.")
+        current_count = len(self._pool._members)
+        if current_count + 1 > MAX_TEAM_MEMBERS:
+            raise RuntimeError(f"Team cannot have more than {MAX_TEAM_MEMBERS} members.")
+
+        definition = agents_def[member_name]
+        try:
+            await self._pool.create_member(member_name, definition, self._config, self._abort_signal)
+            self._member_definitions[member_name] = deepcopy(definition)
+            self._configure_member(member_name)
+        except Exception:
+            # Rollback: close and remove partially-added member from pool
+            agent = self._pool._members.pop(member_name, None)
+            if agent is not None:
+                with contextlib.suppress(Exception):
+                    await agent.close()
+            self._pool._mailboxes.pop(member_name, None)
+            self._pool._locks.pop(member_name, None)
+            self._pool._unhealthy.discard(member_name)
+            raise
+        # Re-apply orchestrator prompt so it sees the updated member list
+        if hasattr(orchestrator, "_options"):
+            orchestrator._options.append_system_prompt = self._team_prompt()
+        self._persist_snapshot()
+
+    async def remove_member(self, member_name: str, orchestrator: Any) -> None:
+        """Remove a member from the active team at runtime."""
+        if not self._active or self._pool is None:
+            raise RuntimeError("No team is active. Use /team create first.")
+        if not self._pool.has_member(member_name):
+            raise RuntimeError(f"Member '{member_name}' is not in the team.")
+
+        # Cancel in-flight tasks for this member first (prevents dangling asyncio.Tasks)
+        await self._pool.cancel_member_tasks(member_name)
+
+        # Close and remove the agent
+        member_agent = self._pool._members.pop(member_name, None)
+        if member_agent is not None:
+            with contextlib.suppress(Exception):
+                await member_agent.close()
+        self._pool._mailboxes.pop(member_name, None)
+        self._pool._locks.pop(member_name, None)
+        self._pool._unhealthy.discard(member_name)
+        self._pool._busy.discard(member_name)
+        self._member_definitions.pop(member_name, None)
+        self._recovery_locks.pop(member_name, None)
+
+        # Re-apply orchestrator prompt so it sees the updated member list
+        if hasattr(orchestrator, "_options"):
+            orchestrator._options.append_system_prompt = self._team_prompt()
+        self._persist_snapshot()
 
     async def dispatch(self, member: str, task: str) -> str:
         if not self._active or self._pool is None:

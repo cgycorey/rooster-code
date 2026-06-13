@@ -166,6 +166,8 @@ def render_help(console: Console) -> None:
     table.add_row("/agents remove <name>", "Remove an agent definition")
     table.add_row("/agents show <name>", "Show agent definition details")
     table.add_row("/team create <name> <members>", "Create a team with named agents")
+    table.add_row("/team add <name>", "Add a member to the active team")
+    table.add_row("/team remove <name>", "Remove a member from the active team")
     table.add_row("/team info", "Show team members and status")
     table.add_row("/team stop", "Disband team, close all member agents")
     table.add_row("/goal set <text>", "Set an active goal")
