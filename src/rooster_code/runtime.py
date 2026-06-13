@@ -422,6 +422,9 @@ def _build_subagent_config(
         disallowed_tools=disallowed_tools if isinstance(disallowed_tools, list) else config.disallowed_tools,
         max_turns=_max_turns,
         persist_session=False,
+        session_id=None,
+        resume=None,
+        fork_session=None,
     )
 
 

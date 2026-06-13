@@ -153,8 +153,6 @@ class AgentPool:
                 async with self._locks[member]:
                     agent = self._members[member]
                     task_text = task
-                    if any(kw in task.lower() for kw in _REVIEW_KEYWORDS):
-                        task_text = _REVIEW_GUIDANCE + task
                     task_with_messages = self._inject_mailbox(member, task_text)
                     try:
                         query_result = await agent.prompt(task_with_messages)
@@ -186,13 +184,14 @@ class AgentPool:
                     except Exception:
                         log.exception("Fallback status update also failed for %s", task_id)
             except asyncio.CancelledError:
-                await _update_background_subagent_task(
-                    task_id,
-                    status="cancelled",
-                    output="Cancelled",
-                    cwd=cwd,
-                    env=env,
-                )
+                with contextlib.suppress(Exception):
+                    await _update_background_subagent_task(
+                        task_id,
+                        status="cancelled",
+                        output="Cancelled",
+                        cwd=cwd,
+                        env=env,
+                    )
                 raise
             except Exception as exc:
                 log.exception("Team member '%s' failed for task %s", member, task_id)
@@ -302,7 +301,6 @@ class AgentPool:
             return task
         header = "\n".join(messages)
         return f"{header}\n\n{task}"
-
     async def close_all(self) -> None:
         all_tasks = list(self._dispatch_tasks) + list(self._message_dispatch_tasks)
         for task in all_tasks:
