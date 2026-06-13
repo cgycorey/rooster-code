@@ -153,6 +153,7 @@ def render_help(console: Console) -> None:
     table.add_row("/permission <mode>", "Update permission mode")
     table.add_row("/tools", "Show available tools")
     table.add_row("/skills", "Show available skills")
+    table.add_row("/skill <name>", "Run a skill by name")
     table.add_row("/tasks", "Show background task store")
     table.add_row("/bg <name> <prompt>", "Start a background subagent task")
     table.add_row("/agent-bg <name> <prompt>", "Start a background subagent task")

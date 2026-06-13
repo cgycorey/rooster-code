@@ -195,6 +195,35 @@ def test_run_chat_memory_without_subcommand_uses_config_cwd(monkeypatch, tmp_pat
     assert exit_code == 0
     assert ("Memory", f"Project: {memory_dir}", "blue") in notices
 
+def test_run_chat_memory_without_subcommand_does_not_fall_through(monkeypatch, tmp_path) -> None:
+    notices: list[tuple[str, str, str]] = []
+    project = tmp_path / "project"
+    memory_dir = project / ".rooster-code" / "memory"
+    memory_dir.mkdir(parents=True)
+    prompts = iter(["/memory", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(
+        cli,
+        "render_notice",
+        lambda console, title, message, style="yellow": notices.append((title, message, style)),
+    )
+    monkeypatch.setattr(cli, "list_skill_names", lambda: [])
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+    import rooster_code.memory as mem_mod
+    monkeypatch.setattr(mem_mod, "GLOBAL_MEMORY_DIR", tmp_path / "no-global")
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2", cwd=str(project))))
+
+    assert exit_code == 0
+    assert ("Memory", f"Project: {memory_dir}", "blue") in notices
+    assert ("Unknown command", "/memory", "red") not in notices
+
 
 def test_run_chat_exits_cleanly(monkeypatch) -> None:
     captured: dict[str, object] = {}
@@ -1053,10 +1082,71 @@ def test_run_chat_shows_skill_list(monkeypatch) -> None:
     assert captured["state"] == ("Skills", {"skills": ["commit", "explain"]})
     assert captured["closed"] is True
 
+def test_run_chat_skill_prefix_without_args_lists_skills(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/skill", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "list_skill_names", lambda: ["commit", "explain"])
+    monkeypatch.setattr(cli, "render_state", lambda console, title, state: captured.setdefault("state", (title, state)))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert captured["state"] == ("Skills", {"skills": ["commit", "explain"]})
+    assert captured["closed"] is True
+
 
 def test_run_chat_routes_skill_command(monkeypatch) -> None:
     captured: dict[str, object] = {}
     prompts = iter(["/plan add auth support", "/exit"])
+    panels: list[tuple[str, str]] = []
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_stream_skill_events(config, agent, skill_name: str, args: str):
+        captured["agent"] = agent
+        captured["skill_name"] = skill_name
+        captured["args"] = args
+        yield SDKMessage(type=SDKMessageType.SYSTEM, text="skill-start")
+        yield SDKMessage(type=SDKMessageType.RESULT, text="skill-result")
+
+    async def fake_render_event_stream(console, events, omit_duplicate_result: bool = False, show_activity_trace: bool = False, **_kwargs) -> None:
+        captured["omit_duplicate_result"] = omit_duplicate_result
+        captured["show_activity_trace"] = show_activity_trace
+        captured["messages"] = [event.type.value async for event in events]
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "list_skill_names", lambda: ["plan", "commit"])
+    monkeypatch.setattr(cli, "stream_skill_events", fake_stream_skill_events, raising=False)
+    monkeypatch.setattr(cli, "render_event_stream", fake_render_event_stream)
+    monkeypatch.setattr(cli, "render_agent_panel", lambda console, title, text, style: panels.append((title, text)))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert isinstance(captured["agent"], FakeAgent)
+    assert captured["skill_name"] == "plan"
+    assert captured["args"] == "add auth support"
+    assert panels == [("Skill Started", "plan")]
+    assert captured["omit_duplicate_result"] is True
+    assert captured["show_activity_trace"] is True
+    assert captured["messages"] == ["system", "result"]
+    assert captured["closed"] is True
+
+def test_run_chat_routes_skill_prefix_command(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/skill plan add auth support", "/exit"])
     panels: list[tuple[str, str]] = []
 
     class FakeAgent:
@@ -1115,6 +1205,27 @@ def test_run_chat_shows_unknown_skill_error(monkeypatch) -> None:
 
     assert exit_code == 0
     assert notices[0] == ("Unknown command", "/unknown do thing", "red")
+    assert captured["closed"] is True
+
+def test_run_chat_skill_prefix_unknown_skill_shows_error(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/skill unknown do thing", "/exit"])
+    notices: list[tuple[str, str, str]] = []
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "list_skill_names", lambda: ["plan", "commit"])
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert notices == [("Error", "Unknown skill 'unknown'. Available: commit, plan", "red")]
     assert captured["closed"] is True
 
 
@@ -1243,6 +1354,7 @@ def test_run_chat_help_renders_available_commands(monkeypatch) -> None:
     assert "Help" in output
     assert "/compact" in output
     assert "/skills" in output
+    assert "/skill <name>" in output
     assert "/tasks" in output
     assert "/bg" in output
     assert "/agent-bg" in output

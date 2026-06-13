@@ -1212,6 +1212,7 @@ async def run_chat(config) -> int:
                     if not lines:
                         lines.append("No memory directories. Use /memory add <name> <content> to create one.")
                     render_notice(console, "Memory", "\n".join(lines), "blue")
+                continue
 
             if command.name == "skill":
                 if command.args:
