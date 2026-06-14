@@ -284,7 +284,6 @@ class AgentPool:
 
     def _inject_mailbox(self, member: str, task: str) -> str:
         messages: list[str] = []
-        drained: list[dict[str, str]] = []
         mailbox = self._mailboxes[member]
         while True:
             try:
@@ -294,9 +293,6 @@ class AgentPool:
             sender = msg.get("from", "unknown")
             content = msg.get("content", "")
             messages.append(f"[Message from {sender}]: {content}")
-            drained.append(msg)
-        for msg in drained:
-            mailbox.put_nowait(msg)
         if not messages:
             return task
         header = "\n".join(messages)

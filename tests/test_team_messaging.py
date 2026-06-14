@@ -121,9 +121,9 @@ def test_member_to_member_messaging():
         assert "deploy" in builder._last_prompt, \
             f"Expected task in prompt, got: {builder._last_prompt}"
 
-        await manager.dispatch("reviewer", "another task")
-        assert "[Message from builder]" in reviewer._last_prompt, \
-            f"Message should persist across dispatches, got: {reviewer._last_prompt}"
+        # Messages are consumed once (mailbox semantics), not re-queued
+        assert pool._mailboxes["reviewer"].empty(), \
+            "Reviewer mailbox should be empty after dispatch consumed messages"
 
         print("PASS: Member-to-member messaging works end-to-end")
 
