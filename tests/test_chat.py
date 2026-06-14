@@ -224,6 +224,87 @@ def test_run_chat_memory_without_subcommand_does_not_fall_through(monkeypatch, t
     assert ("Memory", f"Project: {memory_dir}", "blue") in notices
     assert ("Unknown command", "/memory", "red") not in notices
 
+def test_run_chat_handled_slash_commands_do_not_fall_through(monkeypatch, tmp_path) -> None:
+    commands = [
+        "/help",
+        "/model",
+        "/permission",
+        "/tools",
+        "/skills",
+        "/skill",
+        "/tasks",
+        "/bg worker do a thing",
+        "/agent-bg worker do a thing",
+        "/task-output task_routing",
+        "/task-stop task_routing",
+        "/wait task_routing",
+        "/sessions",
+        "/status",
+        "/agents",
+        "/team info",
+        "/goal show",
+        "/goal list",
+        "/memory",
+        "/memory list",
+        "/memory add",
+        "/memory show missing",
+        "/memory forget missing",
+    ]
+    project = tmp_path / "project"
+    project.mkdir()
+    notices: list[tuple[str, str, str, str]] = []
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history: list[dict[str, object]] = []
+
+        async def close(self) -> None:
+            pass
+
+    async def fake_start_background_agent_task(config, agent_name: str, prompt: str) -> str:
+        return f"task-{agent_name}"
+
+    async def fake_wait_for_task(task_id: str) -> dict[str, object]:
+        return {"status": "completed", "output": "done"}
+
+
+    async def fake_get_task_output(task_id: str) -> str:
+        return ""
+    async def fake_stop_task(task_id: str) -> bool:
+        return True
+
+    async def fake_list_sessions() -> list[dict[str, object]]:
+        return []
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((current_command, title, message, style)))
+    monkeypatch.setattr(cli, "render_help", lambda console: None)
+    monkeypatch.setattr(cli, "render_tool_table", lambda console, tools: None)
+    monkeypatch.setattr(cli, "render_state", lambda console, title, state: None)
+    monkeypatch.setattr(cli, "render_session_table", lambda console, sessions: None)
+    monkeypatch.setattr(cli, "list_tool_names", lambda: [])
+    monkeypatch.setattr(cli, "list_skill_names", lambda: ["review"])
+    monkeypatch.setattr(cli, "get_state_snapshot", lambda name: {})
+    monkeypatch.setattr(cli, "start_background_agent_task", fake_start_background_agent_task)
+    monkeypatch.setattr(cli, "wait_for_task", fake_wait_for_task)
+    monkeypatch.setattr(cli, "get_task_output", fake_get_task_output)
+    monkeypatch.setattr(cli, "list_sessions", fake_list_sessions)
+    import rooster_code.memory as mem_mod
+    monkeypatch.setattr(mem_mod, "GLOBAL_MEMORY_DIR", tmp_path / "no-global")
+
+    for command in commands:
+        current_command = command
+        prompts = iter([command, "/exit"])
+        monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+        exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2", cwd=str(project))))
+
+        assert exit_code == 0
+
+    fallthroughs = [notice for notice in notices if notice[1] == "Unknown command"]
+    assert fallthroughs == []
+
 
 def test_run_chat_exits_cleanly(monkeypatch) -> None:
     captured: dict[str, object] = {}

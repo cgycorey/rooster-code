@@ -2332,3 +2332,45 @@ def test_remove_member_cancels_in_flight_tasks():
         assert "reviewer" not in pool._members
 
     asyncio.run(_run())
+
+
+def test_remove_member_races_with_in_flight_dispatch():
+    """remove_member called immediately after dispatch_async — no crash, no zombie state."""
+    manager = TeamManager()
+    manager._active = True
+    pool = AgentPool()
+    mock_agent = MagicMock()
+    mock_agent.prompt = AsyncMock(return_value=MagicMock(text="result"))
+    pool._members["reviewer"] = mock_agent
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._locks["reviewer"] = asyncio.Lock()
+    manager._pool = pool
+    manager._member_definitions["reviewer"] = {"description": "rev"}
+    manager._recovery_locks["reviewer"] = asyncio.Lock()
+
+    async def _run():
+        import unittest.mock
+        import rooster_code.runtime as rt
+
+        def fake_track(handle):
+            pass
+
+        async def fake_update(*args, **kwargs):
+            pass
+
+        with unittest.mock.patch.object(rt, "_track_background_task", fake_track):
+            with unittest.mock.patch.object(rt, "_update_background_subagent_task", fake_update):
+                task_id = await manager.dispatch_async("reviewer", "do work", "task-race", ".", {})
+                assert task_id == "task-race"
+                await manager.remove_member("reviewer", MagicMock())
+
+        assert "reviewer" not in pool._members
+        assert "reviewer" not in pool._busy
+        assert "reviewer" not in pool._unhealthy
+        assert "reviewer" not in pool._mailboxes
+        assert "reviewer" not in pool._locks
+        assert "reviewer" not in manager._member_definitions
+        assert "reviewer" not in manager._recovery_locks
+        assert len(pool._dispatch_tasks) == 0, f"Remaining tasks: {pool._dispatch_tasks}"
+
+    asyncio.run(_run())
