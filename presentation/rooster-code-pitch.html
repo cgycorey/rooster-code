@@ -18,8 +18,7 @@ html { scroll-snap-type: y mandatory; scroll-behavior: smooth; }
     --h2-size: clamp(1.25rem, 3.5vw, 2.5rem);
     --h3-size: clamp(1rem, 2.5vw, 1.75rem);
     --body-size: clamp(0.75rem, 1.5vw, 1.125rem);
-    --small-size: clamp(0.65rem, 1vw, 0.875rem);
-    --slide-padding: clamp(1rem, 4vw, 4rem);
+    --slide-padding: clamp(1rem, 3vw, 3rem);
     --content-gap: clamp(0.5rem, 2vw, 2rem);
 }
 
@@ -132,12 +131,20 @@ hr { border: none; height: 2px; background: linear-gradient(90deg, transparent, 
 
 <!-- ===== SLIDE 2: WHAT IS IT ===== -->
 <section class="slide">
-    <div class="orb orb-2"></div>
     <div class="slide-content">
         <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">01 — Overview</p>
         <h2>What is Rooster Code?</h2>
         <hr>
-        <p style="max-width:650px; color:var(--text-muted);">Rooster Code is a <span style="color:var(--text);">custom coding agent</span> that gives you fine-grained control over how AI agents work with your codebase. It runs as a CLI, a background daemon, or a team orchestrator — all configurable from a single codebase.</p>
+        <p style="max-width:650px; color:var(--text-muted);">A <span style="color:var(--text);">custom coding agent</span> platform with fine-grained control — CLI, daemon, or team orchestrator from a single codebase.</p>
+    </div>
+</section>
+
+<!-- ===== SLIDE 2b: KEY CAPABILITIES ===== -->
+<section class="slide">
+    <div class="slide-content">
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">02 — Capabilities</p>
+        <h2>Key Capabilities</h2>
+        <hr>
         <div class="feature-grid" style="margin-top:var(--content-gap);">
             <div class="feature-card"><h3>CLI & Chat</h3><p>Interactive TUI with slash commands, prompt injection, and session management</p></div>
             <div class="feature-card"><h3>Daemon Mode</h3><p>Long-running background service with Unix socket, Telegram adapter, and cron scheduling</p></div>
@@ -150,7 +157,7 @@ hr { border: none; height: 2px; background: linear-gradient(90deg, transparent, 
 <section class="slide">
     <div class="orb orb-3" style="opacity:0.1;"></div>
     <div class="slide-content">
-        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">02 — Core Feature</p>
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">03 — Core Feature</p>
         <h2>Team Orchestration</h2>
         <hr>
         <p style="max-width:600px; color:var(--text-muted);">Dispatch tasks to specialized agents in parallel. Monitor progress in real-time with <span style="color:var(--gold);">/team status</span> and review output with <span style="color:var(--gold);">/team log</span>.</p>
@@ -174,7 +181,7 @@ Dispatch code-reviewer to check async patterns and error handling
 <!-- ===== SLIDE 4: GOAL SYSTEM ===== -->
 <section class="slide">
     <div class="slide-content">
-        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">03 — Core Feature</p>
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">04 — Core Feature</p>
         <h2>Goal System</h2>
         <hr>
         <p style="max-width:550px; color:var(--text-muted);">Define persistent objectives that survive session restarts. The agent receives your goal as part of its system prompt — keeping it focused across turns.</p>
@@ -200,7 +207,7 @@ Goal met! Loop stopped.
 <section class="slide">
     <div class="orb orb-1" style="opacity:0.08; background:var(--gold);"></div>
     <div class="slide-content">
-        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">04 — Security</p>
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">05 — Security</p>
         <h2>Hardened by Default</h2>
         <hr>
         <p style="max-width:600px; color:var(--text-muted);">Every file operation is protected against TOCTOU races. Multiple security audits — zero critical findings.</p>
@@ -216,7 +223,7 @@ Goal met! Loop stopped.
 <!-- ===== SLIDE 6: DAEMON MODE ===== -->
 <section class="slide">
     <div class="slide-content">
-        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">05 — Infrastructure</p>
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">06 — Infrastructure</p>
         <h2>Daemon Mode</h2>
         <hr>
         <div class="split" style="margin-top:var(--content-gap);">
@@ -241,9 +248,8 @@ rooster-code daemon health
 
 <!-- ===== SLIDE 7: MCP TRANSPORT ===== -->
 <section class="slide">
-    <div class="orb orb-2" style="opacity:0.1;"></div>
     <div class="slide-content">
-        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">06 — Integration</p>
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">07 — Integration</p>
         <h2>MCP Transport</h2>
         <hr>
         <p style="max-width:600px; color:var(--text-muted);">Custom SSE/HTTP MCP client with automatic reconnect — fills the gap the SDK leaves for non-stdio transports.</p>
@@ -256,16 +262,15 @@ rooster-code daemon health
             <div>
                 <div class="stat"><div class="stat-number">3</div><div class="stat-label">Max reconnection retries</div></div>
                 <div class="stat" style="margin-top:1rem;"><div class="stat-number">2<sup>n</sup></div><div class="stat-label">Exponential backoff capped at 10s</div></div>
-                <div class="stat" style="margin-top:1rem;"><div class="stat-number">0</div><div class="stat-label">Orphaned futures left hanging</div></div>
             </div>
         </div>
     </div>
 </section>
 
-<!-- ===== SLIDE 8: FILE REFERENCES ===== -->
+<!-- ===== SLIDE 8: FILE REFERENCES & CLI ===== -->
 <section class="slide">
     <div class="slide-content">
-        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">07 — UX</p>
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">08 — UX</p>
         <h2>File References & CLI</h2>
         <hr>
         <div class="split">
@@ -276,13 +281,9 @@ rooster-code daemon health
             </div>
             <div class="code-block">
 /team create review agent-1 agent-2 agent-3
-/team status
-/team log 10
-/goal set "Implement feature X"
-/goal work
-/goal check
-/agents list
-/agents save security-reviewer
+/team status          # members busy/idle
+/goal set "Feature X" # sets active goal
+/goal work            # work toward the goal
             </div>
         </div>
     </div>
@@ -292,7 +293,7 @@ rooster-code daemon health
 <section class="slide">
     <div class="orb orb-3" style="opacity:0.07;"></div>
     <div class="slide-content">
-        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">08 — Interactive Demo</p>
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">09 — Interactive Demo</p>
         <h2>Chat Mode in Action</h2>
         <hr>
         <p style="max-width:600px; color:var(--text-muted); margin-bottom:0.5rem;">A real session showing team orchestration, goal system, and background task tracking — all from the chat interface.</p>
@@ -352,53 +353,30 @@ for remaining TOCTOU vulnerabilities
 │ Active goal: Add O_NOFOLLOW hardening         │
 │ Assess: YES — all os.open calls protected.    │
 ╰──────────────────────────────────────────────╯
-                </div>
             </div>
         </div>
-        <p class="small" style="margin-top:0.5rem; color:var(--text-muted); text-align:center;">Inline notifications keep you informed while you work. Slash commands plus natural language.</p>
     </div>
 </section>
-
-<!-- ===== SLIDE 10: AGENT TEAMS ===== -->
+<!-- ===== SLIDE 10: MULTI-AGENT CODEBASE ===== -->
 <section class="slide">
-    <div class="orb orb-2" style="opacity:0.08;"></div>
     <div class="slide-content">
-        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">09 — Agent Teams</p>
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">10 — Agent Teams</p>
         <h2>Multi-Agent Codebase Evaluation</h2>
         <hr>
-        <p style="max-width:600px; color:var(--text-muted);">Spawn specialized review agents in parallel. Each agent gets a narrow contract and reports findings independently. Consolidate for a complete picture.</p>
+        <p style="max-width:600px; color:var(--text-muted);">Spawn specialized review agents in parallel. Each agent gets a narrow contract and reports findings independently.</p>
         <div class="split" style="margin-top:var(--content-gap);">
             <div class="feature-grid" style="grid-template-columns: 1fr;">
-                <div class="feature-card"><h3>&#x1f6e1; Security Auditor</h3><p>Scans for vulnerabilities, hardcoded secrets, TOCTOU races, injection risks. Reports HIGH/CRITICAL only.</p></div>
-                <div class="feature-card"><h3>&#x1f4dd; Code Reviewer</h3><p>Python patterns, async correctness, error handling, type hints, code duplication. MEDIUM+ findings.</p></div>
-                <div class="feature-card"><h3>&#x1f50d; Silent-Failure Hunter</h3><p>Bare excepts, swallowed exceptions, missing logs, fire-and-forget gaps. All severities.</p></div>
+                <div class="feature-card"><h3>Security Auditor</h3><p>Scans for vulnerabilities, TOCTOU races, injection risks. HIGH/CRITICAL only.</p></div>
+                <div class="feature-card"><h3>Code Reviewer</h3><p>Async correctness, error handling, type hints, code duplications. MEDIUM+ findings.</p></div>
+                <div class="feature-card"><h3>Silent-Failure Hunter</h3><p>Bare excepts, swallowed logs, fire-and-forget gaps. All severities.</p></div>
             </div>
             <div>
                 <div class="code-block" style="font-size:clamp(0.5rem,0.9vw,0.7rem); line-height:1.6;">
-<span style="color:var(--gold);">/team create codebase-eval</span>
-<span style="color:var(--text);">  security-auditor code-reviewer silent-hunter</span>
-
-<span style="color:var(--text-muted);"># Dispatch all 3 in parallel</span>
-<span style="color:var(--text);">Dispatch security-auditor to scan for</span>
-<span style="color:var(--text);">  HIGH/CRITICAL security issues</span>
-
-<span style="color:var(--text);">Dispatch code-reviewer to check for</span>
-<span style="color:var(--text);">  async patterns and error handling</span>
-
-<span style="color:var(--text);">Dispatch silent-hunter to scan for</span>
-<span style="color:var(--text);">  swallowed exceptions and dead code</span>
-
-<span style="color:var(--gold);">/team status</span>
-<span style="color:var(--text-muted);">  [..] task_1  in_progress  security-auditor</span>
-<span style="color:var(--text-muted);">  [..] task_2  in_progress  code-reviewer</span>
-<span style="color:var(--text-muted);">  [..] task_3  in_progress  silent-hunter</span>
-
-<span style="color:var(--text-muted);">... all 3 complete ...</span>
-
-<span style="color:var(--gold);">/team status</span>
-<span style="color:var(--text);">  [OK] task_1  completed  security-auditor</span>
-<span style="color:var(--text);">  [OK] task_2  completed  code-reviewer</span>
-<span style="color:var(--text);">  [OK] task_3  completed  silent-hunter</span>
+/team create eval security-auditor code-reviewer hunter
+Dispatch security-auditor to scan for HIGH/CRITICAL issues
+Dispatch code-reviewer to check async patterns
+Dispatch hunter for dead code & exceptions
+/team status  &#x2192;  3 completed
                 </div>
             </div>
         </div>
@@ -409,7 +387,7 @@ for remaining TOCTOU vulnerabilities
 <section class="slide">
     <div class="orb orb-3" style="opacity:0.08;"></div>
     <div class="slide-content">
-        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">10 — Architecture</p>
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">11 — Architecture</p>
         <h2>How It Fits Together</h2>
         <hr>
         <div class="feature-grid" style="grid-template-columns: repeat(3, 1fr); margin-top:var(--content-gap);">
@@ -429,7 +407,7 @@ for remaining TOCTOU vulnerabilities
 <!-- ===== SLIDE 10: TESTING ===== -->
 <section class="slide">
     <div class="slide-content">
-        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">11 — Quality</p>
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">12 — Quality</p>
         <h2>Testing & Quality</h2>
         <hr>
         <div class="split">
@@ -452,7 +430,7 @@ for remaining TOCTOU vulnerabilities
 <section class="slide">
     <div class="orb orb-1" style="opacity:0.06;"></div>
     <div class="slide-content" style="align-items:center; text-align:center;">
-        <p class="small" style="color:var(--gold); margin-bottom:1rem;">12 — By the Numbers</p>
+        <p class="small" style="color:var(--gold); margin-bottom:1rem;">13 — By the Numbers</p>
         <h2>Key Metrics</h2>
         <hr style="margin:1rem auto;">
         <div class="feature-grid" style="grid-template-columns: repeat(4, 1fr); max-width:800px;">
@@ -471,7 +449,7 @@ for remaining TOCTOU vulnerabilities
 <!-- ===== SLIDE 12: USE CASES ===== -->
 <section class="slide">
     <div class="slide-content">
-        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">13 — Use Cases</p>
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">14 — Use Cases</p>
         <h2>When to Use Rooster Code</h2>
         <hr>
         <div class="feature-grid" style="margin-top:var(--content-gap);">
@@ -487,22 +465,20 @@ for remaining TOCTOU vulnerabilities
 
 <!-- ===== SLIDE 13: ROADMAP ===== -->
 <section class="slide">
-    <div class="orb orb-2" style="opacity:0.08;"></div>
     <div class="slide-content">
-        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">14 — Next Steps</p>
+        <p class="small" style="color:var(--gold); margin-bottom:0.5rem;">15 — Next Steps</p>
         <h2>Roadmap</h2>
         <hr>
         <div class="split" style="margin-top:var(--content-gap);">
             <div>
-                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Worktree Isolation</h3><p>Git worktrees per agent — parallel edits without file conflicts. EnterWorktree/ExitWorktree tools.</p></div>
-                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Review Pipeline</h3><p>Automated code review gates: tests → lint → review agent → merge. Persistent pipeline state.</p></div>
-                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Kanban Tracking</h3><p>Task cards with owners, states, acceptance criteria. Control pane for operator visibility.</p></div>
-                <div class="feature-card"><h3>Permission System</h3><p>Interactive permission mode. Tool-specific allow/deny rules. Sandbox integration.</p></div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Worktree Isolation</h3><p>Git worktrees per agent — parallel edits without file conflicts.</p></div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Review Pipeline</h3><p>Automated code review gates: tests &#x2192; review &#x2192; merge.</p></div>
+                <div class="feature-card"><h3>Permission System</h3><p>Interactive tool-specific allow/deny rules with sandbox.</p></div>
             </div>
             <div>
-                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Plugin System</h3><p>Custom slash commands, agent definitions, hooks. Marketplace for shared configurations.</p></div>
-                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Web Dashboard</h3><p>Live team status, task history, token usage. Daemon-exposed API for external tooling.</p></div>
-                <div class="feature-card"><h3>Review Harness</h3><p>Reusable codebase evaluation: /review diff dispatches 3 agents, pollutes status, consolidates reports.</p></div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Plugin System</h3><p>Custom slash commands, agent defs, hooks, and marketplace.</p></div>
+                <div class="feature-card" style="margin-bottom:0.5rem;"><h3>Web Dashboard</h3><p>Live team status, task history, token usage via daemon API.</p></div>
+                <div class="feature-card"><h3>Review Harness</h3><p>Reusable /review diff dispatches 3 agents, consolidates reports.</p></div>
             </div>
         </div>
     </div>
@@ -511,7 +487,6 @@ for remaining TOCTOU vulnerabilities
 <!-- ===== SLIDE 14: THANK YOU ===== -->
 <section class="slide">
     <div class="orb orb-1" style="opacity:0.1;"></div>
-    <div class="orb orb-2" style="opacity:0.06;"></div>
     <div class="slide-content" style="align-items:center; text-align:center;">
         <div class="number" style="font-size:clamp(5rem,12vw,9rem); margin-bottom:0;">&#x223F;</div>
         <h1 style="margin-top:-1rem;">Rooster Code</h1>
@@ -525,7 +500,7 @@ for remaining TOCTOU vulnerabilities
 <div class="grain"></div>
 <div class="progress-bar" id="progress"></div>
 <nav class="nav" id="nav"></nav>
-<div class="slide-counter" id="counter">1 / 16</div>
+<div class="slide-counter" id="counter">1 / 17</div>
 <div class="keyboard-hint" id="hint">&larr; &rarr; to navigate &middot; swipe on mobile</div>
 
 <script>
