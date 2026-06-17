@@ -15,6 +15,7 @@ from rooster_code.memory import (
     build_memory_prompt_section,
     delete_memory,
     load_memories,
+    MEMORY_INDEX,
     MEMORY_MAX_COUNT,
     MEMORY_MAX_SIZE,
     save_memory,

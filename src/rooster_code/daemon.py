@@ -402,7 +402,6 @@ class AgentDaemon:
             cwd = str(overrides.pop("cwd", ".") or ".")
 
             config = resolve_runtime_env(os.environ, cwd=cwd)
-            config.persist_session = True
             for file_key, file_val in self_ref._file_configs.items():
                 if file_val is not None and not getattr(config, file_key, None):
                     setattr(config, file_key, file_val)
@@ -416,6 +415,7 @@ class AgentDaemon:
             headers_override: dict[str, str] | None = overrides.get("custom_headers")
             if headers_override is not None:
                 config.custom_headers = headers_override
+            config.persist_session = True
 
             async with self_ref._state_lock:
                 if self_ref._max_sessions and not state.get_session(session_id):
@@ -755,7 +755,7 @@ _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0
 
 # Config keys that can be applied directly via setattr (no merging)
-_CONFIG_KEYS = ("model", "max_turns", "max_tokens", "permission_mode", "allowed_tools", "disallowed_tools", "thinking_budget", "max_budget_usd", "debug", "sandbox", "include_partials")
+_CONFIG_KEYS = ("model", "max_turns", "max_tokens", "permission_mode", "allowed_tools", "disallowed_tools", "thinking_budget", "max_budget_usd", "debug", "sandbox", "include_partials", "search_url", "skills_dir", "agents", "hooks", "json_schema", "mcp_servers", "extra_args")
 # Keys that require merge semantics (dict-on-dict) rather than simple replacement
 _CONFIG_MERGE_KEYS = ("env", "custom_headers")
 # All keys accepted as query overrides (setattr + merge keys)

@@ -30,10 +30,9 @@ def _read_cron_jobs() -> dict[str, dict[str, Any]]:
     if db_path.exists():
         try:
             import sqlite3
-            conn = sqlite3.connect(str(db_path))
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute("SELECT * FROM cron_jobs").fetchall()
-            conn.close()
+            with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("SELECT * FROM cron_jobs").fetchall()
             if rows:
                 return {row["job_id"]: dict(row) for row in rows}
         except Exception:

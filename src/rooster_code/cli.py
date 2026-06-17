@@ -796,6 +796,7 @@ async def run_chat(config) -> int:
     _rehydrated = False
     _goal_loop_active = False
     _goal_loop_turns = 0
+    _goal_stop = False
     _MAX_GOAL_TURNS = 20
     agent = create_runtime_agent(config)
     interrupted = False
@@ -810,11 +811,11 @@ async def run_chat(config) -> int:
     )
     question_session: PromptSession[str] = PromptSession()
     _MAX_HISTORY = 50
-
     def _cancel_query_on_sigint(signum: int, frame: object) -> None:
-        nonlocal interrupted
+        nonlocal interrupted, _goal_stop
         from rooster_code.runtime import _cancel_bg_tasks_sync
         interrupted = True
+        _goal_stop = True
         abort_signal.set()
         if _active_query_task is not None and not _active_query_task.done():
             _active_query_task.cancel()
@@ -916,11 +917,14 @@ async def run_chat(config) -> int:
                 interrupted = False
             _poll_and_render_notifications()
             if _goal_loop_active:
-                if interrupted or _goal_loop_turns >= _MAX_GOAL_TURNS:
-                    if _goal_loop_turns >= _MAX_GOAL_TURNS:
+                if _goal_stop or _goal_loop_turns >= _MAX_GOAL_TURNS:
+                    if _goal_stop:
+                        render_notice(console, "Goal Loop", "Stopped by user.", "yellow")
+                    elif _goal_loop_turns >= _MAX_GOAL_TURNS:
                         render_notice(console, "Goal Loop", f"Stopped after {_MAX_GOAL_TURNS} turns.", "yellow")
                     _goal_loop_active = False
                     _goal_loop_turns = 0
+                    _goal_stop = False
                     continue
                 if _goal_loop_turns > 0 and _check_goal_met(agent):
                     render_notice(console, "Goal Loop", "Goal met! Loop stopped.", "green")
@@ -1462,6 +1466,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except KeyboardInterrupt:
         return 130
+    except Exception:
+        log.exception("rooster-code failed")
+        return 1
 
 
 if __name__ == "__main__":
