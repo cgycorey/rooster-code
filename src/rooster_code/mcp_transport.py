@@ -31,7 +31,6 @@ class McpToolWrapper(BaseTool):
         self.server_name = server_name
         self.tool_name = tool_name
         self._client = transport_client
-        self._next_id = 1
 
     def is_read_only(self, input: dict[str, Any] | None = None) -> bool:
         return False
@@ -40,8 +39,7 @@ class McpToolWrapper(BaseTool):
         return False
 
     async def call(self, input: dict[str, Any], context: Any) -> Any:
-        request_id = self._next_id
-        self._next_id += 1
+        request_id = self._client.next_request_id()
         request = {
             "jsonrpc": "2.0",
             "id": request_id,
@@ -75,6 +73,12 @@ class SseClient:
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._reader_task: asyncio.Task[None] | None = None
         self._endpoint_discovered = asyncio.Event()
+
+
+    def next_request_id(self) -> int:
+        rid = self._next_id
+        self._next_id += 1
+        return rid
 
     async def _sse_stream_reader(self) -> None:
         """Persistent GET /sse that discovers the endpoint then reads responses.
@@ -142,7 +146,7 @@ class SseClient:
         await asyncio.wait_for(self._endpoint_discovered.wait(), timeout=self._timeout)
         init_request = {
             "jsonrpc": "2.0",
-            "id": self._next_id,
+            "id": self.next_request_id(),
             "method": "initialize",
             "params": {
                 "protocolVersion": "2024-11-05",
@@ -150,20 +154,18 @@ class SseClient:
                 "clientInfo": {"name": "rooster-code", "version": "1.0"},
             },
         }
-        self._next_id += 1
         result = await self.send_request(init_request)
         notif = {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
         await self.send_notification(notif)
         return result
-
     async def list_tools(self) -> list[dict[str, Any]]:
-        req = {"jsonrpc": "2.0", "id": self._next_id, "method": "tools/list", "params": {}}
-        self._next_id += 1
+        req = {"jsonrpc": "2.0", "id": self.next_request_id(), "method": "tools/list", "params": {}}
         result = await self.send_request(req)
         return result.get("tools", [])
 
     async def send_request(self, request: dict[str, Any]) -> dict[str, Any]:
-        assert self._messages_url is not None
+        if self._messages_url is None:
+            raise ConnectionError("MCP transport not connected")
         req_id = request.get("id")
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[dict[str, Any]] = loop.create_future()
@@ -182,15 +184,25 @@ class SseClient:
         if resp.status_code == 200:
             content_type = resp.headers.get("content-type", "")
             if "text/event-stream" in content_type:
-                return self._parse_inline_sse(resp)
+                try:
+                    return self._parse_inline_sse(resp)
+                finally:
+                    if req_id is not None and req_id in self._pending:
+                        del self._pending[req_id]
             body = resp.json()
             if req_id is not None and req_id in self._pending:
                 del self._pending[req_id]
             return body.get("result", body) if isinstance(body, dict) else body
-        return await asyncio.wait_for(fut, timeout=self._timeout)
+        try:
+            return await asyncio.wait_for(fut, timeout=self._timeout)
+        except asyncio.TimeoutError:
+            if req_id is not None and req_id in self._pending:
+                del self._pending[req_id]
+            raise
 
     async def send_notification(self, notification: dict[str, Any]) -> None:
-        assert self._messages_url is not None
+        if self._messages_url is None:
+            raise ConnectionError("MCP transport not connected")
         await self._http.post(self._messages_url, json=notification, headers={"Content-Type": "application/json"})
 
     def _parse_inline_sse(self, resp: httpx.Response) -> dict[str, Any]:

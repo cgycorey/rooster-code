@@ -286,6 +286,25 @@ class TestSseClientIntegration:
         client._next_id += 1
         assert client._next_id == 2
 
+    def test_next_request_id_returns_incremented_non_none(self):
+        # Regression: next_request_id() must return the id, not None.
+        # All request payloads use the return value as the jsonrpc "id";
+        # returning None breaks SSE stream response correlation and
+        # silently yields zero tools from real MCP servers.
+        client = SseClient("http://localhost/sse")
+        first = client.next_request_id()
+        second = client.next_request_id()
+        assert first == 1
+        assert second == 2
+        assert first is not None and second is not None
+
+    def test_initialize_request_carries_non_none_id(self):
+        client = SseClient("http://localhost/sse")
+        # Build the initialize request id the same way initialize() does.
+        req_id = client.next_request_id()
+        assert req_id is not None and req_id == 1
+        assert req_id in (1,)  # ensures the payload "id" field is populated
+
 
 class TestSseClientProtocolCompliance:
 
