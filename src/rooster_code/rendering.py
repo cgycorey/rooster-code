@@ -148,6 +148,7 @@ def render_help(console: Console) -> None:
     table.add_column("What it does")
     table.add_row("/help", "Show available chat commands")
     table.add_row("/clear", "Clear current agent history")
+    table.add_row("/reset", "Reset session: clear history, goals, teams, tasks, re-initialize")
     table.add_row("/compact", "Summarize the current chat history")
     table.add_row("/model <name>", "Switch models")
     table.add_row("/permission <mode>", "Update permission mode")

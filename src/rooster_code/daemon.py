@@ -409,13 +409,13 @@ class AgentDaemon:
                 val = overrides.get(key)
                 if val is not None:
                     setattr(config, key, val)
-            env_override: dict[str, str] | None = overrides.get("env")
-            if env_override is not None:
-                config.env = {**config.env, **env_override}
-            headers_override: dict[str, str] | None = overrides.get("custom_headers")
-            if headers_override is not None:
-                config.custom_headers = headers_override
-            config.persist_session = True
+            for key in _CONFIG_MERGE_KEYS:
+                val = overrides.get(key)
+                if val is not None:
+                    current = getattr(config, key, None) or {}
+                    setattr(config, key, {**current, **val})
+            if "persist_session" not in overrides:
+                config.persist_session = True
 
             async with self_ref._state_lock:
                 if self_ref._max_sessions and not state.get_session(session_id):
@@ -755,9 +755,9 @@ _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0
 
 # Config keys that can be applied directly via setattr (no merging)
-_CONFIG_KEYS = ("model", "max_turns", "max_tokens", "permission_mode", "allowed_tools", "disallowed_tools", "thinking_budget", "max_budget_usd", "debug", "sandbox", "include_partials", "search_url", "skills_dir", "agents", "hooks", "json_schema", "mcp_servers", "extra_args")
+_CONFIG_KEYS = ("model", "max_turns", "max_tokens", "permission_mode", "allowed_tools", "disallowed_tools", "thinking_budget", "max_budget_usd", "debug", "sandbox", "include_partials", "persist_session", "search_url", "skills_dir", "json_schema")
 # Keys that require merge semantics (dict-on-dict) rather than simple replacement
-_CONFIG_MERGE_KEYS = ("env", "custom_headers")
+_CONFIG_MERGE_KEYS = ("env", "custom_headers", "agents", "hooks", "mcp_servers", "extra_args")
 # All keys accepted as query overrides (setattr + merge keys)
 _CONFIG_ALL_KEYS = _CONFIG_KEYS + _CONFIG_MERGE_KEYS
 

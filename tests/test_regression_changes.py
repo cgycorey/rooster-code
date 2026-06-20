@@ -217,32 +217,41 @@ class TestCronReaderResourceSafety:
 
 
 class TestDaemonConfigKeysExpansion:
-    """Regression: _CONFIG_KEYS was expanded to include search_url, skills_dir,
-    agents, hooks, json_schema, mcp_servers, extra_args. These must all be
-    present so daemon query overrides can set them via setattr."""
+    """Regression: _CONFIG_KEYS and _CONFIG_MERGE_KEYS cover all daemon override
+    fields. Dict-typed keys (agents, hooks, mcp_servers, extra_args) use merge
+    semantics to avoid silently discarding config-file values."""
 
-    def test_new_keys_present_in_config_keys(self):
+    def test_new_keys_present_in_config_keys_or_merge_keys(self):
         import rooster_code.daemon as dm
 
         expected_new = {
             "search_url", "skills_dir", "agents",
             "hooks", "json_schema", "mcp_servers", "extra_args",
         }
-        actual = set(dm._CONFIG_KEYS)
-        missing = expected_new - actual
-        assert not missing, f"Newly added keys missing from _CONFIG_KEYS: {missing}"
+        all_keys = set(dm._CONFIG_KEYS) | set(dm._CONFIG_MERGE_KEYS)
+        missing = expected_new - all_keys
+        assert not missing, f"Newly added keys missing from _CONFIG_KEYS or _CONFIG_MERGE_KEYS: {missing}"
+
+    def test_dict_keys_use_merge_semantics(self):
+        """Dict-typed keys must be in _CONFIG_MERGE_KEYS, not _CONFIG_KEYS."""
+        import rooster_code.daemon as dm
+
+        dict_keys = {"agents", "hooks", "mcp_servers", "extra_args"}
+        for key in dict_keys:
+            assert key in dm._CONFIG_MERGE_KEYS, (
+                f"Dict-typed key '{key}' should be in _CONFIG_MERGE_KEYS for merge semantics"
+            )
 
     def test_all_config_keys_are_valid_runtimeconfig_fields(self):
-        """Every key in _CONFIG_KEYS must be a real RuntimeConfig field."""
+        """Every key in _CONFIG_KEYS and _CONFIG_MERGE_KEYS must be a real RuntimeConfig field."""
         import dataclasses
         from rooster_code.config import RuntimeConfig
         import rooster_code.daemon as dm
 
         field_names = {f.name for f in dataclasses.fields(RuntimeConfig)}
-        for key in dm._CONFIG_KEYS:
+        for key in dm._CONFIG_KEYS + dm._CONFIG_MERGE_KEYS:
             assert key in field_names, (
-                f"_CONFIG_KEYS contains '{key}' which is not a RuntimeConfig field. "
-                f"Valid fields: {sorted(field_names)}"
+                f"Key '{key}' is not a RuntimeConfig field. Valid fields: {sorted(field_names)}"
             )
 
     def test_new_keys_settable_via_setattr(self):
@@ -257,7 +266,8 @@ class TestDaemonConfigKeysExpansion:
             "extra_args": {"foo": "bar"},
         }
         for key, val in test_values.items():
-            assert key in dm._CONFIG_KEYS
+            all_keys = set(dm._CONFIG_KEYS) | set(dm._CONFIG_MERGE_KEYS)
+            assert key in all_keys
             setattr(config, key, val)
             assert getattr(config, key) == val
 

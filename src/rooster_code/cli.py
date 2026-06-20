@@ -629,6 +629,38 @@ def _trim_history(history: History, max_size: int) -> None:
             fh.write("\n".join(history._loaded_strings) + "\n")
 
 
+async def _reset_session(console, agent, team_manager) -> None:
+    """Reset the chat session: clear history, stop teams/goals/tasks, re-initialize agent."""
+    agent.clear()
+    if team_manager.is_active():
+        await team_manager.close_team(agent)
+    active = get_active_goal()
+    if active:
+        _clear_goal_context(agent)
+        clear_goal()
+    _injected_task_ids.clear()
+    await cancel_background_subagent_tasks()
+    if hasattr(agent, "_client") and agent._client:
+        with contextlib.suppress(Exception):
+            await agent._client.close()
+        agent._client = None
+    if hasattr(agent, "_provider"):
+        agent._provider = None
+    if hasattr(agent, "_engine"):
+        agent._engine = None
+    if hasattr(agent, "_initialized"):
+        agent._initialized = False
+    if hasattr(agent, "_initialize") and callable(agent._initialize):
+        await agent._initialize()
+    from rooster_code.runtime import rehydrate_tasks_from_history, _injected_task_ids_rehydrated, _notified_task_ids, _notified_task_ids_lock
+    _injected_task_ids_rehydrated.clear()
+    with _notified_task_ids_lock:
+        _notified_task_ids.clear()
+    rehydrate_tasks_from_history(agent)
+    set_runtime_team_bridge(team_manager, agent)
+    render_notice(console, "Reset", "Session reset. History cleared, goals/teams/tasks stopped, agent re-initialized.", "green")
+
+
 def _handle_agents_command(console, command, config, team_manager):
     """Handle /agents slash commands."""
     if not command.args:
@@ -826,7 +858,7 @@ async def run_chat(config) -> int:
     signal.signal(signal.SIGINT, _cancel_query_on_sigint)
 
     async def _run_query_with_interrupt(events, **kwargs) -> None:
-        nonlocal interrupted, _active_query_task
+        nonlocal interrupted, _goal_stop, _active_query_task
         from rooster_code.runtime import set_abort_signal
         aborted = False
         abort_signal.clear()
@@ -847,6 +879,8 @@ async def run_chat(config) -> int:
             if aborted or abort_signal.is_set():
                 render_notice(console, "Interrupted", "Query cancelled.", "yellow")
                 interrupted = False
+                if not _goal_loop_active:
+                    _goal_stop = False
                 await cancel_background_subagent_tasks()
                 if hasattr(agent, "_client") and agent._client:
                     with contextlib.suppress(Exception):
@@ -963,6 +997,12 @@ async def run_chat(config) -> int:
                 if team_manager.is_active():
                     await team_manager.clear()
                 render_notice(console, "Cleared", "Agent history cleared.", "green")
+                continue
+            if command.name == "reset":
+                await _reset_session(console, agent, team_manager)
+                _goal_loop_active = False
+                _goal_loop_turns = 0
+                _goal_stop = False
                 continue
             if command.name == "compact":
                 try:

@@ -508,17 +508,24 @@ def test_heartbeat_enabled_with_interval() -> None:
 def test_config_keys_exclude_merge_keys() -> None:
     import rooster_code.daemon as dm
 
+    # Original merge keys
     assert "env" not in dm._CONFIG_KEYS
     assert "custom_headers" not in dm._CONFIG_KEYS
+    # Dict-typed keys that must use merge semantics
+    assert "agents" not in dm._CONFIG_KEYS
+    assert "hooks" not in dm._CONFIG_KEYS
+    assert "mcp_servers" not in dm._CONFIG_KEYS
+    assert "extra_args" not in dm._CONFIG_KEYS
+    # Non-merge keys should still be present
     assert "model" in dm._CONFIG_KEYS
     assert "max_turns" in dm._CONFIG_KEYS
     assert "sandbox" in dm._CONFIG_KEYS
-
+    assert "persist_session" in dm._CONFIG_KEYS
 
 def test_config_merge_keys_only_env_and_headers() -> None:
     import rooster_code.daemon as dm
 
-    assert dm._CONFIG_MERGE_KEYS == ("env", "custom_headers")
+    assert dm._CONFIG_MERGE_KEYS == ("env", "custom_headers", "agents", "hooks", "mcp_servers", "extra_args")
 
 
 def test_config_all_keys_is_union() -> None:
@@ -538,7 +545,7 @@ def test_handle_query_extracts_all_keys() -> None:
     simple_keys = set(dm._CONFIG_KEYS)
     merge_keys = set(dm._CONFIG_MERGE_KEYS)
     assert all_keys == simple_keys | merge_keys
-    assert merge_keys - simple_keys == {"env", "custom_headers"}
+    assert merge_keys - simple_keys == {"env", "custom_headers", "agents", "hooks", "mcp_servers", "extra_args"}
 
 
 # -- PersistentCronStore -------------------------------------------------------
