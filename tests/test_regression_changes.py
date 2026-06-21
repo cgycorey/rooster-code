@@ -183,6 +183,14 @@ class TestCronReaderResourceSafety:
                 closed_flags.append(True)
                 self._real.close()
 
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                self.close()
+                # Don't suppress exceptions — sqlite3's __exit__ would rollback,
+                # but we just close and let the exception propagate
+
         def tracking_connect(path):
             return TrackingConnection(original_connect(path))
 
