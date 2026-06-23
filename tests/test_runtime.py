@@ -1631,6 +1631,216 @@ def test_create_runtime_agent_respects_disallowed_save_memory(monkeypatch) -> No
     assert [tool.name for tool in agent._tool_pool] == ["Agent", "Read"]
 
 
+def test_create_runtime_agent_does_not_duplicate_save_memory_on_second_initialize(monkeypatch) -> None:
+    class PlaceholderAgentTool:
+        name = "Agent"
+
+    class ReadTool:
+        name = "Read"
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = []
+            self._initialized = False
+
+        async def _initialize(self) -> None:
+            if self._initialized:
+                return
+            self._tool_pool = [PlaceholderAgentTool(), ReadTool()]
+            self._initialized = True
+
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
+
+    agent = create_runtime_agent(
+        RuntimeConfig(
+            api_key="test-key",
+            base_url="https://nano-gpt.com/api/v1",
+            model="test-model",
+            agents={"reviewer": {"description": "code reviewer"}},
+        )
+    )
+
+    asyncio.run(agent._initialize())
+    asyncio.run(agent._initialize())
+
+    assert [tool.name for tool in agent._tool_pool] == ["Agent", "Read", "SaveMemory"]
+    assert [tool.__class__.__name__ for tool in agent._tool_pool] == [
+        "RuntimeAgentTool",
+        "RuntimeReadTool",
+        "RuntimeTraceTool",
+    ]
+    assert agent._tool_pool[2]._delegate.__class__.__name__ == "SaveMemoryTool"
+
+
+def test_create_runtime_agent_skips_mcp_reconnect_on_second_initialize(monkeypatch) -> None:
+    """Re-initializing must not re-invoke connect_http_mcp (would duplicate tools and leak SseClients)."""
+    class PlaceholderAgentTool:
+        name = "Agent"
+
+    class ReadTool:
+        name = "Read"
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = []
+            self._initialized = False
+
+        async def _initialize(self) -> None:
+            if self._initialized:
+                return
+            self._tool_pool = [PlaceholderAgentTool(), ReadTool()]
+            self._initialized = True
+
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
+
+    connect_calls: list[str] = []
+
+    class FakeRemoteTool:
+        name = "mcp__weather__forecast"
+
+        def __init__(self) -> None:
+            self._client = object()
+
+    async def fake_connect(name, config):
+        connect_calls.append(name)
+        return [FakeRemoteTool()]
+
+    monkeypatch.setattr("rooster_code.mcp_transport.connect_http_mcp", fake_connect)
+
+    agent = create_runtime_agent(
+        RuntimeConfig(
+            api_key="test-key",
+            base_url="https://nano-gpt.com/api/v1",
+            model="test-model",
+            agents={"reviewer": {"description": "code reviewer"}},
+            mcp_servers={"weather": {"type": "sse", "url": "http://localhost:9999/sse"}},
+        )
+    )
+
+    asyncio.run(agent._initialize())
+    asyncio.run(agent._initialize())
+    asyncio.run(agent._initialize())
+
+    assert connect_calls == ["weather"], (
+        f"connect_http_mcp must run exactly once across multiple _initialize() calls, "
+        f"got {len(connect_calls)} calls: {connect_calls}"
+    )
+
+
+def test_create_runtime_agent_retries_remote_mcp_until_client_connected(monkeypatch) -> None:
+    class PlaceholderAgentTool:
+        name = "Agent"
+
+    class FakeRemoteTool:
+        name = "mcp__weather__forecast"
+
+        def __init__(self, client) -> None:
+            self._client = client
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = []
+            self._initialized = False
+
+        async def _initialize(self) -> None:
+            if self._initialized:
+                return
+            self._tool_pool = [PlaceholderAgentTool()]
+            self._initialized = True
+
+    client = object()
+    connect_calls: list[str] = []
+
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
+
+    async def fake_connect(name, config):
+        connect_calls.append(name)
+        if len(connect_calls) == 1:
+            return []
+        return [FakeRemoteTool(client)]
+
+    monkeypatch.setattr("rooster_code.mcp_transport.connect_http_mcp", fake_connect)
+
+    agent = create_runtime_agent(
+        RuntimeConfig(
+            api_key="test-key",
+            base_url="https://nano-gpt.com/api/v1",
+            model="test-model",
+            agents={"reviewer": {"description": "code reviewer"}},
+            mcp_servers={"weather": {"type": "sse", "url": "http://localhost:9999/sse"}},
+        )
+    )
+
+    asyncio.run(agent._initialize())
+    agent._initialized = False
+    asyncio.run(agent._initialize())
+
+    assert connect_calls == ["weather", "weather"]
+    assert any(tool.name == "mcp__weather__forecast" for tool in agent._tool_pool)
+
+
+def test_create_runtime_agent_closes_remote_mcp_clients_on_close(monkeypatch) -> None:
+    class PlaceholderAgentTool:
+        name = "Agent"
+
+    class FakeRemoteTool:
+        name = "mcp__weather__forecast"
+
+        def __init__(self, client) -> None:
+            self._client = client
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._client = None
+            self._tool_pool = []
+            self._initialized = False
+            self.closed = False
+
+        async def _initialize(self) -> None:
+            if self._initialized:
+                return
+            self._tool_pool = [PlaceholderAgentTool()]
+            self._initialized = True
+
+        async def close(self) -> None:
+            self.closed = True
+
+    fake_client = FakeClient()
+
+    monkeypatch.setattr("rooster_code.runtime.create_agent", lambda options: FakeAgent())
+
+    async def fake_connect(name, config):
+        return [FakeRemoteTool(fake_client)]
+
+    monkeypatch.setattr("rooster_code.mcp_transport.connect_http_mcp", fake_connect)
+
+    agent = create_runtime_agent(
+        RuntimeConfig(
+            api_key="test-key",
+            base_url="https://nano-gpt.com/api/v1",
+            model="test-model",
+            agents={"reviewer": {"description": "code reviewer"}},
+            mcp_servers={"weather": {"type": "sse", "url": "http://localhost:9999/sse"}},
+        )
+    )
+
+    asyncio.run(agent._initialize())
+    asyncio.run(agent.close())
+
+    assert agent.closed is True
+    assert fake_client.closed is True
+
+
 def test_create_runtime_agent_replaces_read_and_edit_tools_after_initialize(monkeypatch) -> None:
     class ReadTool:
         name = "Read"
@@ -3150,3 +3360,225 @@ def test_skill_body_cache_cleared_on_reload(tmp_path: Path) -> None:
     )
     assert "fake-key" not in rt._skill_body_cache
     assert rt._skill_body_cache == {}
+
+def test_iter_with_abort_yields_all_events_when_no_abort():
+    """Without an abort signal, _iter_with_abort yields all events from the source generator."""
+    runtime._abort_signal = None
+
+    async def source():
+        for i in range(5):
+            yield {"i": i}
+
+    async def run():
+        results = []
+        async for event in runtime._iter_with_abort(source()):
+            results.append(event)
+        return results
+
+    assert asyncio.run(run()) == [{"i": i} for i in range(5)]
+
+
+def test_iter_with_abort_stops_when_abort_already_set():
+    """If abort is already set before iteration starts, no events are yielded."""
+    abort = asyncio.Event()
+    abort.set()
+    runtime._abort_signal = abort
+
+    async def source():
+        yield {"never": "seen"}
+
+    async def run():
+        results = []
+        async for event in runtime._iter_with_abort(source()):
+            results.append(event)
+        return results
+
+    assert asyncio.run(run()) == []
+    runtime._abort_signal = None
+
+
+def test_iter_with_abort_interrupts_pending_api_call():
+    """Abort set during a pending __anext__ interrupts the in-flight fetch."""
+    abort = asyncio.Event()
+    runtime._abort_signal = abort
+
+    async def slow_source():
+        # First yield is fast; second yield blocks until interrupted
+        yield {"phase": "first"}
+        await asyncio.sleep(10)  # simulates a pending API call
+        yield {"phase": "second"}  # never reached
+
+    async def fire_abort():
+        await asyncio.sleep(0.05)
+        abort.set()
+
+    async def run():
+        results = []
+        gen = runtime._iter_with_abort(slow_source())
+        first = await gen.__anext__()
+        assert first == {"phase": "first"}
+        asyncio.create_task(fire_abort())
+        async for event in gen:
+            results.append(event)
+        return results
+
+    results = asyncio.run(run())
+    assert results == [], f"Expected no further events after abort, got {results}"
+    runtime._abort_signal = None
+
+
+def test_iter_with_abort_normal_completion():
+    """A generator that completes normally (StopAsyncIteration) stops the helper."""
+    runtime._abort_signal = None
+
+    async def source():
+        yield {"a": 1}
+        yield {"a": 2}
+
+    async def run():
+        results = []
+        async for event in runtime._iter_with_abort(source()):
+            results.append(event)
+        return results
+
+    assert asyncio.run(run()) == [{"a": 1}, {"a": 2}]
+
+
+def test_iter_with_abort_cleans_up_tasks_on_normal_exit():
+    """No lingering tasks remain after normal completion."""
+    runtime._abort_signal = None
+
+    async def source():
+        yield {"x": 1}
+
+    async def run():
+        before = len(asyncio.all_tasks())
+        async for _ in runtime._iter_with_abort(source()):
+            pass
+        # Give cancelled abort tasks a chance to finish
+        await asyncio.sleep(0.01)
+        after = len(asyncio.all_tasks())
+        return before, after
+
+    before, after = asyncio.run(run())
+    assert before == after, f"Task leak: before={before}, after={after}"
+
+
+def test_iter_with_abort_cleans_up_tasks_on_abort():
+    """No lingering tasks remain after abort."""
+    abort = asyncio.Event()
+    runtime._abort_signal = abort
+
+    async def slow_source():
+        yield {"ok": True}
+        await asyncio.sleep(10)
+        yield {"ok": False}
+
+    async def fire_abort():
+        await asyncio.sleep(0.05)
+        abort.set()
+
+    async def run():
+        gen = runtime._iter_with_abort(slow_source())
+        await gen.__anext__()
+        asyncio.create_task(fire_abort())
+        async for _ in gen:
+            pass
+        await asyncio.sleep(0.01)
+        current = asyncio.current_task()
+        lingering = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
+        return lingering
+
+    lingering = asyncio.run(run())
+    assert not lingering, f"Lingering tasks after abort: {lingering}"
+    runtime._abort_signal = None
+
+
+def test_iter_with_abort_closes_source_when_abort_set_between_events():
+    async def run():
+        abort = asyncio.Event()
+        runtime.set_abort_signal(abort)
+        closed = asyncio.Event()
+
+        async def source():
+            try:
+                yield {"phase": "first"}
+                await asyncio.sleep(10)
+                yield {"phase": "second"}
+            finally:
+                closed.set()
+
+        try:
+            gen = runtime._iter_with_abort(source())
+            first = await gen.__anext__()
+            assert first == {"phase": "first"}
+            abort.set()
+            async for _ in gen:
+                pass
+            await asyncio.sleep(0)
+            return closed.is_set()
+        finally:
+            runtime.set_abort_signal(None)
+
+    assert asyncio.run(run()) is True
+
+
+def test_iter_with_abort_suppresses_source_close_error_after_abort():
+    async def run():
+        abort = asyncio.Event()
+        runtime.set_abort_signal(abort)
+
+        async def source():
+            try:
+                yield {"phase": "first"}
+                await asyncio.sleep(10)
+            finally:
+                raise RuntimeError("cleanup failed")
+
+        try:
+            gen = runtime._iter_with_abort(source())
+            first = await gen.__anext__()
+            assert first == {"phase": "first"}
+            abort.set()
+            async for _ in gen:
+                pass
+        finally:
+            runtime.set_abort_signal(None)
+
+    asyncio.run(run())
+
+
+def test_iter_with_abort_cancels_pending_source_when_consumer_is_cancelled():
+    runtime._abort_signal = None
+
+    async def run():
+        source_started = asyncio.Event()
+        source_cancelled = asyncio.Event()
+
+        async def slow_source():
+            yield {"phase": "first"}
+            source_started.set()
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                source_cancelled.set()
+                raise
+            yield {"phase": "second"}
+
+        async def consume_remaining(gen):
+            async for _ in gen:
+                pass
+
+        gen = runtime._iter_with_abort(slow_source())
+        first = await gen.__anext__()
+        assert first == {"phase": "first"}
+
+        consumer = asyncio.create_task(consume_remaining(gen))
+        await source_started.wait()
+        consumer.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await consumer
+        await asyncio.sleep(0)
+        return source_cancelled.is_set()
+
+    assert asyncio.run(run()) is True

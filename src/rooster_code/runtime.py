@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 import re
 import threading
-from typing import Any
+from typing import Any, AsyncIterator
 
 from open_agent_sdk import (
     AgentOptions,
@@ -759,6 +759,56 @@ async def _prompt_agent_with_abort(agent, prompt: str, overrides: dict[str, Any]
             with contextlib.suppress(asyncio.CancelledError):
                 await abort_task
 
+async def _iter_with_abort(gen: AsyncIterator[Any]):
+    """Yield items from an async generator, interrupting on abort signal.
+
+    Races gen.__anext__() against _abort_signal.wait() so a pending API
+    call can be interrupted mid-flight instead of only between events.
+    """
+    aborting = False
+    try:
+        while True:
+            if _abort_signal is not None and _abort_signal.is_set():
+                aborting = True
+                return
+            next_task = asyncio.create_task(gen.__anext__())
+            abort_task: asyncio.Task[bool] | None = None
+            if _abort_signal is not None:
+                abort_task = asyncio.create_task(_abort_signal.wait())
+            try:
+                wait_set: set[asyncio.Task[Any]] = {next_task}
+                if abort_task is not None:
+                    wait_set.add(abort_task)
+                done, _pending = await asyncio.wait(wait_set, return_when=asyncio.FIRST_COMPLETED)
+                if abort_task is not None and abort_task in done:
+                    aborting = True
+                    next_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
+                        await next_task
+                    return
+                try:
+                    event = next_task.result()
+                except StopAsyncIteration:
+                    return
+                yield event
+            finally:
+                if not next_task.done():
+                    next_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
+                        await next_task
+                if abort_task is not None:
+                    abort_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await abort_task
+    finally:
+        aclose = getattr(gen, "aclose", None)
+        if callable(aclose):
+            try:
+                await aclose()
+            except Exception:
+                if not aborting:
+                    raise
+
 
 async def _stream_subagent(config: RuntimeConfig, input: dict[str, Any], context: ToolContext):
     prompt = str(input.get("prompt", "")).strip()
@@ -777,9 +827,7 @@ async def _stream_subagent(config: RuntimeConfig, input: dict[str, Any], context
         skill_name, args = skill_request
         working_agent = _create_sdk_agent(replace(config, persist_session=False), include_runtime_agent_tool=False)
         try:
-            async for event in _stream_skill(config, working_agent, skill_name, args):
-                if _abort_signal is not None and _abort_signal.is_set():
-                    break
+            async for event in _iter_with_abort(_stream_skill(config, working_agent, skill_name, args)):
                 yield event
         finally:
             await working_agent.close()
@@ -795,9 +843,7 @@ async def _stream_subagent(config: RuntimeConfig, input: dict[str, Any], context
     child_agent = _create_sdk_agent(child_config, include_runtime_agent_tool=False, system_prompt=system_prompt)
     try:
         yield _activity_status_event("Resolved subagent", "Agent", agent_name)
-        async for event in child_agent.query(prompt):
-            if _abort_signal is not None and _abort_signal.is_set():
-                break
+        async for event in _iter_with_abort(child_agent.query(prompt)):
             yield event
     finally:
         await child_agent.close()
@@ -870,9 +916,7 @@ async def _stream_skill(config: RuntimeConfig, agent, skill_name: str, args: str
         )
         child_agent = _create_sdk_agent(child_config, include_runtime_agent_tool=False)
         try:
-            async for event in child_agent.query(prompt_text):
-                if _abort_signal is not None and _abort_signal.is_set():
-                    break
+            async for event in _iter_with_abort(child_agent.query(prompt_text)):
                 yield event
         finally:
             await child_agent.close()
@@ -881,9 +925,7 @@ async def _stream_skill(config: RuntimeConfig, agent, skill_name: str, args: str
         return
 
     query_overrides = overrides or None
-    async for event in agent.query(prompt_text, query_overrides):
-        if _abort_signal is not None and _abort_signal.is_set():
-            break
+    async for event in _iter_with_abort(agent.query(prompt_text, query_overrides)):
         yield event
     if _abort_signal is None or not _abort_signal.is_set():
         yield _activity_status_event("Completed subagent", "Skill", command_name)
@@ -958,7 +1000,34 @@ def _create_sdk_agent(
         config.mcp_servers = saved_mcp
 
     tracker = TurnTracker()
+    remote_mcp_clients: list[Any] = []
     setattr(agent, "_rooster_code_config", config)
+
+    def remember_remote_mcp_clients(tools: list[Any]) -> None:
+        for tool in tools:
+            client = getattr(tool, "_client", None)
+            if client is not None and client not in remote_mcp_clients:
+                remote_mcp_clients.append(client)
+
+    async def close_remote_mcp_clients() -> None:
+        clients = list(remote_mcp_clients)
+        remote_mcp_clients.clear()
+        for client in clients:
+            close = getattr(client, "close", None)
+            if callable(close):
+                with contextlib.suppress(Exception):
+                    await close()
+
+    if hasattr(agent, "close"):
+        original_close = agent.close
+
+        async def wrapped_close(*args: Any, **kwargs: Any):
+            try:
+                return await original_close(*args, **kwargs)
+            finally:
+                await close_remote_mcp_clients()
+
+        setattr(agent, "close", wrapped_close)
 
     def save_memory_allowed() -> bool:
         if config.allowed_tools is not None and "SaveMemory" not in config.allowed_tools:
@@ -1049,17 +1118,25 @@ def _create_sdk_agent(
         original_initialize = agent._initialize
 
         async def wrapped_initialize() -> None:
+            was_initialized = getattr(agent, "_initialized", False)
             await original_initialize()
+            if was_initialized:
+                return
             for rname, rcfg in remote_mcp.items():
                 try:
                     remote_tools = await connect_http_mcp(rname, rcfg)
+                    remember_remote_mcp_clients(remote_tools)
                     agent._tool_pool.extend(remote_tools)
                 except Exception as e:
                     log.warning("Failed to connect remote MCP server %r: %s", rname, e)
             replaced = False
             new_pool = []
             for tool in getattr(agent, "_tool_pool", []):
-                if getattr(tool, "name", "") == "Agent" and not replaced:
+                if isinstance(tool, (RuntimeAgentTool, RuntimeReadTool, RuntimeEditTool, RuntimeSkillTool, RuntimeTraceTool)):
+                    new_pool.append(tool)
+                    if getattr(tool, "name", "") == "Agent":
+                        replaced = True
+                elif getattr(tool, "name", "") == "Agent" and not replaced:
                     new_pool.append(RuntimeAgentTool(lambda input, context: _run_subagent(config, input, context), tracker))
                     replaced = True
                 elif getattr(tool, "name", "") == "TeamCreate":
@@ -1076,7 +1153,11 @@ def _create_sdk_agent(
                     new_pool.append(RuntimeTraceTool(tool, tracker))
             if not replaced:
                 new_pool.append(RuntimeAgentTool(lambda input, context: _run_subagent(config, input, context), tracker))
-            if include_runtime_agent_tool and save_memory_allowed():
+            if (
+                include_runtime_agent_tool
+                and save_memory_allowed()
+                and not any(getattr(tool, "name", "") == "SaveMemory" for tool in new_pool)
+            ):
                 new_pool.append(RuntimeTraceTool(SaveMemoryTool(), tracker))
             agent._tool_pool = new_pool
             engine = getattr(agent, "_engine", None)
@@ -1089,10 +1170,15 @@ def _create_sdk_agent(
         original_initialize = agent._initialize
 
         async def wrapped_initialize_without_agent() -> None:
+            was_initialized = getattr(agent, "_initialized", False)
             await original_initialize()
+            if was_initialized:
+                return
             new_pool = []
             for tool in getattr(agent, "_tool_pool", []):
-                if getattr(tool, "name", "") == "TeamCreate":
+                if isinstance(tool, (RuntimeReadTool, RuntimeEditTool, RuntimeSkillTool, RuntimeTraceTool)):
+                    new_pool.append(tool)
+                elif getattr(tool, "name", "") == "TeamCreate":
                     new_pool.append(RuntimeTraceTool(SDKTeamCreateBridgeTool(), tracker))
                 elif getattr(tool, "name", "") == "TeamDelete":
                     new_pool.append(RuntimeTraceTool(SDKTeamDeleteBridgeTool(), tracker))
