@@ -171,28 +171,16 @@ class TestCronReaderResourceSafety:
         closed_flags: list[bool] = []
         original_connect = sqlite3.connect
 
-        class TrackingConnection:
-            def __init__(self, real):
-                self._real = real
-                self.row_factory = None
+        class TrackingConnection(sqlite3.Connection):
+            def close(self):
+                closed_flags.append(True)
+                super().close()
 
             def execute(self, *args, **kwargs):
                 raise sqlite3.OperationalError("simulated corruption")
 
-            def close(self):
-                closed_flags.append(True)
-                self._real.close()
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc_val, exc_tb):
-                self.close()
-                # Don't suppress exceptions — sqlite3's __exit__ would rollback,
-                # but we just close and let the exception propagate
-
         def tracking_connect(path):
-            return TrackingConnection(original_connect(path))
+            return original_connect(path, factory=TrackingConnection)
 
         monkeypatch.setattr(sqlite3, "connect", tracking_connect)
 
@@ -200,7 +188,7 @@ class TestCronReaderResourceSafety:
 
         assert closed_flags == [True], (
             "sqlite connection was not closed when execute() raised — "
-            "contextlib.closing() must ensure cleanup"
+            "explicit close semantics must ensure cleanup"
         )
 
     def test_connection_closed_on_success(self, monkeypatch, tmp_path):
@@ -215,8 +203,23 @@ class TestCronReaderResourceSafety:
         conn.close()
 
         from rooster_code import runtime_session
+        closed_flags: list[bool] = []
+        original_connect = sqlite3.connect
+
+        class TrackingConnection(sqlite3.Connection):
+            def close(self):
+                closed_flags.append(True)
+                super().close()
+
+        def tracking_connect(path):
+            return original_connect(path, factory=TrackingConnection)
+
+        monkeypatch.setattr(sqlite3, "connect", tracking_connect)
+
         result = runtime_session._read_cron_jobs()
+
         assert "j1" in result
+        assert closed_flags == [True], "sqlite connection was not closed after successful cron read"
 
 
 # ---------------------------------------------------------------------------
