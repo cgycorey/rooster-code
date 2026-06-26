@@ -640,6 +640,9 @@ async def _reset_session(console, agent, team_manager) -> None:
         clear_goal()
     _injected_task_ids.clear()
     await cancel_background_subagent_tasks()
+    close_remote_mcp_clients = getattr(agent, "close_remote_mcp_clients", None)
+    if callable(close_remote_mcp_clients):
+        await close_remote_mcp_clients()
     if hasattr(agent, "_client") and agent._client:
         with contextlib.suppress(Exception):
             await agent._client.close()
@@ -882,6 +885,9 @@ async def run_chat(config) -> int:
                 if not _goal_loop_active:
                     _goal_stop = False
                 await cancel_background_subagent_tasks()
+                close_remote_mcp_clients = getattr(agent, "close_remote_mcp_clients", None)
+                if callable(close_remote_mcp_clients):
+                    await close_remote_mcp_clients()
                 if hasattr(agent, "_client") and agent._client:
                     with contextlib.suppress(Exception):
                         await agent._client.close()

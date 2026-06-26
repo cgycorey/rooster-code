@@ -114,11 +114,13 @@ class AgentPool:
             return f"Error: team member '{member}' is unavailable due to a previous error"
         async with self._locks[member]:
             agent = self._members[member]
-            task_with_messages = self._inject_mailbox(member, task)
+            mailbox_messages = self._drain_mailbox(member)
+            task_with_messages = self._format_mailbox_task(mailbox_messages, task)
             try:
                 result = await agent.prompt(task_with_messages)
                 return result.text or ""
             except Exception as exc:
+                self._restore_mailbox_front(member, mailbox_messages)
                 log.exception("Team member '%s' failed during dispatch", member)
                 self._unhealthy.add(member)
                 return f"Error: member '{member}' failed: {exc}"
@@ -153,10 +155,12 @@ class AgentPool:
                 async with self._locks[member]:
                     agent = self._members[member]
                     task_text = task
-                    task_with_messages = self._inject_mailbox(member, task_text)
+                    mailbox_messages = self._drain_mailbox(member)
+                    task_with_messages = self._format_mailbox_task(mailbox_messages, task_text)
                     try:
                         query_result = await agent.prompt(task_with_messages)
                     except Exception as exc:
+                        self._restore_mailbox_front(member, mailbox_messages)
                         self._unhealthy.add(member)
                         raise RuntimeError(f"member '{member}' failed: {exc}") from exc
                 result = _format_subagent_task_output(
@@ -283,20 +287,34 @@ class AgentPool:
         return snapshots
 
     def _inject_mailbox(self, member: str, task: str) -> str:
-        messages: list[str] = []
+        return self._format_mailbox_task(self._drain_mailbox(member), task)
+
+    def _drain_mailbox(self, member: str) -> list[dict[str, str]]:
+        drained: list[dict[str, str]] = []
         mailbox = self._mailboxes[member]
         while True:
             try:
-                msg = mailbox.get_nowait()
+                drained.append(mailbox.get_nowait())
             except asyncio.QueueEmpty:
                 break
-            sender = msg.get("from", "unknown")
-            content = msg.get("content", "")
-            messages.append(f"[Message from {sender}]: {content}")
+        return drained
+
+    def _format_mailbox_task(self, messages: list[dict[str, str]], task: str) -> str:
         if not messages:
             return task
-        header = "\n".join(messages)
-        return f"{header}\n\n{task}"
+        lines = []
+        for msg in messages:
+            sender = msg.get("from", "unknown")
+            content = msg.get("content", "")
+            lines.append(f"[Message from {sender}]: {content}")
+        return f"{'\n'.join(lines)}\n\n{task}"
+
+    def _restore_mailbox_front(self, member: str, messages: list[dict[str, str]]) -> None:
+        if not messages or member not in self._mailboxes:
+            return
+        queue = self._mailboxes[member]
+        for message in reversed(messages):
+            queue._queue.appendleft(message)
     async def close_all(self) -> None:
         all_tasks = list(self._dispatch_tasks) + list(self._message_dispatch_tasks)
         for task in all_tasks:
@@ -792,6 +810,9 @@ class TeamManager:
                 "close_team: original tool pool was None — team tools removed "
                 "but orchestrator may be missing base tools. Forcing re-initialization."
             )
+            close_remote_mcp_clients = getattr(orchestrator, "close_remote_mcp_clients", None)
+            if callable(close_remote_mcp_clients):
+                await close_remote_mcp_clients()
             if hasattr(orchestrator, "_client") and orchestrator._client:
                 with contextlib.suppress(Exception):
                     await orchestrator._client.close()

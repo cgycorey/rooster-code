@@ -240,6 +240,10 @@ async def connect_http_mcp(server_name: str, config: dict[str, Any]) -> list[Any
         log.warning("MCP %s: connection failed: %s", server_name, exc)
         await client.close()
         return []
+    if not mcp_tools:
+        await client.close()
+        log.info("MCP %s: connected, 0 tools", server_name)
+        return []
 
     tools: list[Any] = []
     for mt in mcp_tools:

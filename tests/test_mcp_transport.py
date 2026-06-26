@@ -238,6 +238,33 @@ class TestSseClientIntegration:
 
         asyncio.run(run())
 
+    def test_connect_http_mcp_closes_client_when_server_has_no_tools(self, monkeypatch):
+        closed: list[bool] = []
+
+        class FakeSseClient:
+            def __init__(self, url: str) -> None:
+                self.url = url
+
+            async def initialize(self) -> None:
+                return None
+
+            async def list_tools(self) -> list[dict]:
+                return []
+
+            async def close(self) -> None:
+                closed.append(True)
+
+        async def run():
+            import rooster_code.mcp_transport as mcp_transport
+            monkeypatch.setattr(mcp_transport, "SseClient", FakeSseClient)
+
+            tools = await mcp_transport.connect_http_mcp("empty-server", {"url": "http://localhost/sse"})
+
+            assert tools == []
+            assert closed == [True]
+
+        asyncio.run(run())
+
     def test_parse_inline_sse_response(self):
         client = SseClient("http://localhost/sse")
         import httpx

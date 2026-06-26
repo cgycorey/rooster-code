@@ -94,6 +94,22 @@ def test_agent_pool_dispatch_marks_unhealthy_on_failure():
     assert "reviewer" in pool._unhealthy
 
 
+def test_agent_pool_dispatch_preserves_mailbox_messages_on_failure():
+    pool = AgentPool()
+    fake_agent = FakeAgent()
+    fake_agent._prompt_error = RuntimeError("API error")
+    pool._members["reviewer"] = fake_agent
+    pool._mailboxes["reviewer"] = asyncio.Queue()
+    pool._locks["reviewer"] = asyncio.Lock()
+    pool.send_message("reviewer", {"from": "builder", "content": "check this first"})
+
+    result = asyncio.run(pool.dispatch("reviewer", "review code"))
+
+    assert "Error" in result
+    assert pool._mailboxes["reviewer"].get_nowait() == {"from": "builder", "content": "check this first"}
+
+
+
 def test_agent_pool_dispatch_unhealthy_member():
     pool = AgentPool()
     fake_agent = FakeAgent()
@@ -965,6 +981,45 @@ def test_team_manager_send_message_unknown_member():
 def test_team_manager_close_inactive_team():
     manager = TeamManager()
     asyncio.run(manager.close_team(MagicMock()))
+
+
+def test_team_manager_close_team_fallback_closes_runtime_remote_mcp_clients():
+    async def _run():
+        closed: list[str] = []
+
+        class FakeClient:
+            async def close(self) -> None:
+                closed.append("sdk")
+
+        manager = TeamManager()
+        manager._active = True
+        manager._pool = AgentPool()
+        manager._original_tool_pool = None
+        manager._original_append_prompt = "original prompt"
+
+        orchestrator = MagicMock()
+        orchestrator._client = FakeClient()
+        orchestrator._provider = "provider"
+        orchestrator._engine = MagicMock()
+        orchestrator._engine._config = MagicMock()
+        orchestrator._initialized = True
+        orchestrator._tool_pool = []
+        orchestrator._options.append_system_prompt = "team prompt"
+
+        async def close_remote_mcp_clients() -> None:
+            closed.append("remote-mcp")
+
+        orchestrator.close_remote_mcp_clients = close_remote_mcp_clients
+
+        await manager.close_team(orchestrator)
+
+        assert closed == ["remote-mcp", "sdk"]
+        assert orchestrator._client is None
+        assert orchestrator._provider is None
+        assert orchestrator._engine is None
+        assert orchestrator._initialized is False
+
+    asyncio.run(_run())
 
 
 def test_team_manager_info_active():
@@ -1853,6 +1908,30 @@ def test_agent_pool_dispatch_async_clears_busy_after_failure():
 
         assert pool._busy == set()
         assert not pool.is_busy("reviewer")
+
+    asyncio.run(_run())
+
+
+def test_agent_pool_dispatch_async_preserves_mailbox_messages_on_failure():
+    async def _run():
+        import unittest.mock
+        pool = AgentPool()
+        fake_agent = FakeAgent()
+        fake_agent._prompt_error = RuntimeError("API error")
+        pool._members["reviewer"] = fake_agent
+        pool._mailboxes["reviewer"] = asyncio.Queue()
+        pool._locks["reviewer"] = asyncio.Lock()
+        pool.send_message("reviewer", {"from": "builder", "content": "check this first"})
+
+        with unittest.mock.patch("rooster_code.runtime._track_background_task"):
+            with unittest.mock.patch("rooster_code.runtime._update_background_subagent_task", new_callable=unittest.mock.AsyncMock):
+                await pool.dispatch_async("reviewer", "review code", "task-fail", ".", {})
+
+        for task in list(pool._dispatch_tasks):
+            with __import__("contextlib").suppress(Exception):
+                await task
+
+        assert pool._mailboxes["reviewer"].get_nowait() == {"from": "builder", "content": "check this first"}
 
     asyncio.run(_run())
 

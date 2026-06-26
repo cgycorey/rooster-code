@@ -387,6 +387,87 @@ def test_run_ask_uses_runtime_abort_signal_and_sigint(monkeypatch) -> None:
     assert captured["closed"] is True
 
 
+def test_reset_session_closes_runtime_remote_mcp_clients(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeAgent:
+        _client = None
+        _provider = "provider"
+        _engine = "engine"
+        _initialized = True
+
+        def clear(self) -> None:
+            captured["cleared"] = True
+
+        async def close_remote_mcp_clients(self) -> None:
+            captured["remote_mcp_closed"] = True
+
+        async def _initialize(self) -> None:
+            captured["initialized"] = True
+
+    class FakeTeamManager:
+        def is_active(self) -> bool:
+            return False
+
+    monkeypatch.setattr(cli, "get_active_goal", lambda: None)
+    monkeypatch.setattr(cli, "cancel_background_subagent_tasks", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(cli, "set_runtime_team_bridge", lambda team_manager, agent: None)
+    monkeypatch.setattr(cli, "render_notice", lambda *args, **kwargs: None)
+    import rooster_code.runtime as runtime
+    monkeypatch.setattr(runtime, "rehydrate_tasks_from_history", lambda agent: captured.setdefault("rehydrated", True))
+
+    cli.asyncio.run(cli._reset_session(SilentConsole(), FakeAgent(), FakeTeamManager()))
+
+    assert captured["cleared"] is True
+    assert captured["remote_mcp_closed"] is True
+    assert captured["initialized"] is True
+    assert captured["rehydrated"] is True
+
+
+def test_run_chat_interrupt_closes_runtime_remote_mcp_clients(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeAgent:
+        _client = None
+        _provider = "provider"
+        _engine = "engine"
+        _initialized = True
+
+        def clear(self) -> None:
+            return None
+
+        async def close_remote_mcp_clients(self) -> None:
+            captured["remote_mcp_closed"] = True
+
+        async def _initialize(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            captured["closed"] = True
+
+        async def query(self, prompt: str):
+            yield SDKMessage(type=SDKMessageType.ASSISTANT, text="ok")
+
+    prompts = iter(["hello", "/exit"])
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "set_runtime_team_bridge", lambda team_manager, agent: None)
+    import rooster_code.runtime as runtime
+    monkeypatch.setattr(runtime, "rehydrate_tasks_from_history", lambda agent: None)
+
+    async def fake_render_event_stream(console, events, **kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(cli, "render_event_stream", fake_render_event_stream)
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m1")))
+
+    assert exit_code == 0
+    assert captured["remote_mcp_closed"] is True
+    assert captured["closed"] is True
+
+
 def test_create_question_handler_cancels_when_abort_signal_is_set(monkeypatch) -> None:
     async def fake_prompt_async(self, prompt_text: str, *args, **kwargs):
         await asyncio.Future()

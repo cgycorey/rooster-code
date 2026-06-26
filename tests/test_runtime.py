@@ -111,6 +111,57 @@ def test_build_agent_options_carries_runtime_configuration() -> None:
     assert options.extra_args == {"temperature": 0}
 
 
+
+def test_build_subagent_config_passes_max_tokens_from_definition() -> None:
+    from rooster_code.runtime import _build_subagent_config
+
+    config = RuntimeConfig(
+        api_key="abc",
+        base_url="https://example.test",
+        model="m1",
+        max_tokens=280,
+    )
+    definition = {"description": "test", "max_tokens": 4096, "max_turns": 2}
+
+    result = _build_subagent_config(config, definition, {}, ToolContext(cwd=".", env={}))
+
+    assert result.max_tokens == 4096
+    assert result.max_turns == 2
+
+
+def test_build_subagent_config_passes_thinking_budget_from_definition() -> None:
+    from rooster_code.runtime import _build_subagent_config
+
+    config = RuntimeConfig(
+        api_key="abc",
+        base_url="https://example.test",
+        model="m1",
+        thinking_budget=100,
+    )
+    definition = {"description": "test", "thinking_budget": 500}
+
+    result = _build_subagent_config(config, definition, {}, ToolContext(cwd=".", env={}))
+
+    assert result.thinking_budget == 500
+
+
+def test_build_subagent_config_falls_back_to_config_when_definition_omits() -> None:
+    from rooster_code.runtime import _build_subagent_config
+
+    config = RuntimeConfig(
+        api_key="abc",
+        base_url="https://example.test",
+        model="m1",
+        max_tokens=800,
+        thinking_budget=200,
+    )
+    definition = {"description": "test"}
+
+    result = _build_subagent_config(config, definition, {}, ToolContext(cwd=".", env={}))
+
+    assert result.max_tokens == 800
+    assert result.thinking_budget == 200
+
 def test_build_agent_options_omits_agent_tool_prompt_when_agent_tool_disabled() -> None:
     options = build_agent_options(
         RuntimeConfig(
@@ -3540,6 +3591,58 @@ def test_iter_with_abort_suppresses_source_close_error_after_abort():
             first = await gen.__anext__()
             assert first == {"phase": "first"}
             abort.set()
+            async for _ in gen:
+                pass
+        finally:
+            runtime.set_abort_signal(None)
+
+    asyncio.run(run())
+
+
+def test_iter_with_abort_preserves_source_error_when_abort_and_error_race():
+    async def run():
+        abort = asyncio.Event()
+        runtime.set_abort_signal(abort)
+
+        async def source():
+            yield {"phase": "first"}
+            abort.set()
+            raise RuntimeError("source failed")
+
+        try:
+            gen = runtime._iter_with_abort(source())
+            first = await gen.__anext__()
+            assert first == {"phase": "first"}
+            with pytest.raises(RuntimeError, match="source failed"):
+                async for _ in gen:
+                    pass
+        finally:
+            runtime.set_abort_signal(None)
+
+    asyncio.run(run())
+
+
+def test_iter_with_abort_suppresses_inflight_cleanup_error_after_abort():
+    async def run():
+        abort = asyncio.Event()
+        runtime.set_abort_signal(abort)
+
+        async def source():
+            try:
+                yield {"phase": "first"}
+                await asyncio.sleep(10)
+            finally:
+                raise RuntimeError("cleanup failed")
+
+        async def fire_abort():
+            await asyncio.sleep(0.01)
+            abort.set()
+
+        try:
+            gen = runtime._iter_with_abort(source())
+            first = await gen.__anext__()
+            assert first == {"phase": "first"}
+            asyncio.create_task(fire_abort())
             async for _ in gen:
                 pass
         finally:

@@ -414,6 +414,26 @@ def _build_subagent_config(
             raise RuntimeError(
                 f"Agent '{agent_name}' has invalid max_turns: {max_turns!r}. Must be an integer."
             )
+    _max_tokens = config.max_tokens
+    max_tokens = definition.get("max_tokens")
+    if max_tokens is not None:
+        try:
+            _max_tokens = int(max_tokens)
+        except (ValueError, TypeError):
+            agent_name = definition.get("name") or definition.get("description") or "unknown"
+            raise RuntimeError(
+                f"Agent '{agent_name}' has invalid max_tokens: {max_tokens!r}. Must be an integer."
+            )
+    _thinking_budget = config.thinking_budget
+    thinking_budget = definition.get("thinking_budget")
+    if thinking_budget is not None:
+        try:
+            _thinking_budget = int(thinking_budget)
+        except (ValueError, TypeError):
+            agent_name = definition.get("name") or definition.get("description") or "unknown"
+            raise RuntimeError(
+                f"Agent '{agent_name}' has invalid thinking_budget: {thinking_budget!r}. Must be an integer."
+            )
     return replace(
         config,
         model=str(input.get("model") or definition.get("model") or config.model or ""),
@@ -421,6 +441,8 @@ def _build_subagent_config(
         allowed_tools=tools if isinstance(tools, list) else config.allowed_tools,
         disallowed_tools=disallowed_tools if isinstance(disallowed_tools, list) else config.disallowed_tools,
         max_turns=_max_turns,
+        max_tokens=_max_tokens,
+        thinking_budget=_thinking_budget,
         persist_session=False,
         session_id=None,
         resume=None,
@@ -782,9 +804,19 @@ async def _iter_with_abort(gen: AsyncIterator[Any]):
                 done, _pending = await asyncio.wait(wait_set, return_when=asyncio.FIRST_COMPLETED)
                 if abort_task is not None and abort_task in done:
                     aborting = True
-                    next_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
-                        await next_task
+                    if next_task.done():
+                        try:
+                            next_task.result()
+                        except StopAsyncIteration:
+                            return
+                    else:
+                        next_task.cancel()
+                        try:
+                            await next_task
+                        except (asyncio.CancelledError, StopAsyncIteration):
+                            pass
+                        except Exception:
+                            pass
                     return
                 try:
                     event = next_task.result()
@@ -1028,6 +1060,7 @@ def _create_sdk_agent(
                 await close_remote_mcp_clients()
 
         setattr(agent, "close", wrapped_close)
+    setattr(agent, "close_remote_mcp_clients", close_remote_mcp_clients)
 
     def save_memory_allowed() -> bool:
         if config.allowed_tools is not None and "SaveMemory" not in config.allowed_tools:
