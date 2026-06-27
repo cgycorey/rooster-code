@@ -8,3 +8,4 @@ __pycache__/
 .claude/
 .openclaude/
 *.handoff
+image.png
