@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+from datetime import datetime, timezone
 import logging
 import re
 from pathlib import Path
@@ -20,6 +21,23 @@ from open_agent_sdk.providers import CreateMessageParams
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 _TOOL_CALL_ARTIFACT_RE = re.compile(r"^[a-z][\w-]*:tool_call\b.*$", re.MULTILINE | re.IGNORECASE)
+_SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # Prefixed tokens: redact the full token, keep the prefix
+    (re.compile(r"sk[-_](?:live_|test_)?[a-zA-Z0-9]{20,}"), "sk-***REDACTED***"),
+    (re.compile(r"ghp_[a-zA-Z0-9]{36,}"), "ghp_***REDACTED***"),
+    (re.compile(r"gho_[a-zA-Z0-9]{36,}"), "gho_***REDACTED***"),
+    (re.compile(r"glpat-[a-zA-Z0-9\-]{20,}"), "glpat-***REDACTED***"),
+    (re.compile(r"xox[bpras]-[a-zA-Z0-9\-]{10,}"), "xox-***REDACTED***"),
+    # KEY=VALUE patterns: keep the key name, redact only the value
+    (re.compile(r"((?:ROOSTER_CODE_)?(?:API_KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL))(\s*[=:]\s*)(?:['\"]?[^\s'\"]{8,})"), r"\1\2***REDACTED***"),
+]
+
+
+def _redact_secrets(text: str) -> str:
+    """Redact common secret patterns from text before writing to disk."""
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
 
 _log = logging.getLogger("rooster.session")
 
@@ -347,6 +365,91 @@ async def _compact_with_provider(agent, messages: list[dict[str, object]]) -> tu
         },
     ]
     return summary, compacted_messages
+
+
+def _build_handoff_file_content(agent: object, summary: str) -> str:
+    session_id = "new"
+    get_session_id = getattr(agent, "get_session_id", None)
+    if callable(get_session_id):
+        with contextlib.suppress(Exception):
+            session_id = str(get_session_id() or "new")
+    else:
+        raw_session_id = getattr(agent, "_session_id", "")
+        if raw_session_id:
+            session_id = str(raw_session_id)
+
+    model = "default"
+    resolve_model = getattr(agent, "_resolve_model", None)
+    if callable(resolve_model):
+        with contextlib.suppress(Exception):
+            model = str(resolve_model() or "default")
+    else:
+        options = getattr(agent, "_options", None)
+        raw_model = getattr(options, "model", "") if options is not None else ""
+        if raw_model:
+            model = str(raw_model)
+
+    options = getattr(agent, "_options", None)
+    cwd = getattr(options, "cwd", "") if options is not None else ""
+    cwd_text = str(cwd or Path.cwd())
+    generated = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    content = (
+        "# Handoff\n\n"
+        f"Generated: {generated}\n"
+        f"Session: {session_id}\n"
+        f"Model: {model}\n"
+        f"CWD: {cwd_text}\n\n"
+        "## Resume Prompt\n\n"
+        "Read this `.handoff`, inspect the current repository state, verify whether the described state is still accurate, "
+        "then continue from the `## Next Step` section. Do not assume this handoff is fully up to date.\n\n"
+        "---\n\n"
+        f"{summary.strip()}\n"
+    )
+    return _redact_secrets(content)
+
+
+async def handoff_current_session(agent, path: str | Path | None = None) -> dict[str, object]:
+    if hasattr(agent, "_initialize"):
+        await agent._initialize()
+
+    history = list(getattr(agent, "_history", []))
+    compactable_history = _filter_history_for_manual_compaction(history)
+    before_tokens = _sdk().estimate_messages_tokens(compactable_history)
+
+    if len(compactable_history) < 2:
+        return {
+            "compacted": False,
+            "written": False,
+            "path": "",
+            "summary": "",
+            "before_tokens": before_tokens,
+            "after_tokens": before_tokens,
+            "reason": "Need at least two messages before compaction.",
+        }
+
+    pre_compaction_history = list(agent._history)
+    handoff_path = Path(path) if path is not None else Path(".handoff")
+    try:
+        summary, compacted_history = await _compact_with_provider(agent, compactable_history)
+        after_tokens = _sdk().estimate_messages_tokens(compacted_history)
+        handoff_path.parent.mkdir(parents=True, exist_ok=True)
+        handoff_path.write_text(_build_handoff_file_content(agent, summary), encoding="utf-8")
+    except Exception:
+        agent._history = pre_compaction_history
+        raise
+
+    agent._history = compacted_history
+    compacted = after_tokens < before_tokens
+    return {
+        "compacted": compacted,
+        "written": True,
+        "path": str(handoff_path),
+        "summary": summary,
+        "before_tokens": before_tokens,
+        "after_tokens": after_tokens,
+        "reason": "" if compacted else "Compaction produced no smaller history.",
+    }
 
 
 async def compact_current_session(agent) -> dict[str, object]:

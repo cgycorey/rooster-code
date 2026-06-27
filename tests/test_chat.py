@@ -516,6 +516,300 @@ def test_run_chat_shows_compact_error_when_compaction_fails(monkeypatch) -> None
     assert notices[0] == ("Compact Error", "Compaction failed.", "red")
 
 
+def test_run_chat_handoff_writes_default_file(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/handoff", "/exit"])
+    notices: list[tuple[str, str, str]] = []
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_handoff_current_session(agent, path: str | None = None) -> dict[str, object]:
+        captured["agent"] = agent
+        captured["path"] = path
+        return {
+            "compacted": True,
+            "written": True,
+            "path": path or "",
+            "summary": "summary text",
+            "before_tokens": 1200,
+            "after_tokens": 240,
+            "reason": "",
+        }
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "handoff_current_session", fake_handoff_current_session, raising=False)
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2", cwd=str(tmp_path))))
+
+    assert exit_code == 0
+    assert isinstance(captured["agent"], FakeAgent)
+    assert captured["path"] == str(tmp_path / ".handoff")
+    assert captured["closed"] is True
+    assert notices[0][0] == "Handoff"
+    assert notices[0][2] == "green"
+    assert f"Saved {tmp_path / '.handoff'}" in notices[0][1]
+    assert "1200 → 240" in notices[0][1]
+
+
+def test_run_chat_handoff_resolves_relative_path_argument_against_cwd(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/handoff custom.handoff", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_handoff_current_session(agent, path: str | None = None) -> dict[str, object]:
+        captured["path"] = path
+        return {
+            "compacted": True,
+            "written": True,
+            "path": path or "",
+            "summary": "summary text",
+            "before_tokens": 12,
+            "after_tokens": 4,
+            "reason": "",
+        }
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "handoff_current_session", fake_handoff_current_session, raising=False)
+    monkeypatch.setattr(cli, "render_notice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2", cwd=str(tmp_path))))
+
+    assert exit_code == 0
+    assert captured["path"] == str(tmp_path / "custom.handoff")
+    assert captured["closed"] is True
+
+
+def test_run_chat_handoff_shows_skipped_notice(monkeypatch, tmp_path) -> None:
+    prompts = iter(["/handoff", "/exit"])
+    notices: list[tuple[str, str, str]] = []
+
+    class FakeAgent:
+        async def close(self) -> None:
+            return None
+
+    async def fake_handoff_current_session(agent, path: str | None = None) -> dict[str, object]:
+        return {
+            "compacted": False,
+            "written": False,
+            "path": "",
+            "summary": "",
+            "before_tokens": 42,
+            "after_tokens": 42,
+            "reason": "Need at least two messages before compaction.",
+        }
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "handoff_current_session", fake_handoff_current_session, raising=False)
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2", cwd=str(tmp_path))))
+
+    assert exit_code == 0
+    assert notices[0] == ("Handoff skipped", "Need at least two messages before compaction.", "yellow")
+
+
+def test_run_chat_handoff_shows_error_when_handoff_fails(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/handoff", "/exit"])
+    notices: list[tuple[str, str, str]] = []
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_handoff_current_session(agent, path: str | None = None) -> dict[str, object]:
+        raise RuntimeError("Handoff failed")
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "handoff_current_session", fake_handoff_current_session, raising=False)
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2")))
+
+    assert exit_code == 0
+    assert captured["closed"] is True
+    assert notices[0] == ("Handoff Error", "Handoff failed", "red")
+
+
+def test_run_chat_handoff_absolute_path_argument_unchanged(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    abs_path = str(tmp_path / "absolute.handoff")
+    prompts = iter([f"/handoff {abs_path}", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_handoff_current_session(agent, path: str | None = None) -> dict[str, object]:
+        captured["path"] = path
+        return {
+            "compacted": True,
+            "written": True,
+            "path": path or "",
+            "summary": "summary text",
+            "before_tokens": 12,
+            "after_tokens": 4,
+            "reason": "",
+        }
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "handoff_current_session", fake_handoff_current_session, raising=False)
+    monkeypatch.setattr(cli, "render_notice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2", cwd=str(tmp_path))))
+
+    assert exit_code == 0
+    # Absolute paths stay absolute (Path(base / absolute) returns absolute unchanged)
+    assert captured["path"] == abs_path
+
+
+def test_run_chat_handoff_subdirectory_relative_path(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/handoff docs/.handoff", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_handoff_current_session(agent, path: str | None = None) -> dict[str, object]:
+        captured["path"] = path
+        return {
+            "compacted": True,
+            "written": True,
+            "path": path or "",
+            "summary": "summary text",
+            "before_tokens": 12,
+            "after_tokens": 4,
+            "reason": "",
+        }
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "handoff_current_session", fake_handoff_current_session, raising=False)
+    monkeypatch.setattr(cli, "render_notice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2", cwd=str(tmp_path))))
+
+    assert exit_code == 0
+    assert captured["path"] == str(tmp_path / "docs" / ".handoff")
+
+
+def test_run_chat_handoff_quoted_path_with_spaces(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/handoff \"my handoff.md\"", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_handoff_current_session(agent, path: str | None = None) -> dict[str, object]:
+        captured["path"] = path
+        return {
+            "compacted": True,
+            "written": True,
+            "path": path or "",
+            "summary": "summary text",
+            "before_tokens": 12,
+            "after_tokens": 4,
+            "reason": "",
+        }
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "handoff_current_session", fake_handoff_current_session, raising=False)
+    monkeypatch.setattr(cli, "render_notice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2", cwd=str(tmp_path))))
+
+    assert exit_code == 0
+    assert captured["path"] == str(tmp_path / "my handoff.md")
+
+
+def test_run_chat_handoff_rejects_empty_path(monkeypatch, tmp_path) -> None:
+    prompts = iter(['/handoff ""', "/exit"])
+    notices: list[tuple[str, str, str]] = []
+
+    class FakeAgent:
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "handoff_current_session", lambda *a, **k: {}, raising=False)
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2", cwd=str(tmp_path))))
+
+    assert exit_code == 0
+    assert notices[0][0] == "Handoff Error"
+    assert notices[0][2] == "red"
+    assert "empty" in notices[0][1].lower()
+
+
+def test_run_chat_handoff_rejects_trailing_slash(monkeypatch, tmp_path) -> None:
+    prompts = iter(["/handoff docs/", "/exit"])
+    notices: list[tuple[str, str, str]] = []
+
+    class FakeAgent:
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "handoff_current_session", lambda *a, **k: {}, raising=False)
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2", cwd=str(tmp_path))))
+
+    assert exit_code == 0
+    assert notices[0][0] == "Handoff Error"
+    assert notices[0][2] == "red"
+    assert "directory" in notices[0][1].lower()
+
+
+def test_run_chat_handoff_rejects_existing_directory(monkeypatch, tmp_path) -> None:
+    (tmp_path / "existing_dir").mkdir()
+    prompts = iter(["/handoff existing_dir", "/exit"])
+    notices: list[tuple[str, str, str]] = []
+
+    class FakeAgent:
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "handoff_current_session", lambda *a, **k: {}, raising=False)
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.asyncio.run(cli.run_chat(RuntimeConfig(model="m2", cwd=str(tmp_path))))
+
+    assert exit_code == 0
+    assert notices[0][0] == "Handoff Error"
+    assert notices[0][2] == "red"
+    assert "directory" in notices[0][1].lower()
+
+
 def test_run_chat_updates_model(monkeypatch) -> None:
     captured: dict[str, object] = {}
     prompts = iter(["/model new-model", "/exit"])

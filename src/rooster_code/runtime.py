@@ -60,6 +60,7 @@ from rooster_code.runtime_session import (
     _format_subagent_summary,
     _format_subagent_task_output,
     compact_current_session,  # noqa: F401
+    handoff_current_session,  # noqa: F401
     delete_session,  # noqa: F401
     enforce_session_retention,  # noqa: F401
     fork_session,  # noqa: F401

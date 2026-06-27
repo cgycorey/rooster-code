@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Coroutine, cast
 
 import rooster_code.runtime as runtime
+import rooster_code.runtime_session as runtime_session
 import pytest
 from open_agent_sdk import SDKMessage, SDKMessageType, ToolContext, ToolResult
 from open_agent_sdk.providers import CreateMessageResponse
@@ -2562,6 +2563,749 @@ def test_compact_current_session_rewrites_agent_history(monkeypatch) -> None:
         "reason": "",
     }
 
+
+
+def test_handoff_current_session_writes_file_and_compacts_history(monkeypatch, tmp_path) -> None:
+    original_history = [
+        {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+    ]
+    compacted_history = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "[Previous conversation summary]\n\nsummary"}],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "I understand the context. Let me continue from where we left off."}],
+        },
+    ]
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = list(original_history)
+            self.initialized = False
+            self._session_id = "sess-1"
+            self._options = type("Options", (), {"model": "m-test", "cwd": str(tmp_path)})()
+
+        async def _initialize(self) -> None:
+            self.initialized = True
+
+        def _ensure_provider(self):
+            return provider
+
+        def _resolve_model(self) -> str:
+            return "m-test"
+
+    class FakeProvider:
+        def __init__(self) -> None:
+            self.params = None
+
+        async def create_message(self, params):
+            self.params = params
+            return CreateMessageResponse(
+                content=[{"type": "text", "text": "summary"}],
+                stop_reason="end_turn",
+            )
+
+    provider = FakeProvider()
+    agent = FakeAgent()
+    monkeypatch.setattr(
+        runtime,
+        "estimate_messages_tokens",
+        lambda messages: 1200 if messages == original_history else 240,
+        raising=False,
+    )
+
+    handoff_path = tmp_path / ".handoff"
+    result = asyncio.run(runtime.handoff_current_session(agent, handoff_path))
+
+    assert agent.initialized is True
+    assert provider.params is not None
+    assert provider.params.model == "m-test"
+    assert agent._history == compacted_history
+    assert result == {
+        "compacted": True,
+        "written": True,
+        "path": str(handoff_path),
+        "summary": "summary",
+        "before_tokens": 1200,
+        "after_tokens": 240,
+        "reason": "",
+    }
+    text = handoff_path.read_text(encoding="utf-8")
+    assert text.startswith("# Handoff\n")
+    assert "Session: sess-1" in text
+    assert "Model: m-test" in text
+    assert f"CWD: {tmp_path}" in text
+    assert "## Resume Prompt" in text
+    assert "Read this `.handoff`" in text
+    assert "summary" in text
+
+
+def test_handoff_current_session_restores_history_when_file_write_fails(monkeypatch, tmp_path) -> None:
+    original_history = [
+        {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+    ]
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = list(original_history)
+
+        async def _initialize(self) -> None:
+            return None
+
+        def _ensure_provider(self):
+            return provider
+
+        def _resolve_model(self) -> str:
+            return "m-test"
+
+    class FakeProvider:
+        async def create_message(self, params):
+            return CreateMessageResponse(
+                content=[{"type": "text", "text": "summary"}],
+                stop_reason="end_turn",
+            )
+
+    provider = FakeProvider()
+    agent = FakeAgent()
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+    blocking_file = tmp_path / "not-a-dir"
+    blocking_file.write_text("blocks parent directory", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        asyncio.run(runtime.handoff_current_session(agent, blocking_file / ".handoff"))
+
+    assert agent._history == original_history
+
+
+def test_handoff_current_session_skips_small_history(monkeypatch, tmp_path) -> None:
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = [{"role": "user", "content": [{"type": "text", "text": "hello"}]}]
+
+        async def _initialize(self) -> None:
+            return None
+
+    handoff_path = tmp_path / ".handoff"
+    agent = FakeAgent()
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+
+    result = asyncio.run(runtime.handoff_current_session(agent, handoff_path))
+
+    assert result == {
+        "compacted": False,
+        "written": False,
+        "path": "",
+        "summary": "",
+        "before_tokens": 42,
+        "after_tokens": 42,
+        "reason": "Need at least two messages before compaction.",
+    }
+    assert not handoff_path.exists()
+
+
+def test_handoff_current_session_provider_failure_restores_history_and_writes_no_file(monkeypatch, tmp_path) -> None:
+    original_history = [
+        {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+    ]
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = list(original_history)
+
+        async def _initialize(self) -> None:
+            return None
+
+        def _ensure_provider(self):
+            return provider
+
+        def _resolve_model(self) -> str:
+            return "m-test"
+
+    class FakeProvider:
+        async def create_message(self, params):
+            raise RuntimeError("Provider unavailable")
+
+    provider = FakeProvider()
+    agent = FakeAgent()
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+    handoff_path = tmp_path / ".handoff"
+
+    with pytest.raises(RuntimeError, match="Provider unavailable"):
+        asyncio.run(runtime.handoff_current_session(agent, handoff_path))
+
+    assert agent._history == original_history
+    assert not handoff_path.exists()
+
+
+def test_handoff_current_session_absolute_path_argument_passed_through(monkeypatch, tmp_path) -> None:
+    absolute_path = tmp_path / "subdir" / "custom.handoff"
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = [
+                {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+            ]
+
+        async def _initialize(self) -> None:
+            return None
+
+        def _ensure_provider(self):
+            return provider
+
+        def _resolve_model(self) -> str:
+            return "m-test"
+
+    class FakeProvider:
+        async def create_message(self, params):
+            return CreateMessageResponse(
+                content=[{"type": "text", "text": "summary"}],
+                stop_reason="end_turn",
+            )
+
+    provider = FakeProvider()
+    agent = FakeAgent()
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+
+    result = asyncio.run(runtime.handoff_current_session(agent, absolute_path))
+
+    assert result["written"] is True
+    assert result["path"] == str(absolute_path)
+    assert absolute_path.exists()
+    assert absolute_path.read_text(encoding="utf-8").startswith("# Handoff\n")
+
+
+def test_handoff_current_session_subdirectory_path_creates_parents(monkeypatch, tmp_path) -> None:
+    nested_path = tmp_path / "deep" / "nested" / "dir" / ".handoff"
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = [
+                {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+            ]
+
+        async def _initialize(self) -> None:
+            return None
+
+        def _ensure_provider(self):
+            return provider
+
+        def _resolve_model(self) -> str:
+            return "m-test"
+
+    class FakeProvider:
+        async def create_message(self, params):
+            return CreateMessageResponse(
+                content=[{"type": "text", "text": "summary"}],
+                stop_reason="end_turn",
+            )
+
+    provider = FakeProvider()
+    agent = FakeAgent()
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+
+    result = asyncio.run(runtime.handoff_current_session(agent, nested_path))
+
+    assert result["written"] is True
+    assert nested_path.exists()
+    assert nested_path.read_text(encoding="utf-8").startswith("# Handoff\n")
+
+
+def test_handoff_current_session_no_cwd_falls_back_to_process_cwd(monkeypatch, tmp_path) -> None:
+    """When agent._options has no cwd, _build_handoff_file_content falls back to Path.cwd()."""
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = [
+                {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+            ]
+            self._options = type("Options", (), {"model": "m-test"})()
+
+        async def _initialize(self) -> None:
+            return None
+
+        def _ensure_provider(self):
+            return provider
+
+        def _resolve_model(self) -> str:
+            return "m-test"
+
+    class FakeProvider:
+        async def create_message(self, params):
+            return CreateMessageResponse(
+                content=[{"type": "text", "text": "summary"}],
+                stop_reason="end_turn",
+            )
+
+    provider = FakeProvider()
+    agent = FakeAgent()
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+    handoff_path = tmp_path / ".handoff"
+
+    result = asyncio.run(runtime.handoff_current_session(agent, handoff_path))
+    text = handoff_path.read_text(encoding="utf-8")
+
+    assert result["written"] is True
+    assert f"CWD: {Path.cwd()}" in text
+
+
+def test_build_handoff_file_content_with_minimal_agent() -> None:
+    """_build_handoff_file_content handles agents with no _session_id, no _resolve_model, no _options."""
+
+    class MinimalAgent:
+        pass
+
+    agent = MinimalAgent()
+    content = runtime_session._build_handoff_file_content(agent, "test summary")
+
+    assert content.startswith("# Handoff\n")
+    assert "Session: new" in content
+    assert "Model: default" in content
+    assert f"CWD: {Path.cwd()}" in content
+    assert "test summary" in content
+
+
+def test_handoff_current_session_compaction_no_smaller_still_writes_file(monkeypatch, tmp_path) -> None:
+    """When compaction doesn't shrink tokens, the file is still written and compacted=False."""
+    original_history = [
+        {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+    ]
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = list(original_history)
+
+        async def _initialize(self) -> None:
+            return None
+
+        def _ensure_provider(self):
+            return provider
+
+        def _resolve_model(self) -> str:
+            return "m-test"
+
+    class FakeProvider:
+        async def create_message(self, params):
+            return CreateMessageResponse(
+                content=[{"type": "text", "text": "summary"}],
+                stop_reason="end_turn",
+            )
+
+    provider = FakeProvider()
+    agent = FakeAgent()
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+    handoff_path = tmp_path / ".handoff"
+
+    result = asyncio.run(runtime.handoff_current_session(agent, handoff_path))
+
+    assert result["compacted"] is False
+    assert result["written"] is True
+    assert result["reason"] == "Compaction produced no smaller history."
+    assert handoff_path.exists()
+
+
+def test_handoff_current_session_overwrites_existing_file(monkeypatch, tmp_path) -> None:
+    handoff_path = tmp_path / ".handoff"
+    handoff_path.write_text("old content", encoding="utf-8")
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = [
+                {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+            ]
+
+        async def _initialize(self) -> None:
+            return None
+
+        def _ensure_provider(self):
+            return provider
+
+        def _resolve_model(self) -> str:
+            return "m-test"
+
+    class FakeProvider:
+        async def create_message(self, params):
+            return CreateMessageResponse(
+                content=[{"type": "text", "text": "new summary"}],
+                stop_reason="end_turn",
+            )
+
+    provider = FakeProvider()
+    agent = FakeAgent()
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+
+    result = asyncio.run(runtime.handoff_current_session(agent, handoff_path))
+
+    assert result["written"] is True
+    text = handoff_path.read_text(encoding="utf-8")
+    assert "new summary" in text
+    assert "old content" not in text
+
+
+def test_handoff_current_session_path_object_argument(monkeypatch, tmp_path) -> None:
+    """handoff_current_session accepts a Path object, not just a string."""
+    handoff_path = tmp_path / "custom.handoff"
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = [
+                {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+            ]
+
+        async def _initialize(self) -> None:
+            return None
+
+        def _ensure_provider(self):
+            return provider
+
+        def _resolve_model(self) -> str:
+            return "m-test"
+
+    class FakeProvider:
+        async def create_message(self, params):
+            return CreateMessageResponse(
+                content=[{"type": "text", "text": "summary"}],
+                stop_reason="end_turn",
+            )
+
+    provider = FakeProvider()
+    agent = FakeAgent()
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+
+    result = asyncio.run(runtime.handoff_current_session(agent, handoff_path))
+    assert result["written"] is True
+    assert result["path"] == str(handoff_path)
+    assert handoff_path.exists()
+
+
+
+
+def test_handoff_current_session_preserves_system_messages(monkeypatch, tmp_path) -> None:
+    """System messages should be preserved in history after handoff compaction."""
+    original_history = [
+        {"role": "system", "content": [{"type": "text", "text": "You are a helpful assistant."}]},
+        {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+    ]
+    compacted_history = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "[Previous conversation summary]\n\nsummary"}],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "I understand the context. Let me continue from where we left off."}],
+        },
+    ]
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = list(original_history)
+
+        async def _initialize(self) -> None:
+            return None
+
+        def _ensure_provider(self):
+            return provider
+
+        def _resolve_model(self) -> str:
+            return "m-test"
+
+    class FakeProvider:
+        async def create_message(self, params):
+            return CreateMessageResponse(
+                content=[{"type": "text", "text": "summary"}],
+                stop_reason="end_turn",
+            )
+
+    provider = FakeProvider()
+    agent = FakeAgent()
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+    handoff_path = tmp_path / ".handoff"
+
+    result = asyncio.run(runtime.handoff_current_session(agent, handoff_path))
+
+    assert result["written"] is True
+    # After compaction, agent._history is the compacted history (system messages are filtered
+    # by _filter_history_for_manual_compaction and replaced by the compacted pair)
+    assert agent._history == compacted_history
+
+
+def test_handoff_current_session_permission_denied(monkeypatch, tmp_path) -> None:
+    """Writing to a read-only directory raises and restores history."""
+    original_history = [
+        {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+    ]
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = list(original_history)
+
+        async def _initialize(self) -> None:
+            return None
+
+        def _ensure_provider(self):
+            return provider
+
+        def _resolve_model(self) -> str:
+            return "m-test"
+
+    class FakeProvider:
+        async def create_message(self, params):
+            return CreateMessageResponse(
+                content=[{"type": "text", "text": "summary"}],
+                stop_reason="end_turn",
+            )
+
+    provider = FakeProvider()
+    agent = FakeAgent()
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+    readonly_dir = tmp_path / "readonly"
+    readonly_dir.mkdir()
+    readonly_dir.chmod(0o444)
+    handoff_path = readonly_dir / ".handoff"
+
+    try:
+        with pytest.raises(PermissionError):
+            asyncio.run(runtime.handoff_current_session(agent, handoff_path))
+        assert agent._history == original_history
+    finally:
+        readonly_dir.chmod(0o755)
+
+
+def test_handoff_file_content_has_utc_timezone(monkeypatch, tmp_path) -> None:
+    """The Generated timestamp should be UTC and contain +00:00 or Z."""
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = [
+                {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+            ]
+
+        async def _initialize(self) -> None:
+            return None
+
+        def _ensure_provider(self):
+            return provider
+
+        def _resolve_model(self) -> str:
+            return "m-test"
+
+    class FakeProvider:
+        async def create_message(self, params):
+            return CreateMessageResponse(
+                content=[{"type": "text", "text": "summary"}],
+                stop_reason="end_turn",
+            )
+
+    provider = FakeProvider()
+    agent = FakeAgent()
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+    handoff_path = tmp_path / ".handoff"
+
+    asyncio.run(runtime.handoff_current_session(agent, handoff_path))
+    text = handoff_path.read_text(encoding="utf-8")
+
+    # UTC isoformat ends with +00:00
+    assert "+00:00" in text
+
+
+def test_handoff_current_session_path_with_spaces(monkeypatch, tmp_path) -> None:
+    """Paths with spaces are handled correctly."""
+    spaced_dir = tmp_path / "my project" / "sub dir"
+    handoff_path = spaced_dir / "my handoff.md"
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = [
+                {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+            ]
+
+        async def _initialize(self) -> None:
+            return None
+
+        def _ensure_provider(self):
+            return provider
+
+        def _resolve_model(self) -> str:
+            return "m-test"
+
+    class FakeProvider:
+        async def create_message(self, params):
+            return CreateMessageResponse(
+                content=[{"type": "text", "text": "summary"}],
+                stop_reason="end_turn",
+            )
+
+    provider = FakeProvider()
+    agent = FakeAgent()
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+
+    result = asyncio.run(runtime.handoff_current_session(agent, handoff_path))
+
+    assert result["written"] is True
+    assert handoff_path.exists()
+    assert "summary" in handoff_path.read_text(encoding="utf-8")
+
+
+def test_handoff_file_redacts_openai_keys(monkeypatch, tmp_path) -> None:
+    """The handoff file must redact OpenAI-style API keys from the summary."""
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = [
+                {"role": "user", "content": [{"type": "text", "text": "use this key"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+            ]
+            self._options = type("Opts", (), {"model": "m", "cwd": str(tmp_path)})()
+
+        async def _initialize(self) -> None:
+            return None
+
+        def _ensure_provider(self):
+            return provider
+
+        def _resolve_model(self) -> str:
+            return "m"
+
+    class FakeProvider:
+        async def create_message(self, params):
+            return CreateMessageResponse(
+                content=[{"type": "text", "text": "Set ROOSTER_CODE_API_KEY=sk-abc123longkey456789xyz0000000000 and TOKEN=ghp_abcdef1234567890abcdef1234567890abcd"}],
+                stop_reason="end_turn",
+            )
+
+    provider = FakeProvider()
+    agent = FakeAgent()
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+
+    handoff_path = tmp_path / ".handoff"
+    asyncio.run(runtime.handoff_current_session(agent, handoff_path))
+    text = handoff_path.read_text(encoding="utf-8")
+
+    # OpenAI key must be redacted
+    assert "sk-abc123longkey456789xyz0000000000" not in text
+    # GitHub PAT must be redacted
+    assert "ghp_abcdef1234567890abcdef1234567890abcd" not in text
+    # The key names are preserved
+    assert "ROOSTER_CODE_API_KEY" in text
+    assert "TOKEN" in text
+
+
+def test_handoff_file_redacts_assignment_patterns(monkeypatch, tmp_path) -> None:
+    """The handoff file must redact KEY=value patterns from the summary."""
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = [
+                {"role": "user", "content": [{"type": "text", "text": "set env"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+            ]
+            self._options = type("Opts", (), {"model": "m", "cwd": str(tmp_path)})()
+
+        async def _initialize(self) -> None:
+            return None
+
+        def _ensure_provider(self):
+            return provider
+
+        def _resolve_model(self) -> str:
+            return "m"
+
+    class FakeProvider:
+        async def create_message(self, params):
+            return CreateMessageResponse(
+                content=[{"type": "text", "text": "Set API_KEY=mysecretvalue123 and PASSWORD=\"supersecretpass\""}],
+                stop_reason="end_turn",
+            )
+
+    provider = FakeProvider()
+    agent = FakeAgent()
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+
+    handoff_path = tmp_path / ".handoff"
+    asyncio.run(runtime.handoff_current_session(agent, handoff_path))
+    text = handoff_path.read_text(encoding="utf-8")
+
+    assert "mysecretvalue123" not in text
+    assert "supersecretpass" not in text
+    assert "API_KEY" in text
+    assert "PASSWORD" in text
+    assert "***REDACTED***" in text
+
+
+def test_redact_secrets_unit() -> None:
+    """Unit test _redact_secrets directly with various secret formats."""
+    assert "sk-***REDACTED***" in runtime_session._redact_secrets("key=sk-abc123456789012345678901234567890")
+    assert "ghp_***REDACTED***" in runtime_session._redact_secrets("token=ghp_abc1234567890123456789012345678901234")
+    assert "glpat-***REDACTED***" in runtime_session._redact_secrets("glpat-abcdefghijklmnopqrstuvwxyz1234567890")
+    assert "xox-***REDACTED***" in runtime_session._redact_secrets("xoxb-FAKE-000000000000000000000000")
+    assert "API_KEY=***REDACTED***" in runtime_session._redact_secrets("API_KEY=mysecretvalue12345")
+    assert "TOKEN=***REDACTED***" in runtime_session._redact_secrets('TOKEN="mytoken12345"')
+    # Short values should NOT be redacted (likely not secrets)
+    result = runtime_session._redact_secrets("API_KEY=short")
+    assert "short" in result
+
+
+def test_handoff_file_content_structure(monkeypatch, tmp_path) -> None:
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self._history = [
+                {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+            ]
+            self._session_id = "sess-1"
+            self._options = type("Options", (), {"model": "m-test", "cwd": str(tmp_path)})()
+
+        async def _initialize(self) -> None:
+            return None
+
+        def _ensure_provider(self):
+            return provider
+
+        def _resolve_model(self) -> str:
+            return "m-test"
+
+    class FakeProvider:
+        async def create_message(self, params):
+            return CreateMessageResponse(
+                content=[{"type": "text", "text": "## Goal\nFix the bug\n## Next Step\nRun tests"}],
+                stop_reason="end_turn",
+            )
+
+    provider = FakeProvider()
+    agent = FakeAgent()
+    monkeypatch.setattr(runtime, "estimate_messages_tokens", lambda messages: 42, raising=False)
+
+    handoff_path = tmp_path / ".handoff"
+    asyncio.run(runtime.handoff_current_session(agent, handoff_path))
+    text = handoff_path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    # Verify structure
+    assert lines[0] == "# Handoff"
+    assert any(line.startswith("Generated:") and "+00:00" in line for line in lines), "Missing UTC timestamp"
+    assert any(line == "Session: sess-1" for line in lines)
+    assert any(line == "Model: m-test" for line in lines)
+    assert any(line == f"CWD: {tmp_path}" for line in lines)
+    assert "## Resume Prompt" in text
+    assert "---" in text
+    assert "## Goal" in text
+    assert "## Next Step" in text
 
 def test_build_manual_compaction_summary_prompt_uses_structured_handoff() -> None:
     prompt = runtime._build_manual_compaction_summary_prompt([

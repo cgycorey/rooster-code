@@ -134,6 +134,12 @@ async def compact_current_session(agent):
     return await runtime_compact_current_session(agent)
 
 
+async def handoff_current_session(agent, path: str | None = None):
+    from rooster_code.runtime import handoff_current_session as runtime_handoff_current_session
+
+    return await runtime_handoff_current_session(agent, path)
+
+
 def list_skill_names() -> list[str]:
     from rooster_code.runtime import list_skill_names as runtime_list_skill_names
 
@@ -1026,6 +1032,37 @@ async def run_chat(config) -> int:
                     f"Tokens: {result['before_tokens']} → {result['after_tokens']}\n\n{details}",
                     style,
                 )
+                continue
+            if command.name == "handoff":
+                if command.args:
+                    raw_path = " ".join(command.args)
+                else:
+                    raw_path = ".handoff"
+                if not raw_path.strip():
+                    render_notice(console, "Handoff Error", "Path cannot be empty.", "red")
+                    continue
+                if raw_path.endswith("/"):
+                    render_notice(console, "Handoff Error", f"Path must be a file, not a directory: {raw_path!r}", "red")
+                    continue
+                handoff_path = str(Path(config.cwd or ".") / raw_path)
+                if Path(handoff_path).is_dir():
+                    render_notice(console, "Handoff Error", f"Path already exists as a directory: {handoff_path}", "red")
+                    continue
+                try:
+                    result = await handoff_current_session(agent, handoff_path)
+                except Exception as exc:
+                    render_notice(console, "Handoff Error", str(exc), "red")
+                    continue
+
+                if result["written"]:
+                    render_notice(
+                        console,
+                        "Handoff",
+                        f"Saved {result['path']}\nTokens: {result['before_tokens']} → {result['after_tokens']}",
+                        "green",
+                    )
+                else:
+                    render_notice(console, "Handoff skipped", str(result["reason"] or "No handoff written."), "yellow")
                 continue
             if command.name == "help":
                 render_help(console)

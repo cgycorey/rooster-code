@@ -20,6 +20,15 @@ from rooster_code.rendering import (
 )
 
 
+def test_render_help_mentions_handoff_command() -> None:
+    console = Console(record=True, width=100)
+
+    render_help(console)
+
+    output = console.export_text()
+    assert "/handoff [path]" in output
+
+
 def test_render_event_stream_labels_assistant_output() -> None:
     console = Console(record=True, width=100)
 

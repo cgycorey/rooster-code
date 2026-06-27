@@ -228,6 +228,168 @@ def test_main_dispatches_chat(monkeypatch) -> None:
     assert captured == {"model": "m2"}
 
 
+def test_main_chat_handoff_command_uses_cli_cwd(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/handoff", "/exit"])
+    notices: list[tuple[str, str, str]] = []
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_handoff_current_session(agent, path: str | None = None) -> dict[str, object]:
+        captured["agent"] = agent
+        captured["path"] = path
+        return {
+            "compacted": True,
+            "written": True,
+            "path": path or "",
+            "summary": "summary text",
+            "before_tokens": 1200,
+            "after_tokens": 240,
+            "reason": "",
+        }
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "handoff_current_session", fake_handoff_current_session, raising=False)
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.main(["chat", "--model", "m2", "--cwd", str(tmp_path), "--no-persist-session"])
+
+    assert exit_code == 0
+    assert isinstance(captured["agent"], FakeAgent)
+    assert captured["path"] == str(tmp_path / ".handoff")
+    assert captured["closed"] is True
+    assert notices[0][0] == "Handoff"
+    assert notices[0][2] == "green"
+    assert f"Saved {tmp_path / '.handoff'}" in notices[0][1]
+    assert "1200 → 240" in notices[0][1]
+
+
+def test_main_chat_handoff_with_relative_path_via_cli_cwd(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/handoff custom.handoff", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_handoff_current_session(agent, path: str | None = None) -> dict[str, object]:
+        captured["path"] = path
+        return {
+            "compacted": True,
+            "written": True,
+            "path": path or "",
+            "summary": "summary text",
+            "before_tokens": 12,
+            "after_tokens": 4,
+            "reason": "",
+        }
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "handoff_current_session", fake_handoff_current_session, raising=False)
+    monkeypatch.setattr(cli, "render_notice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.main(["chat", "--model", "m2", "--cwd", str(tmp_path), "--no-persist-session"])
+
+    assert exit_code == 0
+    assert captured["path"] == str(tmp_path / "custom.handoff")
+
+
+def test_main_chat_handoff_with_absolute_path_via_cli(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    abs_path = str(tmp_path / "absolute.handoff")
+    prompts = iter([f"/handoff {abs_path}", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_handoff_current_session(agent, path: str | None = None) -> dict[str, object]:
+        captured["path"] = path
+        return {
+            "compacted": True,
+            "written": True,
+            "path": path or "",
+            "summary": "summary text",
+            "before_tokens": 12,
+            "after_tokens": 4,
+            "reason": "",
+        }
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "handoff_current_session", fake_handoff_current_session, raising=False)
+    monkeypatch.setattr(cli, "render_notice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.main(["chat", "--model", "m2", "--cwd", str(tmp_path), "--no-persist-session"])
+
+    assert exit_code == 0
+    assert captured["path"] == abs_path
+
+
+def test_main_chat_handoff_error_shows_red_notice(monkeypatch, tmp_path) -> None:
+    prompts = iter(["/handoff", "/exit"])
+    notices: list[tuple[str, str, str]] = []
+
+    class FakeAgent:
+        async def close(self) -> None:
+            return None
+
+    async def fake_handoff_current_session(agent, path: str | None = None) -> dict[str, object]:
+        raise PermissionError("Cannot write to /readonly/.handoff")
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "handoff_current_session", fake_handoff_current_session, raising=False)
+    monkeypatch.setattr(cli, "render_notice", lambda console, title, message, style="yellow": notices.append((title, message, style)))
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.main(["chat", "--model", "m2", "--cwd", str(tmp_path), "--no-persist-session"])
+
+    assert exit_code == 0
+    assert notices[0][0] == "Handoff Error"
+    assert notices[0][2] == "red"
+    assert "Cannot write to /readonly/.handoff" in notices[0][1]
+
+
+def test_main_chat_handoff_no_cwd_flag_uses_process_cwd(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    prompts = iter(["/handoff", "/exit"])
+
+    class FakeAgent:
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_handoff_current_session(agent, path: str | None = None) -> dict[str, object]:
+        captured["path"] = path
+        return {
+            "compacted": True,
+            "written": True,
+            "path": path or "",
+            "summary": "summary text",
+            "before_tokens": 12,
+            "after_tokens": 4,
+            "reason": "",
+        }
+
+    monkeypatch.setattr(cli, "create_runtime_agent", lambda config: FakeAgent())
+    monkeypatch.setattr(cli, "build_console", lambda: SilentConsole())
+    monkeypatch.setattr(cli, "handoff_current_session", fake_handoff_current_session, raising=False)
+    monkeypatch.setattr(cli, "render_notice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(PromptSession, "prompt_async", _fake_prompt_iter(prompts))
+
+    exit_code = cli.main(["chat", "--model", "m2", "--no-persist-session"])
+
+    assert exit_code == 0
+    # Without --cwd, config.cwd is None, so CLI uses Path(".") / ".handoff" → ".handoff"
+    assert captured["path"] == ".handoff"
+
 def test_main_without_command_prints_rooster_code_help(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
