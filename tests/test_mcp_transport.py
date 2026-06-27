@@ -365,3 +365,18 @@ class TestSseClientProtocolCompliance:
             await client.close()
 
         asyncio.run(run())
+
+    def test_close_fails_orphaned_pending_futures(self):
+        async def run():
+            client = SseClient("http://localhost/sse")
+            loop = asyncio.get_running_loop()
+            fut = loop.create_future()
+            client._pending[42] = fut
+            await client.close()
+            assert fut.done()
+            assert isinstance(fut.exception(), RuntimeError)
+            assert "closed" in str(fut.exception()).lower()
+            assert 42 not in client._pending
+            assert client._reader_task is None
+
+        asyncio.run(run())

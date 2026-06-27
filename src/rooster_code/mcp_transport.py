@@ -217,13 +217,19 @@ class SseClient:
                 except json.JSONDecodeError:
                     continue
         return {}
-
     async def close(self) -> None:
+        # Fail any in-flight requests so callers don't hang forever
+        for fut in self._pending.values():
+            if not fut.done():
+                fut.set_exception(RuntimeError("MCP client closed"))
+        self._pending.clear()
         if self._reader_task and not self._reader_task.done():
             self._reader_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._reader_task
+        self._reader_task = None
         await self._http.aclose()
+
 
 
 async def connect_http_mcp(server_name: str, config: dict[str, Any]) -> list[Any]:
