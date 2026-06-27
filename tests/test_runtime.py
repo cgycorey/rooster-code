@@ -3246,13 +3246,12 @@ def test_handoff_file_redacts_assignment_patterns(monkeypatch, tmp_path) -> None
     assert "PASSWORD" in text
     assert "***REDACTED***" in text
 
-
 def test_redact_secrets_unit() -> None:
     """Unit test _redact_secrets directly with various secret formats."""
     assert "sk-***REDACTED***" in runtime_session._redact_secrets("key=sk-abc123456789012345678901234567890")
     assert "ghp_***REDACTED***" in runtime_session._redact_secrets("token=ghp_abc1234567890123456789012345678901234")
     assert "glpat-***REDACTED***" in runtime_session._redact_secrets("glpat-abcdefghijklmnopqrstuvwxyz1234567890")
-    assert "xox-***REDACTED***" in runtime_session._redact_secrets("xoxb-FAKE-000000000000000000000000")
+    assert "xox-***REDACTED***" in runtime_session._redact_secrets("token=xoxb-FAKE-000000000000000000000000")
     assert "API_KEY=***REDACTED***" in runtime_session._redact_secrets("API_KEY=mysecretvalue12345")
     assert "TOKEN=***REDACTED***" in runtime_session._redact_secrets('TOKEN="mytoken12345"')
     # Short values should NOT be redacted (likely not secrets)
